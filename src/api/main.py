@@ -11,13 +11,14 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import joinedload
 
 from ..database.session import SessionLocal, init_db
 from ..database import models
 from ..scanner.artifacts import task_folder_for
 from ..scanner.netguard import url_is_allowed
+from ..scanner.profiles import PROFILES
 from ..workers.celery_app import run_scan_worker  # The Celery task
 
 # Handlers that touch the DB or the broker are plain `def`, so FastAPI runs them in its
@@ -41,6 +42,14 @@ _db_ready = False
 class ScanRequest(BaseModel):
     url: str = Field(..., pattern=r"^https?://")  # [P2] Validated input
     profile: str = "default"
+
+    @field_validator("profile")
+    @classmethod
+    def _known_profile(cls, v: str) -> str:
+        # An unknown name used to scan silently as "default", which reports the wrong persona.
+        if v not in PROFILES:
+            raise ValueError(f"unknown profile; one of: {', '.join(PROFILES)}")
+        return v
 
 
 async def _assert_public_host(url: str) -> None:

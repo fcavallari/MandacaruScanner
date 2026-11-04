@@ -43,8 +43,10 @@ curl -s -X POST localhost:8000/scan -H 'content-type: application/json' -d '{"ur
 1. `POST /scan` checks the URL and creates a job in `queued`. It rejects any host that resolves to a private, loopback, link-local or other non-public address.
 2. A worker picks the job up, sets it to `running`, and opens the URL in Chromium with the chosen browser profile.
 3. Every main-frame redirect is recorded as a hop: HTTP 3xx responses, and client-side navigations the browser reports through CDP (`window.location` assignments as `js_location`, meta refresh as `meta_refresh`, form submissions and anchor clicks as informational `client_navigation`). Redirects on images, scripts and iframes are ignored, and scanning stops after 10 redirects (a likely loop).
-4. The page is loaded with a bounded settle period, then the HTML is checked for redirect code that did not fire (`meta_refresh_code`, `js_location_code`), `atob` / `String.fromCharCode` obfuscation and long base64 payloads (input capped at 2 MB). A full-page screenshot is saved. A slow subresource that keeps the page from settling no longer skips the analysis or the screenshot.
-5. The result is scored and stored, and the job becomes `completed`.
+4. Popups and new tabs are blocked, but each attempt is recorded as a `popup_open` hop with its destination. Nothing is loaded.
+5. The page is loaded with a bounded settle period, then the HTML is checked for redirect code that did not fire (`meta_refresh_code`, `js_location_code`), `atob` / `String.fromCharCode` obfuscation and long base64 payloads (input capped at 2 MB). A full-page screenshot is saved. A slow subresource that keeps the page from settling no longer skips the analysis or the screenshot.
+6. After the landing is captured, the scan clicks once on an empty part of the page (not a link or control) and waits 1.5 s. A popup that opens then is recorded with `trigger: click` (a popunder). If the tab navigates away, that is a `click_hijack` hop. Neither changes the recorded landing.
+7. The result is scored and stored, and the job becomes `completed`.
 
 If a worker dies, the job is retried. A background sweeper fails jobs left in `running` for 15 minutes or in `queued` for 60.
 
@@ -55,9 +57,11 @@ If a worker dies, the job is retried. A background sweeper fails jobs left in `r
 | `default`        | Desktop Chrome on Linux, 1920×1080 |
 | `mobile-ios`     | iPhone Safari, 390×844, touch |
 | `mobile-android` | Pixel 8 Chrome, 412×915, touch |
-| `search-clicker` | Desktop Chrome arriving from `https://www.google.com/` |
+| `search-clicker` | Desktop Chrome arriving from `https://www.google.com/` (what a click on a Google result sends) |
+| `facebook-android` | A link tapped in the Facebook app on Android: the in-app WebView, `Referer: https://l.facebook.com/`, `X-Requested-With: com.facebook.katana` |
+| `googlebot` | Googlebot Smartphone. Catches cloaking that checks the user agent; a site that verifies Googlebot by reverse DNS still sees a datacenter IP |
 
-Malvertising often only fires for some visitors, so scanning one URL under several profiles is useful.
+Malvertising often only fires for some visitors, so scanning one URL under several profiles is useful. Chrome user agents carry the real version of the browser doing the scan, and each profile's client hints (`sec-ch-ua*`) match it, so no request names `HeadlessChrome`. The iOS profile sends an empty `sec-ch-ua`, where real Safari sends none. `POST /scan` rejects an unknown profile name with `422`.
 
 ### Scoring
 
@@ -66,22 +70,31 @@ Signals add up and the total is capped at 1.0:
 | Signal | Weight |
 |--------|--------|
 | Lands on a raw IP address | 0.5 |
-| Observed JS redirect (`location` assignment / `replace()` / `assign()` that fired) | 0.4 |
-| JS obfuscation helpers (`atob`, `String.fromCharCode`), counted once | 0.4 |
-| Suspicious TLD (`.xyz`, `.top`, `.icu`, `.gq`, `.tk`, `.ml`) | 0.3 |
-| Observed meta refresh | 0.25 |
+| Observed JS redirect (`location` assignment / `replace()` / `assign()` that fired) to another registrable domain; same-site navigations, including a page reloading itself, are not scored | 0.4 |
+| JS obfuscation helpers (`atob`, `String.fromCharCode`), counted once, only together with a cross-site redirect, a brand-name hostname or a credential form | 0.4 |
+| Brand name in the hostname that is not the brand's own domain (`googleplay.com`, `zoom` in `us05web-zoom-...pages.dev`), counted once | 0.4 |
+| Credential form: a password input on a page that names a brand (title or hostname) it does not belong to | 0.4 |
+| Click hijack: the click probe hit no link, yet the page went to another site, counted once | 0.4 |
+| Popup or new tab to another site (on load or on the click probe), counted once; same-site popups are not scored | 0.3 |
+| Suspicious TLD (`.xyz`, `.top`, `.icu`, `.gq`, `.tk`, `.ml`, `.sbs`, `.click`, ... see `scorer.py`) | 0.3 |
+| Observed meta refresh to another registrable domain (a refresh without `url=` is a reload timer and is ignored) | 0.25 |
 | More than 5 redirects | 0.2 |
+| Redirected to a different registrable domain than the one submitted (unless it is a high-value domain) | 0.2 |
 | Lands on a high-value brand domain (Google, X/Twitter, Apple, Microsoft) after a redirect | 0.2 |
 | JS `location` code present in the page but it did not fire, counted once | 0.15 |
+| Page title that leads with a brand name (first three words) on a host that is not the brand's, unless a credential form already fired | 0.2 |
+| Hosted on a free or disposable platform (`pages.dev`, `workers.dev`, `netlify.app`, `github.io`, ...) | 0.15 |
+| Abuse-prone TLD (`.pro`, `.online`, `.shop`, `.site`, `.store`, `.live`, `.fun`, `.work`, `.website`, `.space`) | 0.15 |
 | Meta refresh tag present in the page but it did not fire, counted once | 0.1 |
+| JS obfuscation helpers with no cross-site redirect and no brand signal, counted once (replaces the 0.4 row) | 0.1 |
 
-A result counts as a redirect chain only if at least one real redirect was observed (HTTP 3xx, meta refresh or JS location). Redirect code that did not fire, obfuscation and base64 findings are reported but don't make a chain on their own. The weights are hand-tuned heuristics, not a trained model.
+A result counts as a redirect chain only if at least one real redirect was observed (HTTP 3xx, meta refresh or JS location). Redirect code that did not fire, obfuscation and base64 findings are reported but don't make a chain on their own. Phishing pages usually don't redirect, so the brand, hosting and TLD rules work from the hostname and from the page itself (title, password inputs). Two findings are reported without a weight: navigation to an unreachable host, and a landing document that is not HTML. Brand tokens of six or more letters match inside a hostname label (`googleplay`); shorter ones only as a whole label (`pineapple.com` is not Apple). Base64 inside `data:` URIs is not reported as a payload. The brand, throwaway-hosting and TLD lists are module constants in `src/intelligence/scorer.py`. The weights are hand-tuned heuristics, not a trained model.
 
 ## API
 
 | Method & path | Description |
 |---------------|-------------|
-| `POST /scan` | Body `{"url": "https://…", "profile": "default"}`. Returns `201` with `task_id`. `400` for a non-public host, `422` for a non-http(s) URL, `503` if the queue is unavailable. |
+| `POST /scan` | Body `{"url": "https://…", "profile": "default"}`. Returns `201` with `task_id`. `400` for a non-public host, `422` for a non-http(s) URL or an unknown profile, `503` if the queue is unavailable. |
 | `GET /tasks?limit=20` | Most recent jobs (newest first, `limit` 1–100), with results where available. |
 | `GET /tasks/{id}/status` | `queued`, `running`, `completed` or `failed`, plus `error`. |
 | `GET /tasks/{id}/results` | Final URL, score, hops, findings and artifact list. `404` until the scan has a result. |

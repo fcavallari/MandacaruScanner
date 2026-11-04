@@ -230,3 +230,9 @@ def test_artifact_paths_share_one_validator(tmp_path):
         am.create_task_folder("")
     assert am.get_task_manifest("../etc") == {"artifacts": []}
     assert am.create_task_folder("abc-1") == resolve_task_folder(str(tmp_path), "abc-1")
+
+
+def test_scan_rejects_unknown_profile(client):
+    # Used to fall back to "default" silently, reporting a persona that never ran.
+    resp = client.post("/scan", json={"url": "http://8.8.8.8/", "profile": "no-such-persona"})
+    assert resp.status_code == 422

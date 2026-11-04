@@ -5,6 +5,8 @@ const PROFILES = [
   { value: 'mobile-ios', label: 'Mobile iOS (iPhone)' },
   { value: 'mobile-android', label: 'Mobile Android' },
   { value: 'search-clicker', label: 'Search referrer (Google)' },
+  { value: 'facebook-android', label: 'Facebook app link (Android)' },
+  { value: 'googlebot', label: 'Googlebot (cloaking check)' },
 ];
 
 /**
