@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  data-terminal (dealt) with the abyssal face — .taste-skill/notes.md:
+  ground tinted from the product's world (the deep), keeping the dealt lightness
+  steps (cards darker than ground); phosphor teal in place of the dealt blue;
+  blood red and sickly amber kept from the deal. No navy, no slate, no glow.
+*/
+:root {
+  /* surfaces — ground lighter than cards (the style's move) */
+  --ground: #101714;   /* abyssal green-black */
+  --surface: #0b100e;  /* cards, darker than ground */
+  --raised: #17201b;   /* hover / raised step */
+  --active: #131a16;   /* selected fill, one step off surface */
+  --border: #1e2b26;   /* structural lines, ~1.3:1 on ground */
+  --rule: #141c18;     /* row rules, one step off surface */
+  --control: #35463d;  /* interactive outlines, brighter */
+
+  /* text — three tiers, all >= 4.5:1 on surface */
+  --text: #e9f2ec;     /* green-tinted white */
+  --muted: #8fa39a;    /* secondary, ~7:1 */
+  --faint: #7a8d83;    /* meta / placeholders, >= 4.5:1 on --active too */
+
+  /* the one accent — phosphor teal (bioluminescence / terminal neon) */
+  --accent: #40e0b4;
+  --positive: #40e0b4; /* green-accent rule: positive IS the accent */
+  --negative: #e5566f; /* blood red (horror) */
+  --warning: #d9a441;  /* sickly amber */
+
+  /* pills — dark tint of the hue, ink one step up */
+  --pill-positive-bg: #12291f;
+  --pill-negative-bg: #2c1a20;
+  --pill-warning-bg: #2a2416;
+  --pill-neutral-bg: #17201b;
+  --pill-neutral-ink: #c3d0c8;
+
+  /* charts */
+  --grid: #22312a;
+
+  /* type — dealt sizes */
+  --fs-title: 26px;
+  --fs-section: 20px;
+  --fs-kpi: 20px;
+  --fs-body: 13px;
+  --fs-small: 12px;
+
+  /* density — dealt (dense) */
+  --row-table: 42px;
+  --row-list: 28px;
+  --control-h: 34px;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background-color: var(--ground);
+  color: var(--text);
+  font-family: "Public Sans", Inter, system-ui, sans-serif;
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* tabular figures everywhere a number updates */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* the style's move: focus is a 1px accent line, never a glow */
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+/* abyssal scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--control);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--faint);
+}
+
+/* running status = a pulsing dot (feedback, not entrance) */
+@keyframes pnk-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.pulse-dot {
+  animation: pnk-pulse 1.6s ease-in-out infinite;
+}

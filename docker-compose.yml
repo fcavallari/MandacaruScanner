@@ -1,0 +1,84 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: pnakotic_admin
+      POSTGRES_PASSWORD: dark-matter-password
+      POSTGRES_DB: pnakotic_memory
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pnakotic_admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Apply migrations, then serve. (The API also runs an idempotent create_all at startup.)
+    command: sh -c "alembic -c pnakotic/alembic.ini upgrade head && uvicorn pnakotic.src.api.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACTS_DIR: /app/artifacts
+    ports:
+      - "8000:8000"
+    # seccomp_profile.json = Docker's current default profile (moby/profiles) plus an
+    # unconditional allow for clone/unshare/setns/chroot, which Chromium's user-namespace
+    # sandbox needs. (Microsoft's Playwright profile lacks openat2 etc. and crashes new runc.)
+    security_opt:
+      - seccomp:./seccomp_profile.json
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    init: true  # reap zombie Chromium processes
+    volumes:
+      # Shared with the worker so screenshots/artifacts written by scans are reachable.
+      # Created from the image, so it is owned by the non-root user (uid 1001). A volume
+      # created by an older (root) image must be chowned once: chown -R 1001:1001.
+      - artifacts_data:/app/artifacts
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A pnakotic.src.workers.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACTS_DIR: /app/artifacts
+    # Same seccomp profile as the api service (needed for the Chromium sandbox).
+    security_opt:
+      - seccomp:./seccomp_profile.json
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    init: true  # reap zombie Chromium processes
+    shm_size: "1gb"  # Chromium crashes on heavy pages with Docker's 64MB /dev/shm
+    volumes:
+      - artifacts_data:/app/artifacts
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+    deploy:
+      replicas: 2
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:
+  artifacts_data:

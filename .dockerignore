@@ -1,0 +1,11 @@
+# The api/worker images don't need the frontend (it has its own build context),
+# tests, or design working files.
+frontend
+tests
+.taste-skill
+.pytest_cache
+artifacts
+SKILL.md
+**/__pycache__
+*.pyc
+.git

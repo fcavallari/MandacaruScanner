@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- The Pnakotic sigil (src/components/Mark.tsx) on the abyssal ground, strokes thickened for 16px -->
+  <rect width="24" height="24" rx="5" fill="#0b100e"/>
+  <g transform="translate(1.8 1.9) scale(0.85)" stroke="#40e0b4" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M12 22.2 1.92 14.88 5.77 3.02H18.23L22.08 14.88Z" stroke-width="2.6"/>
+    <path d="M9.27 7.65 18.15 16.38 14.2 4.15 12.2 17" stroke-width="1.6"/>
+    <circle cx="8.2" cy="6.6" r="1.5" stroke-width="1.6"/>
+    <circle cx="12.2" cy="17" r="2" fill="#40e0b4" stroke="none"/>
+  </g>
+</svg>

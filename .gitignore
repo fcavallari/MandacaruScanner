@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Scan output (ARTIFACTS_DIR default; compose uses a named volume instead)
+artifacts/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Local config and OS noise
+.env
+.env.*
+.DS_Store
