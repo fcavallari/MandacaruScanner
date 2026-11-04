@@ -72,7 +72,7 @@ Signals add up and the total is capped at 1.0:
 | Lands on a raw IP address | 0.5 |
 | Observed JS redirect (`location` assignment / `replace()` / `assign()` that fired) to another registrable domain; same-site navigations, including a page reloading itself, are not scored | 0.4 |
 | JS obfuscation helpers (`atob`, `String.fromCharCode`), counted once, only together with a cross-site redirect, a brand-name hostname or a credential form | 0.4 |
-| Brand name in the hostname that is not the brand's own domain (`googleplay.com`, `zoom` in `us05web-zoom-...pages.dev`), counted once | 0.4 |
+| Brand name in the hostname that is not the brand's own domain (`zoom` in `us05web-zoom-...pages.dev`), counted once; exempt when the scan lands on the brand's own domain, which makes the hostname the brand's redirector (`googleplay.com` → `play.google.com`) | 0.4 |
 | Credential form: a password input on a page that names a brand (title or hostname) it does not belong to | 0.4 |
 | Click hijack: the click probe hit no link, yet the page went to another site, counted once | 0.4 |
 | Popup or new tab to another site (on load or on the click probe), counted once; same-site popups are not scored | 0.3 |
