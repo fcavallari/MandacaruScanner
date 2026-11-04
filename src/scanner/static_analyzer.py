@@ -33,7 +33,17 @@ SIGNATURE_MECHANISMS = {
     "js_location_assignment": "js_location_code",
     "js_atob": "js_obfuscation",
     "js_fromCharCode": "js_obfuscation",
+    "clickfix_lure": "clickfix_lure",
 }
+
+
+# ClickFix lure: an instruction to open the Run box (Win+R) and one to paste (Ctrl+V) on the
+# same page. The engine never clicks the fake CAPTCHA, so this text is often all that shows;
+# the clipboard write itself is recorded by behavior.py when it fires. Two independent
+# searches rather than one "A ... B" regex: a bounded gap between them would still cost
+# O(openers x gap) on a page stuffed with "win+r".
+CLICKFIX_RUN = re.compile(r"(?:\bwin(?:dows)?(?:\s{0,3}key)?|⊞)\s{0,3}(?:\+|and)\s{0,3}[\"']?r\b", re.IGNORECASE)
+CLICKFIX_PASTE = re.compile(r"(?:\bctrl|\bcmd|⌘)\s{0,3}\+\s{0,3}v\b", re.IGNORECASE)
 
 
 class StaticAnalyst:
@@ -56,7 +66,7 @@ class StaticAnalyst:
                 re.IGNORECASE,
             ),
             # Long base64-ish runs (>= 60 chars); filtered in _is_meaningful to cut false positives.
-            "b64_payload": re.compile(r"[A-Za-z0-9+/]{60,}={0,2}")
+            "b64_payload": re.compile(r"[A-Za-z0-9+/]{60,}={0,2}"),
         }
 
     def analyze_content(self, html: str) -> List[Dict[str, Any]]:
@@ -75,6 +85,14 @@ class StaticAnalyst:
                     "count": len(matches),
                     "snippet": snippet + ("..." if len(matches[0]) > 50 else ""),
                 })
+        run = CLICKFIX_RUN.search(html)
+        if run and CLICKFIX_PASTE.search(html):
+            findings.append({
+                "type": "signature_match",
+                "id": "clickfix_lure",
+                "count": 1,
+                "snippet": run.group(0)[:50],
+            })
         if truncated:
             findings.append({
                 "type": "content_truncated",

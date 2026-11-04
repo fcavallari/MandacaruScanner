@@ -3,6 +3,7 @@ import type { ArtifactEntry, TaskState } from '../lib/api';
 import { artifactUrl } from '../lib/api';
 import { hostnameOf, redirectCount, relativeTime, verdictOf } from '../lib/format';
 import DepthGauge from './DepthGauge';
+import ProfileSplit from './ProfileSplit';
 import RedirectChain from './RedirectChain';
 import { Bar, EmptyWell, ErrorNote } from './states';
 
@@ -94,7 +95,8 @@ function LandingShot({ taskId, shot, host }: { taskId: string; shot: ArtifactEnt
 export default function SelectedScan({ task, phase, onRetry, now = Date.now() }: { task: TaskState | null; phase: 'loading' | 'ready' | 'error'; onRetry?: () => void; now?: number }) {
   const artifacts = task?.result?.artifacts?.artifacts ?? [];
   const shot = pickShot(artifacts);
-  const otherArtifacts = artifacts.filter((a) => a !== shot);
+  // per-profile shots are linked from the Profiles table instead
+  const otherArtifacts = artifacts.filter((a) => a !== shot && !a.rel_path.startsWith('profiles/'));
 
   return (
     <section id="selected-probe" aria-label="Selected probe" className="bg-surface border border-line rounded-card p-5 flex flex-col gap-5 min-h-[380px] h-full">
@@ -194,14 +196,26 @@ export default function SelectedScan({ task, phase, onRetry, now = Date.now() }:
             <div>
               <p className="text-[12px] text-muted m-0 mb-2">Findings</p>
               <ul className="m-0 p-0 list-none space-y-1.5">
-                {task.result.findings.map((f, i) => (
-                  <li key={i} className="flex items-baseline gap-2 text-[13px] text-ink">
-                    <span aria-hidden="true" className="w-1 h-1 bg-faint flex-none translate-y-[-2px]" />
+                {task.result.findings.map((f, i) => {
+                  const decisive = task.result?.decisive?.includes(f) ?? false;
+                  return (
+                  <li key={i} className={`flex items-baseline gap-2 text-[13px] ${decisive ? 'text-negative' : 'text-ink'}`}>
+                    <span aria-hidden="true" className={`w-1 h-1 flex-none translate-y-[-2px] ${decisive ? 'bg-negative' : 'bg-faint'}`} />
                     <span className="break-words min-w-0">{f}</span>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             </div>
+          ) : null}
+
+          {task.result?.variants && task.result.variants.length > 1 ? (
+            <ProfileSplit
+              taskId={task.task_id}
+              variants={task.result.variants}
+              cloaking={task.result.cloaking}
+              artifacts={artifacts}
+            />
           ) : null}
 
           {otherArtifacts.length > 0 ? (

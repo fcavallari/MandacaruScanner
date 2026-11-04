@@ -64,6 +64,8 @@ services:
       DATABASE_URL: postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory
       REDIS_URL: redis://redis:6379/0
       ARTIFACTS_DIR: /app/artifacts
+      # Empty or missing directory = YARA scanning off (see src/scanner/yara_scan.py).
+      YARA_RULES_DIR: /app/yara-rules
     # Same seccomp profile as the api service (needed for the Chromium sandbox).
     security_opt:
       - seccomp:./seccomp_profile.json
@@ -73,6 +75,9 @@ services:
     shm_size: "1gb"  # Chromium crashes on heavy pages with Docker's 64MB /dev/shm
     volumes:
       - artifacts_data:/app/artifacts
+      # YARA rules are not part of this repo. Point YARA_RULES_HOST_DIR (in .env) at a rules
+      # directory (see README, "YARA rules"). Read-only.
+      - ${YARA_RULES_HOST_DIR:-./yara-rules}:/app/yara-rules:ro
     depends_on:
       db: { condition: service_healthy }
       redis: { condition: service_started }
