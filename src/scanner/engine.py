@@ -37,6 +37,37 @@ SCREENSHOT_TIMEOUT_MS = 10000
 # (a bug, Celery's SoftTimeLimitExceeded) must propagate out of scan().
 BROWSER_ERRORS = (PlaywrightError, asyncio.TimeoutError)
 
+
+def launch_options(proxy_port: int) -> dict:
+    """Keyword arguments for chromium.launch().
+
+    BROWSER_CHANNEL selects the browser. Empty (default): Playwright's bundled Chromium,
+    which is cut ahead of Chrome's release and only re-patched when Playwright itself
+    releases. "chrome" (or "msedge"): the branded stable channel installed on the machine
+    (`playwright install chrome`), which gets Chrome's security builds the day Google
+    ships them. The Docker image sets it; local development usually leaves it unset.
+    """
+    opts = dict(
+        headless=True, args=CHROMIUM_ARGS, chromium_sandbox=True,
+        proxy={"server": f"socks5://127.0.0.1:{proxy_port}"},
+    )
+    channel = os.environ.get("BROWSER_CHANNEL", "").strip()
+    if channel:
+        opts["channel"] = channel
+    return opts
+
+
+_browser_logged = False
+
+
+def _log_browser_once(browser) -> None:
+    """One line per worker process saying which build is actually scanning (see V9 in the review)."""
+    global _browser_logged
+    if not _browser_logged:
+        _browser_logged = True
+        channel = os.environ.get("BROWSER_CHANNEL", "").strip() or "bundled chromium"
+        print(f"[engine] browser: {browser.version} ({channel})")
+
 # CDP Page.frameRequestedNavigation `reason` -> hop mechanism. The first three are
 # redirects; every other reason (anchorClick, formSubmission*, reload, other, ...) is an
 # informational "client_navigation".
@@ -126,13 +157,11 @@ class PnakoticEngine:
             proxy = EgressProxy(self.host_allowed)
             proxy_port = await proxy.start()
             try:
-                browser = await p.chromium.launch(
-                    headless=True, args=CHROMIUM_ARGS, chromium_sandbox=True,
-                    proxy={"server": f"socks5://127.0.0.1:{proxy_port}"},
-                )
+                browser = await p.chromium.launch(**launch_options(proxy_port))
             except BaseException:
                 await proxy.stop()
                 raise
+            _log_browser_once(browser)
             guard: Optional[EgressGuard] = None
             try:
                 # Set viewport and mobile emulation from profile

@@ -7,12 +7,29 @@ WORKDIR /app
 COPY requirements.txt ./pnakotic/
 RUN pip install --no-cache-dir -r pnakotic/requirements.txt
 
+# Which browser scans run in (see SECURITY_REVIEW.md, V9). "chrome" installs Google
+# Chrome stable, which gets Chrome's security builds the day Google ships them, so this
+# image should be rebuilt on Chrome's cadence (weekly). Google publishes no Linux arm64
+# Chrome, so an arm64 build (Apple-silicon Docker) must use "chromium": Playwright's
+# bundled build, which only moves with Playwright releases.
+ARG BROWSER_CHANNEL=chrome
 # Browsers go to a shared path so the non-root runtime user can launch them.
 # Chromium's own sandbox is enabled (chromium_sandbox=True in the engine).
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN playwright install chromium --with-deps \
-    && chmod -R a+rX /ms-playwright \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    if [ "$BROWSER_CHANNEL" = "chrome" ]; then \
+        if [ "$(dpkg --print-architecture)" != "amd64" ]; then \
+            echo "Google Chrome has no Linux $(dpkg --print-architecture) build; build with --build-arg BROWSER_CHANNEL=chromium" >&2; exit 1; \
+        fi; \
+        playwright install chrome --with-deps; \
+        google-chrome --version; \
+    else \
+        playwright install chromium --with-deps; \
+        chmod -R a+rX /ms-playwright; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
+# Empty means Playwright's bundled Chromium; the engine reads this at launch.
+ENV BROWSER_CHANNEL=${BROWSER_CHANNEL}
 
 # Run as an unprivileged user: the browser renders attacker-chosen pages.
 RUN useradd --uid 1001 --user-group --create-home --shell /usr/sbin/nologin pnakotic

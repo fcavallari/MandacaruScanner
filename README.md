@@ -18,6 +18,14 @@ docker compose up --build
 
 The stack runs PostgreSQL, Redis, the API (which applies Alembic migrations on start), two scan workers and the dashboard. The database credentials in `docker-compose.yml` are development defaults; change them before exposing the stack anywhere.
 
+The scan workers run Google Chrome stable by default, so the browser gets Chrome's security builds the day Google ships them; rebuild the image on that cadence (weekly is adequate). Google publishes no Linux arm64 Chrome, so on Apple-silicon Docker build with Playwright's bundled Chromium instead:
+
+```bash
+BROWSER_CHANNEL=chromium docker compose up --build
+```
+
+(or put `BROWSER_CHANNEL=chromium` in a `.env` file next to `docker-compose.yml`). That build is only re-patched when Playwright releases, so prefer an amd64 host for anything beyond development.
+
 The API and worker containers run as a non-root user (uid 1001). If you have an `artifacts_data` volume created by an earlier root-based image, give it to that user once before starting:
 
 ```bash
@@ -169,4 +177,6 @@ Pnakotic opens untrusted URLs in a real browser, so the scanner limits what that
 - CDP request interception (`EgressGuard`) runs as well, for precise per-URL blocking and `ERR_BLOCKED_BY_CLIENT` errors. Hosts blocked by either layer show up in the scan's findings.
 - Popups and service workers are disabled; WebRTC's direct UDP paths are turned off.
 - Chromium runs with its sandbox enabled (`chromium_sandbox=True`), and in Docker as a non-root user under the seccomp profile in `seccomp_profile.json`, which allows the user namespaces the sandbox needs.
+- Which browser scans run in is chosen by `BROWSER_CHANNEL` (`chrome` in the Docker image, empty for Playwright's bundled Chromium locally). Playwright's bundled Chromium is cut ahead of Chrome's release and only re-patched when Playwright itself releases, so it can lag Chrome stable's security fixes by weeks; the Chrome channel does not. The worker logs the build it is running at its first scan. Branded Chrome also contacts a few Google hosts at startup (accounts, component updates, gstatic); they pass through the egress proxy like any public host. `playwright` is pinned in `requirements.txt` so browser bumps are deliberate.
+- Locally, don't scan untrusted URLs on a laptop that holds real credentials unless `BROWSER_CHANNEL=chrome` points at an up-to-date Chrome; the test suite only touches `127.0.0.1` and `google.com`.
 - CORS is open (`*`) by default and the API has no authentication. Don't expose it publicly as-is.

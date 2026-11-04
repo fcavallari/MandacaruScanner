@@ -1,3 +1,4 @@
+import os
 import asyncio
 import base64
 
@@ -208,6 +209,19 @@ def test_scoring_redirect_code_present_counted_once():
     assert findings.count("JS location code present (did not fire)") == 1
 
 
+def test_launch_options_channel(monkeypatch):
+    from pnakotic.src.scanner.engine import launch_options
+
+    monkeypatch.delenv("BROWSER_CHANNEL", raising=False)
+    opts = launch_options(4321)
+    assert "channel" not in opts
+    assert opts["chromium_sandbox"] is True
+    assert opts["proxy"] == {"server": "socks5://127.0.0.1:4321"}
+
+    monkeypatch.setenv("BROWSER_CHANNEL", " chrome ")
+    assert launch_options(1)["channel"] == "chrome"
+
+
 # ---------- engine against a local server (offline) ----------
 
 @pytest.fixture(scope="module")
@@ -337,7 +351,15 @@ async def test_redirect_to_internal_host_is_blocked(local_site, tmp_path):
     result = await _local_engine(tmp_path).scan(f"{base}/to-internal")
     assert ("127.0.0.1", "/to-internal") in hits
     assert not [h for h in hits if h[0] == "localhost"]  # the redirect hop never left the browser
-    assert result.metadata.get("blocked_hosts") == ["localhost"]
+    blocked = result.metadata.get("blocked_hosts") or []
+    assert "localhost" in blocked
+    if not os.environ.get("BROWSER_CHANNEL"):
+        assert blocked == ["localhost"]
+    else:
+        # Branded Chrome phones home at startup (accounts/clients2.google.com, update.googleapis.com,
+        # www.google.com, www.gstatic.com) regardless of Playwright's quieting flags; the strict
+        # loopback-only test policy blocks those too. The production policy allows them.
+        assert all(h == "localhost" or h.endswith((".google.com", ".googleapis.com", ".gstatic.com")) for h in blocked), blocked
     assert "ERR_BLOCKED_BY_CLIENT" in (result.metadata.get("raw_error") or "")
     assert any("non-public host" in f for f in result.metadata["scoring_findings"])
 
