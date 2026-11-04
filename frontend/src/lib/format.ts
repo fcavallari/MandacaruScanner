@@ -51,6 +51,8 @@ export const MECHANISM_LABELS: Record<string, string> = {
   client_navigation: 'Navigation',
   js_obfuscation: 'Obfuscation',
   static_analysis: 'Static finding',
+  popup_open: 'Popup',
+  click_hijack: 'Click hijack',
 };
 
 const SIGNATURE_LABELS: Record<string, string> = {
@@ -65,6 +67,18 @@ const SIGNATURE_LABELS: Record<string, string> = {
  *  Observed redirects also carry an evidence id (equal to their mechanism, e.g. "meta_refresh"),
  *  which would collide with the signature ids above, so they skip the signature lookup. */
 export function hopLabel(hop: Hop): string {
+  // Popups and click hijacks: name where they tried to send the visitor, and what set them off.
+  if ((hop.mechanism === 'popup_open' || hop.mechanism === 'click_hijack') && hop.evidence) {
+    try {
+      const ev = JSON.parse(hop.evidence);
+      const to = typeof ev?.to === 'string' ? hostnameOf(new URL(ev.to, hop.url).toString()) : '';
+      const base = MECHANISM_LABELS[hop.mechanism];
+      const when = hop.mechanism === 'popup_open' && ev?.trigger === 'click' ? ' on click' : '';
+      return to ? `${base}${when} → ${to}` : `${base}${when}`;
+    } catch {
+      /* fall through to the mechanism label */
+    }
+  }
   if (!REDIRECT_MECHANISMS.has(hop.mechanism) && hop.evidence) {
     try {
       const id = JSON.parse(hop.evidence)?.id;
@@ -127,6 +141,8 @@ export const PROFILE_LABELS: Record<string, string> = {
   'mobile-ios': 'Mobile iOS',
   'mobile-android': 'Mobile Android',
   'search-clicker': 'Search referrer',
+  'facebook-android': 'Facebook app (Android)',
+  googlebot: 'Googlebot',
 };
 
 /** Short persona names for the two-line list rows. */
@@ -135,6 +151,8 @@ export const PROFILE_SHORT: Record<string, string> = {
   'mobile-ios': 'iOS',
   'mobile-android': 'Android',
   'search-clicker': 'Search ref.',
+  'facebook-android': 'Facebook',
+  googlebot: 'Googlebot',
 };
 
 export function profileShort(profile: string | null | undefined): string {

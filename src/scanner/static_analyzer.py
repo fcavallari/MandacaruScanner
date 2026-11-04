@@ -22,6 +22,11 @@ from typing import List, Dict, Any
 MAX_CONTENT_CHARS = 2_000_000
 
 
+# data: URIs (inline images, fonts), stripped before the b64_payload scan. Greedy char classes
+# with a bounded media-type prefix: linear, no nesting.
+DATA_URI_RE = re.compile(r"data:[A-Za-z0-9.+/-]{1,80};base64,[A-Za-z0-9+/=]+")
+
+
 # Maps a signature id to the RedirectHop mechanism it implies. A regex hit on the landing
 # page only shows that redirect code is *present*: a redirect that fires is observed through
 # CDP in the engine (mechanism meta_refresh / js_location), so these map to the secondary
@@ -66,7 +71,11 @@ class StaticAnalyst:
         if truncated:
             html = html[:MAX_CONTENT_CHARS]
         for name, pattern in self.SIGNATURES.items():
-            matches = [m for m in pattern.findall(html) if self._is_meaningful(name, m)]
+            haystack = html
+            if name == "b64_payload":
+                # Inline images and fonts are base64 by design: not a payload.
+                haystack = DATA_URI_RE.sub("", html)
+            matches = [m for m in pattern.findall(haystack) if self._is_meaningful(name, m)]
             if matches:
                 snippet = matches[0][:50]
                 findings.append({
@@ -86,6 +95,9 @@ class StaticAnalyst:
 
     @staticmethod
     def _is_meaningful(signature_id: str, match: str) -> bool:
+        if signature_id == "meta_refresh":
+            # A refresh without url= only reloads the same page (a timer), it goes nowhere.
+            return "url=" in match.lower()
         if signature_id != "b64_payload":
             return True
         # Real base64 payloads almost always contain '+' or '/', or end with '=' padding;
