@@ -28,7 +28,7 @@ Severity counts: 2 High, 3 Medium, 3 Low, plus hygiene items. The artifact path 
 
 **D1 (client-side redirects) and D2 (analysis skipped on timeout): fixed and verified.** The engine now subscribes to CDP `Page.frameRequestedNavigation` on the main frame and records each client-side navigation as a hop with its real reason (`scriptInitiated` → `js_location`, `metaTagRefresh`/`httpHeaderRefresh` → `meta_refresh`, form submissions and anchor clicks → informational `client_navigation`); the event does not fire for the initial `goto` or for HTTP 3xx, so there is no double counting, and hash/`pushState` changes produce nothing. Client-side hops count toward `max_hops`, so a JS redirect loop is stopped. The landing-page regexes are now a secondary signal: `meta_refresh_code` (0.1) and `js_location_code` (0.15) instead of the observed-redirect weights, so the `/delayed` probe drops from 0.9 to the IP-landing baseline plus 0.15 and is no longer a "chain". Navigation is `goto(wait_until="load")` plus a 3 s bounded settle; `final_url`, `content()`, analysis and the screenshot each run in their own step with Playwright-only exception handling (a CDP `Page.captureScreenshot` fallback covers the case where Playwright's screenshot waits on fonts that never settle). The analysis path no longer swallows arbitrary exceptions, so Celery's `SoftTimeLimitExceeded` now fails the job instead of marking it completed. Probe results: `/js`, `/js-var`, `/meta` record the client-side hop plus the 302 with chain detected; `/never-idle` now yields static findings and a screenshot. Seven tests added in `tests/test_engine.py`; the frontend labels the new mechanisms and `npm run build` passes. 76 tests pass.
 
-Open: V4 to V8, and D3 to D9 in Part 1.
+Open: V4 to V9 (V9, browser freshness, added 2026-11-04 after a public Playwright/Chromium warning; see below), and D3 to D9 in Part 1.
 
 ---
 
@@ -208,6 +208,25 @@ Acknowledged in the README. One detail makes it slightly worse: `EgressGuard._ca
 - Idempotent task handling and the sweeper's conditional UPDATEs.
 - The dashboard renders all server data through React text nodes; the only `href`s point at `artifactUrl()`; no `dangerouslySetInnerHTML`. No XSS found.
 - Postgres and Redis are not published to the host.
+
+### V9. MEDIUM: The bundled Chromium lags Chrome's security fixes, and nothing in the project tracks it
+
+Added 2026-11-04 after a public warning about Playwright's bundled Chromium. Verified facts:
+
+| What | Version | Source |
+|---|---|---|
+| Chrome stable, 27 Oct 2026 | 156.0.8078.73, 4 Critical CVEs (use-after-free in FileSystem, FileAPI, Layout; integer overflow in Skia) | chromereleases.googleblog.com |
+| Chrome stable, 29 Oct 2026 | 156.0.8078.79, 1 Critical (use-after-free in MediaStream) | same |
+| Chrome stable, 3 Nov 2026 | 157.0.8103.38, 7 Critical | same |
+| Newest Playwright for Python (1.64.1, 22 Oct 2026, needs Python 3.10+) | bundles Chromium **156.0.8078.4** | `browsers.json` at tag v1.64.1 |
+| This machine (Python 3.9.6, so pip stops at Playwright 1.60) | Chromium **148.0.7778.96** | `browser.version` |
+| Docker image (`python:3.11-slim`, `playwright>=1.40.0` unpinned) | whatever was current at build time; a fresh build today gets 1.64.1 / 156.0.8078.4 | Dockerfile, requirements.txt |
+
+Playwright's Chromium is cut from the open-source project ahead of the branded release, so it is a *newer major* but an *earlier build* than Chrome stable: 156.0.8078.4 predates the .73 and .79 security builds of the same branch, and Playwright only moves when it releases. A scanner points this browser at hostile pages by design, so the renderer will eventually meet an exploit for a published bug.
+
+What limits the blast radius here: since the V1 fix the renderer runs inside Chromium's own sandbox (`chromium_sandbox=True`), as uid 1001, with all capabilities dropped, `no-new-privileges`, and a seccomp profile, so a renderer bug alone is not enough; the attacker also needs a sandbox escape. What an escape would reach: the worker container holds `DATABASE_URL` with the Postgres password (hard-coded in `docker-compose.yml` as `dark-matter-password`), `REDIS_URL` (the Celery broker, so job injection), and the shared `artifacts_data` volume. It holds no host secrets.
+
+Fix: (1) run scans in Google Chrome stable instead of the bundled build: `playwright install chrome --with-deps` in the Dockerfile and `chromium.launch(channel="chrome", ...)`, selectable by an environment variable so local development can keep the bundled browser; Chrome stable receives the security builds the day Google ships them, and the image then only needs rebuilding on Chrome's cadence (weekly is adequate). (2) Pin `playwright==1.64.1` and bump deliberately, and log `browser.version` at worker start so the running build is visible. (3) Move the Postgres password out of `docker-compose.yml` into an untracked `.env`. (4) For local development, move to Python 3.10 or newer so Playwright can be current, and never scan untrusted URLs from a laptop that holds real credentials; the test suite only touches `127.0.0.1` and `google.com`.
 
 ---
 
