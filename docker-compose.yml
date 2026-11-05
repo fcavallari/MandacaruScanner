@@ -59,7 +59,8 @@ services:
         # chrome (default): Google Chrome stable. On Apple-silicon Docker (linux/arm64)
         # set BROWSER_CHANNEL=chromium in .env or the shell; Chrome has no arm64 build.
         BROWSER_CHANNEL: ${BROWSER_CHANNEL:-chrome}
-    command: celery -A pnakotic.src.workers.celery_app worker --loglevel=info
+    # -Q celery: only the default queue, so this worker never takes site-check tasks.
+    command: celery -A pnakotic.src.workers.celery_app worker -Q celery --loglevel=info
     environment:
       DATABASE_URL: postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory
       REDIS_URL: redis://redis:6379/0
@@ -83,6 +84,34 @@ services:
       redis: { condition: service_started }
     deploy:
       replicas: 2
+
+  # Site quick checks only: each opens up to 6 browser contexts at once, so one task at a time.
+  site-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BROWSER_CHANNEL: ${BROWSER_CHANNEL:-chrome}
+    command: celery -A pnakotic.src.workers.celery_app worker -Q site --concurrency 1 --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACTS_DIR: /app/artifacts
+      YARA_RULES_DIR: /app/yara-rules
+    security_opt:
+      - seccomp:./seccomp_profile.json
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    init: true  # reap zombie Chromium processes
+    shm_size: "1gb"
+    volumes:
+      - artifacts_data:/app/artifacts
+      - ${YARA_RULES_HOST_DIR:-./yara-rules}:/app/yara-rules:ro
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_started }
+    deploy:
+      replicas: 1
 
   frontend:
     build: ./frontend

@@ -16,6 +16,9 @@ celery_app.conf.update(
     # Hard cap so a wedged browser can't pin a worker forever.
     task_time_limit=300,
     task_soft_time_limit=240,
+    # Site quick checks open many browser contexts at once, so they get their own queue and a
+    # dedicated single-concurrency worker. Everything else stays on the default "celery" queue.
+    task_routes={"pnakotic.site_scan": {"queue": "site"}},
 )
 
 
@@ -103,6 +106,73 @@ def run_scan_worker(job_id: str, url: str, profile: str, task_folder: Optional[s
     except Exception as e:
         error_trace = traceback.format_exc()
         print(f"Worker Failure [JOB:{job_id}]: {e}\n{error_trace}")
+        try:
+            if job is not None:
+                job.status = "failed"
+                job.error = str(e)[:500]
+                db.commit()
+        except Exception:
+            db.rollback()  # Don't mask the original error with a DB failure
+        return f"Failed: {str(e)}"
+    finally:
+        db.close()
+
+
+@celery_app.task(name="pnakotic.site_scan", soft_time_limit=240, time_limit=300)
+def run_site_scan_worker(job_id: str, homepage_url: str):
+    """Quick-check a whole site from its homepage; same lifecycle and idempotency as run_scan_worker."""
+    # Import INSIDE task to prevent serialization errors in Celery workers
+    from pnakotic.src.scanner.engine import PnakoticEngine
+    from pnakotic.src.scanner.site_engine import SiteScanner
+    from pnakotic.src.database.session import SessionLocal
+    from pnakotic.src.database import models, ScanResult
+    from pnakotic.src.database.models import utcnow
+
+    db = SessionLocal()
+    job = None
+    try:
+        job = db.query(models.ScanJob).filter_by(id=job_id).first()
+        if not job:
+            return f"Job {job_id} not found in DB"
+
+        if job.status == "completed":
+            return f"Already completed: {job_id}"
+
+        # Always write, even if the row already says "running" (see run_scan_worker).
+        job.status = "running"
+        job.updated_at = utcnow()
+        db.commit()
+
+        engine = PnakoticEngine(task_id=job_id)  # artifacts land in ARTIFACTS_DIR/<job_id>
+        outcome = run_async(SiteScanner(engine).scan(homepage_url))
+
+        # Delete any stale row first so a re-queued message (acks_late) can't collide on the PK.
+        db.query(ScanResult).filter_by(job_id=job.id).delete()
+        db.add(ScanResult(
+            id=f"res_{job_id}",
+            job_id=job.id,
+            target_url=homepage_url,
+            malicious_score=outcome.worst_score,
+            final_url=outcome.final_url,
+            is_redirect_chain_detected=outcome.redirect_chain,
+            metadata_json={
+                "kind": "site",
+                "site": outcome.report,
+                "artifact_manifest": outcome.artifact_manifest,
+                "raw_error": outcome.raw_error,
+                "blocked_hosts": outcome.report.get("blocked_hosts", []),
+                "scan_time": utcnow().isoformat(),
+            },
+        ))
+
+        job.status = "completed"
+        job.error = None
+        db.commit()
+        return f"Success: {job_id}"
+
+    except Exception as e:
+        error_trace = traceback.format_exc()
+        print(f"Site worker failure [JOB:{job_id}]: {e}\n{error_trace}")
         try:
             if job is not None:
                 job.status = "failed"

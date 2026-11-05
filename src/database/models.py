@@ -18,6 +18,9 @@ class ScanJob(Base):
     id = Column(String, primary_key=True)  # UUID
     target_url = Column(String, nullable=False)
     profile = Column(String, default="default")
+    # "url" (one URL, run_scan_worker) or "site" (a site quick check, run_site_scan_worker).
+    # server_default so rows created before the column existed read as "url".
+    kind = Column(String, nullable=False, default="url", server_default="url")
     status = Column(String, index=True)  # queued, running, completed, failed
     error = Column(Text, nullable=True)  # populated when status == "failed"
     created_at = Column(DateTime(timezone=True), default=utcnow)

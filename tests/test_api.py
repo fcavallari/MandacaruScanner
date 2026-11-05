@@ -31,12 +31,12 @@ def db(tmp_path, monkeypatch):
     engine.dispose()
 
 
-def _add_job(Session, job_id, status, updated_at=None, created_at=None):
+def _add_job(Session, job_id, status, updated_at=None, created_at=None, kind="url"):
     from pnakotic.src.database import models
 
     s = Session()
     s.add(models.ScanJob(id=job_id, target_url=f"https://{job_id}.example/", status=status,
-                         created_at=created_at or updated_at, updated_at=updated_at))
+                         created_at=created_at or updated_at, updated_at=updated_at, kind=kind))
     s.commit()
     s.close()
 
@@ -159,6 +159,92 @@ def test_worker_success_writes_result_and_replaces_stale_row(db, fake_engine):
     assert res.metadata_json["variants"][0]["profile"] == "mobile-ios"
     assert res.metadata_json["cloaking"] == {"common": "landing.example"}
     assert s.query(models.ScanJob).filter_by(id="ok").one().status == "completed"
+    s.close()
+
+
+@pytest.fixture
+def fake_site_scanner(monkeypatch):
+    from pnakotic.src.scanner import engine as engine_mod
+    from pnakotic.src.scanner import site_engine
+    from pnakotic.src.scanner.site_engine import SiteOutcome
+
+    class _FakeSiteScanner:
+        behaviour = None
+        engines = []
+
+        def __init__(self, engine, *args, **kwargs):
+            _FakeSiteScanner.engines.append(engine)
+
+        async def scan(self, url):
+            if _FakeSiteScanner.behaviour is not None:
+                return _FakeSiteScanner.behaviour(url)
+            return SiteOutcome(report={"verdict": {"verdict": "clean"}, "blocked_hosts": ["db"]},
+                               homepage_url=url, final_url=url, worst_score=0.0,
+                               redirect_chain=False, artifact_manifest={}, raw_error=None)
+
+    _FakeSiteScanner.behaviour = None
+    _FakeSiteScanner.engines = []
+    monkeypatch.setattr(site_engine, "SiteScanner", _FakeSiteScanner)
+    monkeypatch.setattr(engine_mod, "PnakoticEngine", _FakeEngine)
+    _FakeEngine.calls = []
+    return _FakeSiteScanner
+
+
+def test_site_worker_writes_report_and_is_idempotent(db, fake_site_scanner):
+    from pnakotic.src.database import models
+    from pnakotic.src.workers.celery_app import run_site_scan_worker
+
+    _engine, Session = db
+    _add_job(Session, "s1", "queued", kind="site")
+    s = Session()
+    s.add(models.ScanResult(id="res_s1", job_id="s1", target_url="stale"))  # from an earlier attempt
+    s.commit()
+    s.close()
+
+    assert run_site_scan_worker("s1", "https://s.com/") == "Success: s1"
+    assert _FakeEngine.calls == [{"task_id": "s1"}]
+    s = Session()
+    row = s.query(models.ScanResult).filter_by(job_id="s1").one()
+    s.close()
+    assert row.target_url == "https://s.com/" and row.final_url == "https://s.com/"
+    assert row.malicious_score == 0.0 and row.is_redirect_chain_detected is False
+    assert row.metadata_json["kind"] == "site" and row.metadata_json["site"]["verdict"]["verdict"] == "clean"
+    assert row.metadata_json["blocked_hosts"] == ["db"]
+    assert row.metadata_json["scan_time"]
+    assert _job(Session, "s1").status == "completed"
+    assert run_site_scan_worker("s1", "https://s.com/").startswith("Already completed")
+
+
+def test_site_worker_failure_marks_job_failed_with_truncated_error(db, fake_site_scanner):
+    from pnakotic.src.workers.celery_app import run_site_scan_worker
+
+    _engine, Session = db
+    long_ago = datetime.now(timezone.utc) - timedelta(minutes=14)
+    _add_job(Session, "s2", "running", long_ago, kind="site")
+
+    def boom(_url):
+        raise RuntimeError("x" * 900)
+
+    fake_site_scanner.behaviour = boom
+    assert run_site_scan_worker("s2", "https://s.com/").startswith("Failed:")
+    job = _job(Session, "s2")
+    assert job.status == "failed" and job.error == "x" * 500
+
+
+def test_site_task_is_routed_to_site_queue():
+    from pnakotic.src.workers.celery_app import celery_app
+
+    assert celery_app.conf.task_routes["pnakotic.site_scan"] == {"queue": "site"}
+
+
+def test_scan_job_kind_defaults_to_url(db):
+    from pnakotic.src.database import models
+
+    _engine, Session = db
+    s = Session()
+    s.add(models.ScanJob(id="k1", target_url="https://k1.example/", status="queued"))
+    s.commit()
+    assert s.query(models.ScanJob).filter_by(id="k1").one().kind == "url"
     s.close()
 
 
