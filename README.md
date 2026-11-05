@@ -99,7 +99,7 @@ Everything else adds up, capped at 1.0. With profiles compared, the job's score 
 | Redirected to a different registrable domain than the one submitted (unless it is a high-value domain) | 0.2 |
 | Lands on a high-value brand domain (Google, X/Twitter, Apple, Microsoft) after a redirect | 0.2 |
 | Page title that leads with a brand name (first three words) on a host that is not the brand's, unless a credential form already fired | 0.2 |
-| Notification-permission prompt | 0.2 |
+| Notification-permission prompt without a click (after the click probe it is reported, not weighted) | 0.2 |
 | JS `location` code present in the page but it did not fire, counted once | 0.15 |
 | Hosted on a free or disposable platform (`pages.dev`, `workers.dev`, `netlify.app`, `github.io`, ...) | 0.15 |
 | Abuse-prone TLD (`.pro`, `.online`, `.shop`, `.site`, `.store`, `.live`, `.fun`, `.work`, `.website`, `.space`) | 0.15 |

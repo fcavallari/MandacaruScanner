@@ -484,9 +484,14 @@ class PnakoticScorer:
         for lock in sorted((ids & LOCK_BEHAVIORS) - {"beforeunload_trap"}):
             score += self.WEIGHTS["lock_behavior"]
             findings.append(f"Browser-lock behavior: {lock}")
-        if "notification_request" in ids:
+        # Chrome only shows the prompt after a user gesture, so sites routinely ask on the first
+        # interaction: after the engine's own click it is reported, not weighted.
+        asks = [e for e in events if e.get("id") == "notification_request"]
+        if any(e.get("trigger") != "click" for e in asks):
             score += self.WEIGHTS["notification_request"]
-            findings.append("Push-notification permission requested")
+            findings.append("Push-notification permission requested without a click")
+        elif asks:
+            findings.append("Push-notification permission requested after a click on an empty spot (not weighted)")
         if "dialog" in ids:
             score += self.WEIGHTS["dialog"]
             findings.append("JavaScript dialog shown")

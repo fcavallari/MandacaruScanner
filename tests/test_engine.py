@@ -1346,3 +1346,17 @@ async def test_self_reload_is_not_a_redirect(local_site, tmp_path):
     assert not [h for h in result.hops if h.mechanism == "js_location"]
     assert result.is_redirect_chain_detected is False
     assert result.final_url == f"{base}/self"
+
+
+def test_notification_prompt_after_the_click_probe_is_not_weighted():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import ScanResult
+
+    def score(trigger):
+        r = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
+        r.hops = [_behavior_hop(id="notification_request", trigger=trigger)]
+        return PnakoticScorer().score(r), r.metadata["scoring_findings"]
+
+    assert score("load")[0] == pytest.approx(0.2)
+    total, findings = score("click")
+    assert total == 0.0 and any("not weighted" in f for f in findings)
