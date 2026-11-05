@@ -2,6 +2,8 @@
 
 Pnakotic follows a URL to see where it really goes. It opens the URL in headless Chromium, records every redirect on the way, checks the landing page for redirect and obfuscation tricks, and gives the result a malvertising risk score from 0 to 1, with a screenshot of where the browser ended up.
 
+It has a second mode for site owners, the [site check](#site-check): type a domain and Pnakotic loads a handful of its pages as several kinds of visitor and reports where on the site any compromise lives, with the URL and a code snippet.
+
 It is a proof of concept: a FastAPI service, Celery workers running Playwright, PostgreSQL, Redis, and a React dashboard.
 
 ## Quick start
@@ -16,7 +18,7 @@ docker compose up --build
 | API       | http://localhost:8000   |
 | API docs  | http://localhost:8000/docs |
 
-The stack runs PostgreSQL, Redis, the API (which applies Alembic migrations on start), two scan workers and the dashboard. The database credentials in `docker-compose.yml` are development defaults; change them before exposing the stack anywhere.
+The stack runs PostgreSQL, Redis, the API (which applies Alembic migrations on start), two scan workers, one site-check worker (`site-worker`) and the dashboard. The database credentials in `docker-compose.yml` are development defaults; change them before exposing the stack anywhere.
 
 The scan workers run Google Chrome stable by default, so the browser gets Chrome's security builds the day Google ships them; rebuild the image on that cadence (weekly is adequate). Google publishes no Linux arm64 Chrome, so on Apple-silicon Docker build with Playwright's bundled Chromium instead:
 
@@ -36,6 +38,12 @@ Start a scan from the dashboard, or with curl:
 
 ```bash
 curl -s -X POST localhost:8000/scan -H 'content-type: application/json' -d '{"url": "http://google.com", "profile": "mobile-ios"}'
+```
+
+or check a whole site:
+
+```bash
+curl -s -X POST localhost:8000/site-scan -H 'content-type: application/json' -d '{"site": "example.com"}'
 ```
 
 ## How a scan works
@@ -112,18 +120,115 @@ Everything else adds up, capped at 1.0. With profiles compared, the job's score 
 
 A result counts as a redirect chain only if at least one real redirect was observed (HTTP 3xx, meta refresh or JS location). Redirect code that did not fire, obfuscation and base64 findings are reported but don't make a chain on their own. Phishing pages usually don't redirect, so the brand, hosting and TLD rules work from the hostname and from the page itself (title, password inputs). Two findings are reported without a weight: navigation to an unreachable host, and a landing document that is not HTML. Brand tokens of six or more letters match inside a hostname label (`googleplay`); shorter ones only as a whole label (`pineapple.com` is not Apple). Base64 inside `data:` URIs is not reported as a payload. The brand, throwaway-hosting and TLD lists are module constants in `src/intelligence/scorer.py`. The weights are hand-tuned heuristics, not a trained model.
 
+## Site check
+
+The URL probe above follows one URL. The site check is for an owner who thinks their site has been hacked: they type a domain, wait about a minute, and get a report that says where the compromise is (the page or script URL, and the code around the match). When something is found, the report links to a cleanup service (`CLEANUP_URL`, below). The dashboard's form has a **Site check** tab (the default) and a **URL probe** tab.
+
+Every page is loaded in a real browser, in a fresh context (no cookies or storage carry over), as several kinds of visitor. Malware that only shows itself to some visitors, or only after its JavaScript runs, is caught by rendering rather than by fetching raw HTML once. The single-URL probe is unchanged.
+
+### How a site check works
+
+1. `POST /site-scan` normalises the input to `https://<host>[:port]/` (any path, query and fragment are dropped), rejects a non-public host, creates a job of kind `site` in `queued`, and puts it on the `site` queue. One Celery task (`pnakotic.site_scan`) does the whole check with one browser and one egress proxy, under the same SSRF guard as the URL probe.
+2. **Homepage.** The homepage is loaded in four profiles at once: `default`, `mobile-ios`, `googlebot` and `search-clicker`. If the `default` load fails with a network-level error (`net::ERR_…`) over https, all four are redone once over http and the report notes "Checked over http".
+3. **The site is one host.** It is the host that was entered. If the `default` homepage load is redirected to another host on the same registrable domain (`www.example.com` → `example.com`), that host becomes the site and the report says so. Domains are compared with the public suffix list bundled with `tldextract` (never fetched at run time), so `a.github.io` and `b.github.io` are different sites. If the homepage lands on a different domain instead, that is a Suspicious finding on `/` ("Your homepage sends desktop visitors to …"), and the site stays the entered host.
+4. **Pages.** Up to 5 internal pages are picked from the rendered links of the first homepage load that stayed on the site (`default`, then `mobile-ios`, `googlebot`, `search-clicker`). Only links on the site host (or its www/apex twin) that pass the egress check are kept. `wp-admin`, `wp-login.php`, `xmlrpc.php`, `wp-json`, feeds, logout and add-to-cart style URLs, `?replytocom=` and non-page files (images, PDF, archives, media, `.xml`, `.txt`, …) are dropped. One slot goes to each kind the site has, in this order: a post (a `/YYYY/MM/` path, `?p=N`, or the deepest path), a page (`/about/`), an archive (`/category/`, `/tag/`, `/author/`, `/page/2/`) and a contact page; the rest are filled in document order, preferring a first path segment not used yet. A homepage that left the site is never crawled: if no homepage load stayed on the site, only the 404 probe runs and the report says why.
+5. **404 probe.** `/pnakotic-<12 random hex>/` is loaded too, since hacks hide in 404 templates.
+6. **Other pages.** Each picked page and the probe are loaded as `default`, `mobile-ios` and `googlebot`: up to 22 loads in all with the homepage. Screenshots are full-page for the homepage's `default` load and viewport-only for the rest. Each load goes through the same per-load pipeline as a URL probe (redirects, page behaviours, click probe, static analysis, YARA).
+7. Each load is scored (site-mode scoring, below), each page's profiles are folded together for cloaking, and the findings are rolled up into the report and a verdict.
+
+### Time budget
+
+| Limit | Value |
+|-------|-------|
+| Site budget, from the start of the homepage loads | 150 s |
+| Browser contexts at once | 6 |
+| Extra time for loads still running at the deadline, then they are cancelled | 10 s |
+| Celery soft / hard limit for the task | 240 s / 300 s |
+| Per load | the URL probe's caps (30 s navigation, 3 s settle, 1.5 s click settle, 20 s YARA) |
+
+Once the budget is spent no new load starts, and every load that did not run is listed as not checked.
+
+### What a load can be
+
+| State | Meaning |
+|-------|---------|
+| `checked` | The page loaded (any HTTP status) and its DOM was scanned. A 404 on the probe is the expected result. |
+| `partial` | The navigation timed out but a DOM existed and was scanned. Findings count; the report says the page did not finish loading. |
+| `not_checked` | Nothing usable was scanned, with a reason: `load_failed` (network error or Chrome's error page), `timeout` (no usable DOM), `budget` (never started, or cancelled) or `challenge` (a bot check). |
+
+A bot-check page is the CDN's, not the site's, so its content is never scanned as if it were the site. A load counts as a challenge when the title is a known challenge title ("Just a moment…", "Attention Required! | Cloudflare"), or the HTML contains `cf-chl`, `cf_chl_opt`, `ddos-guard` or `_Incapsula_Resource`, at any status. `challenge-platform` and `captcha` count only on a 403 or 503 whose HTML is under 20 kB, because Cloudflare adds `challenge-platform` scripts to ordinary pages and plenty of sites mention a captcha.
+
+### What counts as a finding
+
+| Finding | Severity | Where it is shown |
+|---------|----------|-------------------|
+| YARA match with a production rule of severity 4 or 5 | Compromised | The page URL for the served HTML, the rendered DOM and frames; the script URL (with "loaded by") for a script file |
+| Any other YARA match | Suspicious | As above |
+| Page behaviour that is decisive in the URL probe: shell command on the clipboard, executable download, two or more browser-lock behaviours | Compromised | The page URL |
+| Cloaking that is decisive (profiles landed on different sites and one scores 0.4 or more in site mode) | Compromised | The page URL, with the visitors who were steered |
+| Homepage lands on another domain | Suspicious (Compromised if decisive cloaking) | `/` |
+| Obfuscated injector: an inline block or same-site script with obfuscator.io markers that adds a script from another site | Suspicious | The page URL, with the injecting snippet and the loaded URL |
+| A page whose own site-mode score is 0.4 or more, with no compromised finding of its own | Suspicious | The page URL, with the scoring lines under Details |
+
+- **Served HTML and rendered DOM.** The HTML the server sent (`served`) is matched as well as the rendered DOM. A match in the served HTML points at the templates or database; a match only in the rendered DOM was added by a script while the page loaded.
+- **Snippets.** The window around the first match is up to 240 bytes before and after it, 600 bytes in all, decoded as UTF-8 with replacement and NULs removed, with the match offsets and the 1-based line number. Only the window is stored, never the page or script.
+- **Merging.** The same rule with the same snippet on several pages is one finding listing every page, so a footer injection on every page is one block. Each finding says which visitors saw it (all profiles, or for example only Googlebot).
+- **Observed script injection.** Script requests started by a script are recorded from the browser's network events (200 per load, 50 injections). A requested script is tied to an inline block only when the initiator's line and column fall inside the block in the served HTML, or the block's text contains the requested URL. A tied YARA finding gains "this code loaded …", and a YARA-matched script gains "loaded by". An injection with no YARA match and no obfuscator markers is never a finding: Tag Manager, Analytics and ad networks do the same on clean sites. The markers are `string_array_rotation` (a function returning a string array plus a `push(shift())` rotation) and `hex_identifier_density` (30 or more `_0x…` identifiers, at least one per 200 characters), over the first 200 000 characters.
+- **Owner wording.** A YARA finding shows the rule's `description` meta as written; anything else, or a rule without one, gets a generic plain line ("Code matching a known malware pattern", "Some visitors are sent to a different website", …).
+- **Size.** A report holds at most 50 blocks, 20 findings per block and 20 pages per finding; what is left out is counted.
+
+### Site-mode scoring
+
+The same `PnakoticScorer.score()` is used, with its weights unchanged. When a load lands on the owner's own site (the site host or its www twin), these identity signals are skipped, because they describe an unknown landing site, not a site the owner already runs:
+
+| Skipped for an on-site landing | Why |
+|--------------------------------|-----|
+| `suspicious_tld`, `watch_tld` | A clean `.xyz` site is not suspect |
+| `throwaway_hosting` | A site on `pages.dev` or `github.io` is not suspect |
+| `brand_in_hostname`, `brand_in_title` | An owner's own name may contain a brand name |
+| `js_obfuscated_only` | Most big bundles use `atob` |
+| `ip_landing` | An owner site that was entered as an IP |
+
+A brand-like on-site host also no longer lifts `atob` / `String.fromCharCode` to the 0.4 weight. All of these still apply to an off-site landing, where they describe where visitors were sent, and the URL probe never skips any. The site-mode score is also the one `combine()` uses for "cloaking is decisive when a profile's page scores 0.4 or more".
+
+### Verdicts
+
+| Verdict | When |
+|---------|------|
+| Compromised | Any finding is compromised, whatever else failed |
+| Suspicious | No compromised finding, at least one suspicious one |
+| Couldn't check | The homepage's `default` load was not checked (unreachable, bot check, out of time); the report gives the reason. Never Clean |
+| Partly checked | No findings, but any homepage load was not checked, or more than half of the other loads were: "No malware found, but N of M checks couldn't run". Never Clean |
+| Clean | Otherwise. Loads that were not checked are still listed. With no YARA rules loaded it reads "Clean (no malware rules loaded)" |
+
+For Compromised and Suspicious the report links to `CLEANUP_URL` right under the verdict, with firmer wording for Compromised.
+
+### The report
+
+The report is grouped by where the code lives: finding blocks (one per page URL or script URL, each finding with its snippet, the match highlighted, the line number, how it was found, who saw it, the pages it was on and a collapsed Details), then **External scripts**, then **What was checked**. For a Clean site, What was checked comes first. The report body is plain language, not the dashboard's ritual vocabulary.
+
+- **External scripts.** Every script requested from a host other than the site host, grouped by host, with the pages and profiles that loaded it and whether it is in the page's HTML or added by a script (and by which). Other subdomains of the site's own domain are listed and marked "your domain". It is informational and never changes the verdict. At most 100 hosts and 500 URLs are listed; the rest are counted.
+- **What was checked.** Each page with its loads (profile, state, reason, landing, score, screenshot), clean pages folded into "N other pages clean", the number of YARA rule files, how many scripts and frames were scanned, and how many checks could not run.
+
+The report is stored in the result's `metadata_json` (`site`) with no page or script bodies. Screenshots are under `pages/<n>/<profile>/landing_*.png`, where `<n>` is the page's index in the report (0 is the homepage).
+
+### Exposure
+
+The site check is for internal use. It has no rate limit and no per-site cap. The `site-worker` service runs one worker at concurrency 1, so one site check runs at a time and the rest wait in the `site` queue; the URL probe's workers (`-Q celery`) do not take that queue. Add a rate limit (per IP and per site) and a cap on concurrent checks before exposing it publicly.
+
 ## API
 
 | Method & path | Description |
 |---------------|-------------|
 | `POST /scan` | Body `{"url": "https://…", "profile": "default", "compare_profiles": true}`. Returns `201` with `task_id`. `400` for a non-public host, `422` for a non-http(s) URL or an unknown profile, `503` if the queue is unavailable. |
-| `GET /tasks?limit=20` | Most recent jobs (newest first, `limit` 1–100), with results where available. |
+| `POST /site-scan` | Body `{"site": "example.com"}`, a bare host or a URL. Returns `201` with `task_id`. `400` for a non-public host, `422` for input that is empty, not http(s), has credentials in it or has a bad port, `503` if the queue is unavailable. |
+| `GET /tasks?limit=20` | Most recent jobs (newest first, `limit` 1–100), with results where available. Each job has a `kind`: `url` or `site`. |
 | `GET /tasks/{id}/status` | `queued`, `running`, `completed` or `failed`, plus `error`. |
 | `GET /tasks/{id}/results` | Final URL, score, hops, findings and artifact list. `404` until the scan has a result. |
 | `GET /tasks/{id}/artifacts/{path}` | A stored artifact, e.g. `screenshots/landing_20261104_101500.png`. |
 | `GET /health` | Liveness check. |
 
-`/tasks` and `/tasks/{id}/results` return the same `result` object: `final_url`, `malicious_score`, `is_redirect_chain_detected`, `hops`, `artifacts`, `findings`, `decisive`, `variants` (each profile's landing, redirect count and own score, the requested one first), `cloaking` (landing per profile, or `null`), `yara` (rules loaded and what was scanned, or `null` when YARA is off) and `raw_error`.
+`/tasks` and `/tasks/{id}/results` return the same `result` object: `final_url`, `malicious_score`, `is_redirect_chain_detected`, `hops`, `artifacts`, `findings`, `decisive`, `variants` (each profile's landing, redirect count and own score, the requested one first), `cloaking` (landing per profile, or `null`), `yara` (rules loaded and what was scanned, or `null` when YARA is off) and `raw_error`. It also has `kind` (`url` or `site`; results stored before the site check existed read as `url`). For a `site` job `final_url` is the homepage's `default` landing, `malicious_score` is the worst score of any load, `hops` is empty, and two more fields appear: `site` (the report: `site`, `entered`, `redirected_from`, `verdict`, `blocks`, `external_scripts`, `checked`, `blocked_hosts`, `notes`) and `cleanup_url`.
 
 ## Configuration
 
@@ -139,6 +244,7 @@ A result counts as a redirect chain only if at least one real redirect was obser
 | `VITE_API_BASE` | `http://localhost:8000` | Frontend, set at build time (`--build-arg`) |
 | `YARA_RULES_DIR` | unset (YARA off) | Worker; `/app/yara-rules` in compose |
 | `YARA_RULES_HOST_DIR` | `./yara-rules` | Compose only: the host directory mounted read-only at `/app/yara-rules` |
+| `CLEANUP_URL` | `https://elderward.space.fast` | API: the cleanup link in a Compromised or Suspicious site report. `docker-compose.yml` doesn't pass it through; add it under the `api` service's `environment` to change it |
 
 ### YARA rules
 
@@ -168,8 +274,10 @@ uvicorn pnakotic.src.api.main:app --reload
 ```
 
 ```bash
-celery -A pnakotic.src.workers.celery_app worker --loglevel=info
+celery -A pnakotic.src.workers.celery_app worker -Q celery,site --loglevel=info
 ```
+
+`-Q celery,site` makes this one worker take both URL probes (the default queue, `celery`) and site checks (routed to `site`). Without `site` in `-Q`, a site check stays queued. To mirror Docker instead, run one worker with `-Q celery` and a second with `-Q site --concurrency 1`.
 
 Both need PostgreSQL and Redis. `docker-compose.yml` doesn't publish their ports to the host, so outside Docker use local instances (or add `ports:` to those services), and point `DATABASE_URL` and `REDIS_URL` at `localhost`.
 
@@ -195,7 +303,7 @@ Run from this folder:
 python3 -m pytest
 ```
 
-Most tests need nothing installed beyond the Python requirements. The API and worker tests use a temporary SQLite database and a fake engine. Browser tests use Chromium against a local server and are skipped if Chromium isn't installed. YARA tests write synthetic rules to a temporary folder (no real rules are needed or committed) and are skipped without yara-python. Two of them scan the real `google.com` and need network access.
+Most tests need nothing installed beyond the Python requirements. The API and worker tests use a temporary SQLite database and a fake engine. The site-check logic that needs no browser (identity, page picking, snippets, findings, report) is tested without one. Browser tests use Chromium against a local server and are skipped if Chromium isn't installed. YARA tests write synthetic rules to a temporary folder (no real rules are needed or committed) and are skipped without yara-python. Two of them scan the real `google.com` and need network access.
 
 Run a single test:
 
@@ -207,10 +315,13 @@ python3 -m pytest tests/test_engine.py::test_redirect_to_internal_host_is_blocke
 
 ```
 src/api/            FastAPI app: endpoints, sweeper
-src/workers/        Celery app and the scan task
+src/workers/        Celery app, the scan task and the site-scan task
 src/scanner/        Playwright engine, browser profiles, static analysis,
                     page-behavior hooks (behavior.py), YARA (yara_scan.py),
-                    egress guard (netguard.py), artifact storage
+                    egress guard (netguard.py), artifact storage;
+                    site check: site_engine.py (orchestrator), site_identity.py,
+                    page_picker.py, snippets.py, script_trace.py, obfuscation.py,
+                    challenge.py, site_findings.py, site_report.py
 src/intelligence/   Scoring
 src/database/       SQLAlchemy models and session
 alembic/            Migrations
