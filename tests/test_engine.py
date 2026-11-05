@@ -5,24 +5,7 @@ import json
 
 import pytest
 
-
-def _browser_available() -> bool:
-    """Skip live-browser tests when Chromium isn't installed (e.g. CI without `playwright install`)."""
-    try:
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            browser.close()
-        return True
-    except Exception:
-        return False
-
-
-requires_browser = pytest.mark.skipif(
-    not _browser_available(),
-    reason="Chromium not installed (run: playwright install chromium)",
-)
+from _support import _rules_dir, requires_browser, requires_yara, yara_rules_dir  # noqa: F401
 
 
 @requires_browser
@@ -1206,60 +1189,8 @@ def test_combine_ignores_profiles_whose_page_never_loaded():
 
 
 # ---------- YARA over the page, its frames and its scripts (yara_scan.py) ----------
-# Synthetic rules only: the real rule sets are private and live outside this repository.
-
-def _yara_available() -> bool:
-    try:
-        import yara  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
-requires_yara = pytest.mark.skipif(not _yara_available(), reason="yara-python not installed")
-
-_RULE = """rule {name} : {tag} {{
-  meta:
-    signatureId = {sid}
-    production = {production}
-    severity = {severity}
-    description = "{description}"
-    targetLanguage = "raw"
-  strings:
-    $a = "{marker}"
-  condition:
-    $a and filename != "ignore-me"
-}}
-"""
-
-
-def _rules_dir(tmp_path):
-    """A rules tree split by target: html/ and raw/js_* are used, raw/php_* and php/ are not."""
-    root = tmp_path / "YARA"
-    for sub in ("html", "raw", "php"):
-        (root / sub).mkdir(parents=True)
-
-    def rule(path, name, marker, severity, production=True):
-        tag = "production" if production else "exploratory"
-        path.write_text(_RULE.format(name=name, tag=tag, sid=42000000 + len(name), severity=severity,
-                                     production=str(production).lower(), marker=marker,
-                                     description=f"Synthetic {name}"))
-
-    rule(root / "raw" / "js_skimmer_test_001.yara", "js_skimmer_test_001", "PNAKOTIC_TEST_SKIMMER", 5)
-    rule(root / "html" / "html_adframe_test_001.yara", "html_adframe_test_001", "PNAKOTIC_TEST_ADFRAME", 4,
-         production=False)
-    rule(root / "raw" / "php_ignored_test_001.yara", "php_ignored_test_001", "shop", 5)
-    rule(root / "php" / "php_backdoor_test_001.yara", "php_backdoor_test_001", "news", 5)
-    (root / "raw" / "js_broken_test_001.yara").write_text("rule js_broken_test_001 { condition: nope(")
-    return root
-
-
-@pytest.fixture
-def yara_rules_dir(tmp_path, monkeypatch):
-    root = _rules_dir(tmp_path)
-    monkeypatch.setenv("YARA_RULES_DIR", str(root))
-    return root
-
+# Synthetic rules only (tests/_support.py): the real rule sets are private and live outside
+# this repository.
 
 @requires_yara
 def test_yara_rule_selection_and_broken_files(yara_rules_dir):
