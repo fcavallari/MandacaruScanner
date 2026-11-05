@@ -3,6 +3,7 @@ import type { ArtifactEntry, TaskState } from '../lib/api';
 import { artifactUrl } from '../lib/api';
 import { hostnameOf, redirectCount, relativeTime, verdictOf } from '../lib/format';
 import DepthGauge from './DepthGauge';
+import ProbeRitual from './ProbeRitual';
 import ProfileSplit from './ProfileSplit';
 import RedirectChain from './RedirectChain';
 import SiteReport, { SiteVerdictPill } from './SiteReport';
@@ -152,15 +153,7 @@ export default function SelectedScan({ task, phase, onRetry, now = Date.now() }:
           className="flex-1"
         />
       ) : task.status === 'queued' || task.status === 'running' ? (
-        <div className="flex-1 flex flex-col justify-center gap-2">
-          <p className="flex items-center gap-2 text-[13px] text-muted m-0">
-            <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-accent pulse-dot" />
-            {task.status === 'running' ? `Probing ${hostnameOf(task.target_url) || task.target_url}…` : 'Waiting for a worker in the dark…'}
-          </p>
-          <p className="font-mono text-[11px] text-faint m-0">
-            {task.status === 'running' ? 'the deep is listening' : 'queued'} · probe {task.task_id.slice(0, 8)}
-          </p>
-        </div>
+        <ProbeRitual task={task} />
       ) : task.status === 'failed' ? (
         <div className="flex-1 flex flex-col justify-center gap-2">
           <p className="text-[13px] text-negative m-0 break-all">{task.error || 'The probe failed'}</p>

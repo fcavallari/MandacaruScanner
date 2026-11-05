@@ -66,6 +66,11 @@ KPI strip and table run the full 1320.
 ## Motion (feedback only — app screens have no entrance floor)
 Row hover = tone step; focus/selection = the 1px accent line (the move); running status = a pulsing
 dot; chain nodes appear as data arrives. No entrance animations, no glow, no glass.
+One deliberate exception: while a probe is queued or running, the lead block's body is the waiting
+scene (`ProbeRitual.tsx`), a canvas where the sigil glows in the accent and pulls fragments of the
+probe's own SHA-256 hashes (target URL, probe id, visitor types) out of falling hash columns and down
+its redirect path. It is feedback for the one long wait, never decoration on data; queued is dim,
+running is lit, and prefers-reduced-motion gets one still frame.
 
 ## Sample content to confirm before launch
 - Seeded scans are real (google, bing, duckduckgo, example.com, t.co, wikipedia + profiles); the
