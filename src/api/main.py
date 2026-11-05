@@ -19,7 +19,8 @@ from ..database import models
 from ..scanner.artifacts import task_folder_for
 from ..scanner.netguard import url_is_allowed
 from ..scanner.profiles import PROFILES
-from ..workers.celery_app import run_scan_worker  # The Celery task
+from ..scanner.site_identity import normalize_site_input
+from ..workers.celery_app import run_scan_worker, run_site_scan_worker  # The Celery tasks
 
 # Handlers that touch the DB or the broker are plain `def`, so FastAPI runs them in its
 # threadpool instead of blocking the event loop (SQLAlchemy and Celery's publish are sync).
@@ -52,6 +53,10 @@ class ScanRequest(BaseModel):
         if v not in PROFILES:
             raise ValueError(f"unknown profile; one of: {', '.join(PROFILES)}")
         return v
+
+
+class SiteScanRequest(BaseModel):
+    site: str = Field(..., min_length=1, max_length=2048)  # a bare host or a URL; normalised below
 
 
 async def _assert_public_host(url: str) -> None:
@@ -131,7 +136,9 @@ def serialize_result(res: models.ScanResult) -> dict:
     """The one `result` shape shared by /tasks and /tasks/{id}/results
     (mirrored by ScanResultData in frontend/src/lib/api.ts)."""
     meta = res.metadata_json or {}  # None-safe
-    return {
+    kind = meta.get("kind", "url")
+    out = {
+        "kind": kind,
         "final_url": res.final_url,
         "malicious_score": res.malicious_score,
         "is_redirect_chain_detected": res.is_redirect_chain_detected,
@@ -144,6 +151,10 @@ def serialize_result(res: models.ScanResult) -> dict:
         "yara": meta.get("yara"),  # None when the worker had no YARA_RULES_DIR
         "raw_error": meta.get("raw_error"),
     }
+    if kind == "site":
+        out["site"] = meta.get("site")
+        out["cleanup_url"] = os.getenv("CLEANUP_URL", "https://elderward.space.fast")
+    return out
 
 
 def _create_and_dispatch(req: ScanRequest) -> dict:
@@ -178,6 +189,43 @@ def _create_and_dispatch(req: ScanRequest) -> dict:
 async def start_ritual(req: ScanRequest):
     await _assert_public_host(req.url)  # async DNS lookup
     return await run_in_threadpool(_create_and_dispatch, req)  # sync DB + broker publish
+
+
+def _create_and_dispatch_site(homepage_url: str) -> dict:
+    job_id = str(uuid.uuid4())
+    db = SessionLocal()
+    try:
+        new_job = models.ScanJob(
+            id=job_id,
+            target_url=homepage_url,
+            profile="default",
+            kind="site",
+            status="queued",
+        )
+        db.add(new_job)
+        db.commit()
+
+        try:
+            run_site_scan_worker.delay(job_id, homepage_url)
+        except Exception as exc:  # broker down etc. - don't leave a phantom "queued" job
+            new_job.status = "failed"
+            new_job.error = f"Could not dispatch site scan: {exc}"[:500]
+            db.commit()
+            raise HTTPException(status_code=503, detail="Task queue unavailable; scan not started")
+
+        return {"task_id": job_id, "status": "queued", "artifact_dir": task_folder_for(job_id)}
+    finally:
+        db.close()
+
+
+@app.post("/site-scan", status_code=201)
+async def start_site_scan(req: SiteScanRequest):
+    try:
+        homepage = normalize_site_input(req.site)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    await _assert_public_host(homepage)  # async DNS lookup; normalising accepts private hosts
+    return await run_in_threadpool(_create_and_dispatch_site, homepage)
 
 
 @app.get("/tasks/{task_id}/status")
@@ -228,6 +276,7 @@ def list_recent_tasks(limit: int = Query(20, ge=1, le=100)):
                 "status": job.status,
                 "target_url": job.target_url,
                 "profile": job.profile,
+                "kind": job.kind or "url",
                 "error": job.error,
                 "created_at": str(job.created_at) if job.created_at else None,
             }

@@ -317,6 +317,91 @@ def test_task_list_is_one_query_and_matches_results_shape(client, db):
     assert detail["findings"] == ["f1"]
 
 
+# ---------- site quick check ----------
+
+def test_site_scan_dispatches_and_lists_kind(client, monkeypatch):
+    from pnakotic.src.api import main
+
+    sent = []
+
+    class FakeTask:
+        @staticmethod
+        def delay(*args):
+            sent.append(args)
+
+    monkeypatch.setattr(main, "run_site_scan_worker", FakeTask)
+
+    async def _noop_async(*a, **k):
+        return None
+
+    monkeypatch.setattr(main, "_assert_public_host", _noop_async)
+    resp = client.post("/site-scan", json={"site": "Example.COM/blog"})
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "queued" and body["artifact_dir"].endswith(body["task_id"])
+    assert sent == [(body["task_id"], "https://example.com/")]
+    listed = client.get("/tasks").json()["tasks"][0]
+    assert listed["kind"] == "site" and listed["profile"] == "default"
+    assert listed["target_url"] == "https://example.com/"
+
+
+def test_site_scan_rejects_bad_input_and_internal_host(client):
+    assert client.post("/site-scan", json={"site": "ftp://x"}).status_code == 422
+    assert client.post("/site-scan", json={"site": ""}).status_code == 422
+    assert client.post("/site-scan", json={"site": "x" * 2049}).status_code == 422
+    assert client.post("/site-scan", json={"site": "127.0.0.1"}).status_code == 400
+
+
+def test_site_scan_marks_job_failed_when_dispatch_fails(client, db, monkeypatch):
+    from pnakotic.src.api import main
+
+    class BrokenTask:
+        @staticmethod
+        def delay(*args):
+            raise RuntimeError("broker down")
+
+    monkeypatch.setattr(main, "run_site_scan_worker", BrokenTask)
+
+    async def _noop_async(*a, **k):
+        return None
+
+    monkeypatch.setattr(main, "_assert_public_host", _noop_async)
+    resp = client.post("/site-scan", json={"site": "example.com"})
+    assert resp.status_code == 503
+    job = client.get("/tasks").json()["tasks"][0]
+    assert job["status"] == "failed" and "broker down" in job["error"]
+
+
+def test_tasks_lists_url_jobs_as_kind_url(client, db):
+    _engine, Session = db
+    _add_job(Session, "u1", "queued")
+    assert client.get("/tasks").json()["tasks"][0]["kind"] == "url"
+
+
+def test_serialize_result_site_fields(monkeypatch):
+    from pnakotic.src.api import main
+    from pnakotic.src.database import models
+
+    monkeypatch.setenv("CLEANUP_URL", "https://clean.example/")
+    row = models.ScanResult(id="r", job_id="j", target_url="https://s.com/",
+                            metadata_json={"kind": "site", "site": {"verdict": {}}})
+    out = main.serialize_result(row)
+    assert out["kind"] == "site" and out["site"] == {"verdict": {}}
+    assert out["cleanup_url"] == "https://clean.example/"
+    url_out = main.serialize_result(models.ScanResult(id="r2", job_id="j2", target_url="x", metadata_json={}))
+    assert url_out["kind"] == "url" and "site" not in url_out and "cleanup_url" not in url_out
+
+
+def test_serialize_result_site_cleanup_url_defaults(monkeypatch):
+    from pnakotic.src.api import main
+    from pnakotic.src.database import models
+
+    monkeypatch.delenv("CLEANUP_URL", raising=False)
+    row = models.ScanResult(id="r", job_id="j", target_url="https://s.com/",
+                            metadata_json={"kind": "site", "site": None})
+    assert main.serialize_result(row)["cleanup_url"] == "https://elderward.space.fast"
+
+
 # ---------- artifacts ----------
 
 def test_artifact_paths_share_one_validator(tmp_path):
