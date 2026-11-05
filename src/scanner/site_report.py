@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from .models import ScanResult
 from .profiles import PROFILES
 from .script_trace import MAX_URL_CHARS  # 300, the external-scripts rule
-from .site_findings import Load, _own_score, build_blocks_and_overflow
+from .site_findings import Load, build_blocks_and_overflow, own_score, usable_load
 from .site_identity import on_site, same_domain
 
 # External scripts per site (global constraints): hosts, and URLs over all listed hosts.
@@ -28,6 +28,14 @@ LABELS = {
     "partly_checked": "Partly checked",
     "clean": "Clean",
     "couldnt_check": "Couldn't check",
+}
+
+# The couldn't-check summary says why the homepage wasn't checked (spec §5.5).
+COULDNT_CHECK = {
+    "challenge": "This site showed our scanner a bot check",
+    "budget": "We ran out of time before the homepage loaded",
+    "timeout": "The homepage took too long to load",
+    None: "We couldn't reach this site",  # load_failed, or no homepage load at all
 }
 
 
@@ -91,10 +99,9 @@ def external_scripts(loads: List[Load], site_host: str, blocks: List[dict]) -> d
     some visitors, then added by a script, then the rest alphabetically. At most MAX_HOSTS
     hosts and MAX_EXTERNAL_URLS URLs are listed; ``hosts_more`` counts the hosts left out and
     ``urls_more`` the URLs left out of listed hosts. A bot-check page's scripts are not the
-    site's, so those loads are skipped.
+    site's, so those loads are skipped, and so are loads that were not checked.
     """
-    usable = sorted((l for l in loads if l.result is not None and not l.result.metadata.get("challenge")),
-                    key=lambda l: l.page_index)
+    usable = sorted((l for l in loads if usable_load(l)), key=lambda l: l.page_index)
     profiles_by_page = {}  # type: Dict[str, set]
     for load in usable:
         profiles_by_page.setdefault(_url(load.page_url), set()).add(load.profile)
@@ -197,8 +204,7 @@ def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool) -> d
             len({l.page_index for l in loads}))
     elif default is None or default.state == "not_checked":
         verdict = "couldnt_check"
-        bot_check = default is not None and default.reason == "challenge"
-        summary = "This site showed our scanner a bot check" if bot_check else "We couldn't reach this site"
+        summary = COULDNT_CHECK.get(default.reason if default is not None else None, COULDNT_CHECK[None])
     elif (any(l.state == "not_checked" for l in homepage)
           or 2 * sum(1 for l in later if l.state == "not_checked") > len(later)):
         verdict = "partly_checked"
@@ -225,13 +231,13 @@ def _checked(loads: List[Load], rules_count: int) -> dict:
                 "reason": l.reason,
                 "status": l.result.metadata.get("main_status") if l.result else None,
                 "screenshot": l.shot,
-                "score": _own_score(l.result)[0] if l.result else None,
+                "score": own_score(l.result)[0] if l.result else None,
             } for l in page_loads],
         })
 
     scripts, frames = set(), set()
     for load in loads:
-        if load.result is None or load.result.metadata.get("challenge"):
+        if not usable_load(load):
             continue
         for record in load.result.metadata.get("script_requests") or []:
             if not isinstance(record, dict):

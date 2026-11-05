@@ -133,7 +133,7 @@ def _hostname(url: Any) -> str:
         return ""
 
 
-def _usable(load: Load) -> bool:
+def usable_load(load: Load) -> bool:
     """not_checked loads and bot-challenge pages say nothing about the site."""
     return (load.state != "not_checked" and load.result is not None
             and not load.result.metadata.get("challenge"))
@@ -148,7 +148,7 @@ def _snippet(value: Any) -> Optional[dict]:
     return value if isinstance(value, dict) else None
 
 
-def _own_score(result: ScanResult) -> Tuple[float, List[str]]:
+def own_score(result: ScanResult) -> Tuple[float, List[str]]:
     """The load's own score and scoring strings. combine() folds the other profiles into the
     page's default result (worst score, "[profile] ..." findings); its summary keeps the default
     load's own score from before the fold."""
@@ -313,7 +313,7 @@ def _offsite(c: _Collector, homepage: List[Load], site_host: str, domain: str) -
 def _page_score(c: _Collector, load: Load) -> None:
     if id(load) in c.compromised_loads:
         return
-    score, findings = _own_score(load.result)
+    score, findings = own_score(load.result)
     if score < SUSPICIOUS_SCORE:
         return
     finding = c.add(load, ("page_score", load.page_url), severity="suspicious", kind="page_score",
@@ -336,7 +336,7 @@ def build_blocks_and_overflow(loads: List[Load], site_host: str,
     message); ``findings_more`` counts the ones dropped.
     """
     usable = [replace(l, page_url=_url(l.page_url))
-              for l in sorted(loads, key=lambda l: l.page_index) if _usable(l)]
+              for l in sorted(loads, key=lambda l: l.page_index) if usable_load(l)]
     profiles_by_page: Dict[str, set] = {}
     for load in usable:
         profiles_by_page.setdefault(load.page_url, set()).add(load.profile)

@@ -345,3 +345,15 @@ def test_partial_load_findings_count():
 
     [b] = build_blocks([_load(0, "https://s.com/", "default", [_yara_hop("served", "https://s.com/", "r", 5, True, 0, "E")], state="partial")], "s.com", None)
     assert b["findings"][0]["severity"] == "compromised"
+
+
+def test_public_helpers_usable_load_and_own_score():
+    from _support import _load
+    from pnakotic.src.scanner.site_findings import own_score, usable_load
+
+    assert usable_load(_load(0, "https://s.com/", "default"))
+    assert not usable_load(_load(0, "https://s.com/", "default", state="not_checked", reason="timeout"))
+    challenged = _load(0, "https://s.com/", "default")
+    challenged.result.metadata["challenge"] = True
+    assert not usable_load(challenged)
+    assert own_score(_load(0, "https://s.com/", "default", score=0.5).result)[0] == 0.5

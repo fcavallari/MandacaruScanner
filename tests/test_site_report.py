@@ -207,3 +207,53 @@ def test_build_report_counts_blocks_past_the_cap():
     loads = [_load(0, "https://s.com/", "default", [_yara_hop("script", f"https://s.com/{i}.js", f"r{i}", 5, True, 0, "X") for i in range(60)])]
     report = build_report("s.com", "s.com", None, loads, 1, [], [])
     assert len(report["blocks"]) == 50 and report["blocks_more"] == 10
+
+
+def test_couldnt_check_summary_gives_the_reason():
+    from _support import _load
+    from pnakotic.src.scanner.site_report import site_verdict
+
+    for reason, summary in [("challenge", "This site showed our scanner a bot check"),
+                            ("budget", "We ran out of time before the homepage loaded"),
+                            ("timeout", "The homepage took too long to load"),
+                            ("load_failed", "We couldn't reach this site"), (None, "We couldn't reach this site")]:
+        v = site_verdict([], [_load(0, "https://s.com/", "default", state="not_checked", reason=reason)], True)
+        assert (v["verdict"], v["summary"]) == ("couldnt_check", summary)
+    assert site_verdict([], [], True)["summary"] == "We couldn't reach this site"
+
+
+def test_verdict_clean_paths_pinned():
+    from _support import _load
+    from pnakotic.src.scanner.site_report import site_verdict
+
+    ok = lambda i, p, **kw: _load(i, f"https://s.com/{i}", p, **kw)
+    # A homepage default load that only partly finished still counts as checked.
+    loads = [ok(0, "default", state="partial"), ok(0, "googlebot"), ok(1, "default"), ok(2, "default")]
+    assert site_verdict([], loads, True)["verdict"] == "clean"
+    # A homepage-only run (no stage-2 loads) has nothing to be "more than half" of.
+    assert site_verdict([], [ok(0, "default"), ok(0, "mobile-ios")], True)["verdict"] == "clean"
+
+
+def test_unchecked_loads_do_not_feed_scripts_or_counts():
+    from _support import _load
+    from pnakotic.src.scanner.site_report import build_report, external_scripts
+
+    def rec(url, frame="https://s.com/", main=True):
+        return {"url": url, "initiator": "parser", "initiator_url": None, "main_frame": main, "frame_url": frame}
+
+    shared = rec("https://ads.net/a.js")
+    ok = _load(0, "https://s.com/", "default", script_requests=[shared])
+    # A load that failed after recording requests: it must not add scripts, frames or a profile.
+    failed = _load(0, "https://s.com/", "googlebot", state="not_checked", reason="load_failed",
+                   script_requests=[shared, rec("https://only-failed.net/x.js"), rec("https://ads.net/f.js", "https://fr.com/f", False)])
+    [host] = external_scripts([ok, failed], "s.com", [])["hosts"]
+    assert host["host"] == "ads.net" and [u["url"] for u in host["urls"]] == ["https://ads.net/a.js"]
+
+    # With the failed googlebot load ignored, ads.net was seen by every visitor that was checked
+    # (default and mobile-ios), so only zzz.net (mobile-ios alone) ranks as "some visitors".
+    other = _load(0, "https://s.com/", "mobile-ios", script_requests=[rec("https://zzz.net/z.js"), shared])
+    hosts = [h["host"] for h in external_scripts([ok, other, failed], "s.com", [])["hosts"]]
+    assert hosts == ["zzz.net", "ads.net"]
+
+    checked = build_report("s.com", "s.com", None, [ok, failed], 1, [], [])["checked"]
+    assert (checked["scripts_scanned"], checked["frames_scanned"], checked["not_checked"]) == (1, 0, 1)
