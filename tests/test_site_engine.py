@@ -22,6 +22,7 @@ async def test_site_scan_compromised_with_snippet_and_merged_footer(site_server,
     # Homepage first, the probe last; the www-less loopback host is the site.
     pages = r["checked"]["pages"]
     assert pages[0]["url"] == f"{site_server}/" and "/pnakotic-" in pages[-1]["url"]
+    assert [p["probe"] for p in pages] == [False] * (len(pages) - 1) + [True]
     assert [l["profile"] for l in pages[0]["loads"]] == ["default", "mobile-ios", "search-clicker", "googlebot"]
     assert all([l["profile"] for l in p["loads"]] == ["default", "mobile-ios", "googlebot"] for p in pages[1:])
     assert pages[0]["loads"][0]["landing"] == f"{site_server}/"

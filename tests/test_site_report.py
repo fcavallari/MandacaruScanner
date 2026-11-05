@@ -248,6 +248,21 @@ def test_external_scripts_skip_loads_that_ended_off_site():
     assert [(h["host"], h["urls"][0]["profiles"]) for h in hosts] == [("ads.net", ["default"])]
 
 
+def test_the_404_probe_is_flagged_on_its_page_and_its_blocks():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_report import build_report
+
+    probe = "https://s.com/pnakotic-0123456789ab/"
+    own = "https://s.com/pnakotic-news/"  # an owner page with the same prefix: the probe is the last such page
+    loads = [_load(0, "https://s.com/", "default"),
+             _load(1, own, "default", [_yara_hop("served", own, "r1", 3, False, 0, "A")]),
+             _load(2, probe, "default", [_yara_hop("served", probe, "r2", 3, False, 0, "B")])]
+    r = build_report("s.com", "s.com", None, loads, 1, [], [])
+    assert [(p["url"], p["probe"]) for p in r["checked"]["pages"]] == [("https://s.com/", False), (own, False), (probe, True)]
+    assert {b["location"]: b["probe"] for b in r["blocks"]} == {own: False, probe: True}
+    assert build_report("s.com", "s.com", None, loads[:1], 1, [], [])["checked"]["pages"][0]["probe"] is False
+
+
 def test_offsite_homepage_landing_code_is_the_landings():
     from _support import _load, _yara_hop
     from pnakotic.src.scanner.site_report import build_report

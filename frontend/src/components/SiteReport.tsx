@@ -60,6 +60,9 @@ const ORIGINS: Record<string, string> = {
   script: 'In this script file',
 };
 
+/** The 404 probe (/pnakotic-<hex>/) is shown by what it is, with its URL under it. */
+const PROBE_LABEL = "Your 'page not found' page";
+
 function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }
@@ -243,10 +246,17 @@ function FindingView({ taskId, finding, block }: { taskId: string; finding: Site
 function BlockView({ taskId, block }: { taskId: string; block: SiteBlock }) {
   return (
     <div className="border border-line rounded-card">
-      <div className="px-4 py-2.5 border-b border-rule flex items-baseline gap-2.5">
-        <span className="text-[11px] text-faint flex-none">{block.location_kind === 'script' ? 'Script' : 'Page'}</span>
-        <span className="font-mono text-[12px] text-ink break-all min-w-0">{block.location}</span>
-      </div>
+      {block.probe ? (
+        <div className="px-4 py-2.5 border-b border-rule">
+          <p className="text-[12px] text-ink m-0">{PROBE_LABEL}</p>
+          <p className="font-mono text-[11px] text-faint m-0 break-all">{block.location}</p>
+        </div>
+      ) : (
+        <div className="px-4 py-2.5 border-b border-rule flex items-baseline gap-2.5">
+          <span className="text-[11px] text-faint flex-none">{block.location_kind === 'script' ? 'Script' : 'Page'}</span>
+          <span className="font-mono text-[12px] text-ink break-all min-w-0">{block.location}</span>
+        </div>
+      )}
       <ul className="m-0 p-0 list-none px-4 py-3">
         {block.findings.map((f) => (
           <FindingView key={f.id} taskId={taskId} finding={f} block={block} />
@@ -350,10 +360,17 @@ function LoadLine({ taskId, load }: { taskId: string; load: SiteLoad }) {
 function PageView({ taskId, page }: { taskId: string; page: SiteCheckedPage }) {
   return (
     <li className="px-4 py-2.5 border-b border-rule last:border-b-0">
-      <p className="font-mono text-[12px] text-ink m-0 mb-1 break-all">
-        {page.url}
-        {page.index === 0 ? <span className="font-sans text-[11px] text-faint"> · homepage</span> : null}
-      </p>
+      {page.probe ? (
+        <div className="mb-1">
+          <p className="text-[12px] text-ink m-0">{PROBE_LABEL}</p>
+          <p className="font-mono text-[11px] text-faint m-0 break-all">{page.url}</p>
+        </div>
+      ) : (
+        <p className="font-mono text-[12px] text-ink m-0 mb-1 break-all">
+          {page.url}
+          {page.index === 0 ? <span className="font-sans text-[11px] text-faint"> · homepage</span> : null}
+        </p>
+      )}
       <ul className="m-0 p-0 list-none space-y-0.5">
         {page.loads.map((l) => (
           <LoadLine key={l.profile} taskId={taskId} load={l} />

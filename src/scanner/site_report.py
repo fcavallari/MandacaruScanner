@@ -217,7 +217,19 @@ def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool) -> d
     return {"verdict": verdict, "label": LABELS[verdict], "summary": summary, "rules_loaded": rules_loaded}
 
 
-def _checked(loads: List[Load], rules_count: int) -> dict:
+def _probe_index(loads: List[Load]) -> Optional[int]:
+    """The 404 probe: the page with the highest index whose path starts with /pnakotic-."""
+    for load in sorted(loads, key=lambda l: -l.page_index):
+        try:
+            path = urlsplit(load.page_url).path if isinstance(load.page_url, str) else ""
+        except ValueError:
+            continue
+        if path.startswith("/pnakotic-"):
+            return load.page_index
+    return None
+
+
+def _checked(loads: List[Load], rules_count: int, probe: Optional[int]) -> dict:
     by_page = {}  # type: Dict[int, List[Load]]
     for load in loads:
         by_page.setdefault(load.page_index, []).append(load)
@@ -227,6 +239,7 @@ def _checked(loads: List[Load], rules_count: int) -> dict:
         pages.append({
             "index": index,
             "url": _url(page_loads[0].page_url),
+            "probe": index == probe,
             "loads": [{
                 "profile": l.profile,
                 "state": l.state,
@@ -263,6 +276,10 @@ def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str
                  rules_count: int, blocked_hosts: List[str], notes: List[str]) -> dict:
     """The site report stored in the result's metadata_json."""
     blocks, blocks_more = build_blocks_and_overflow(loads, site_host, offsite_domain)
+    probe = _probe_index(loads)
+    probe_url = next((_url(l.page_url) for l in loads if l.page_index == probe), None) if probe is not None else None
+    for block in blocks:
+        block["probe"] = block["location_kind"] == "page" and block["location"] == probe_url
     return {
         "site": site_host,
         "entered": entered_host,
@@ -271,7 +288,7 @@ def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str
         "blocks": blocks,
         "blocks_more": blocks_more,
         "external_scripts": external_scripts(loads, site_host, blocks),
-        "checked": _checked(loads, rules_count),
+        "checked": _checked(loads, rules_count, probe),
         "blocked_hosts": list(dict.fromkeys(h[:253] for h in blocked_hosts if isinstance(h, str)))[:MAX_BLOCKED_HOSTS],
         "notes": list(notes),
     }

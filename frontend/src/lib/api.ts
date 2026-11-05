@@ -95,6 +95,7 @@ export interface SiteBlock {
   location_kind: 'page' | 'script';
   findings: SiteFinding[];
   findings_more: number;
+  probe?: boolean; // located at the 404 probe URL (the site's "page not found" page)
 }
 
 export interface ExternalScriptUrl {
@@ -126,6 +127,7 @@ export interface SiteLoad {
 export interface SiteCheckedPage {
   index: number; // 0 = the homepage
   url: string;
+  probe?: boolean; // the 404 probe (/pnakotic-<hex>/): the site's "page not found" page
   loads: SiteLoad[];
 }
 
