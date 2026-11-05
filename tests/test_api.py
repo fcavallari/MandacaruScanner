@@ -278,6 +278,32 @@ def test_scan_dispatches_without_task_folder(client, monkeypatch):
     assert sent[1][1:] == ("http://8.8.8.8/", "default", None, False)
 
 
+def test_scan_defaults_to_https_without_scheme(client, monkeypatch):
+    from pnakotic.src.api import main
+
+    sent = []
+
+    class FakeTask:
+        @staticmethod
+        def delay(*args):
+            sent.append(args)
+
+    monkeypatch.setattr(main, "run_scan_worker", FakeTask)
+    for given, expected in [
+        ("8.8.8.8/landing?x=1", "https://8.8.8.8/landing?x=1"),
+        ("  8.8.8.8  ", "https://8.8.8.8"),
+        ("//8.8.8.8/", "https://8.8.8.8/"),
+        ("HTTP://8.8.8.8/", "http://8.8.8.8/"),  # scheme is case-insensitive; kept, not doubled
+        ("http://8.8.8.8/", "http://8.8.8.8/"),  # an explicit http stays http
+    ]:
+        resp = client.post("/scan", json={"url": given})
+        assert resp.status_code == 201, given
+        assert sent[-1][1] == expected
+    # A scheme other than http(s) is still refused, never wrapped as https://ftp://...
+    assert client.post("/scan", json={"url": "ftp://8.8.8.8/"}).status_code == 422
+    assert client.post("/scan", json={"url": "   "}).status_code == 422
+
+
 def test_scan_rejects_internal_host(client):
     resp = client.post("/scan", json={"url": "http://localhost:8000/"})
     assert resp.status_code == 400

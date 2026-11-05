@@ -196,7 +196,8 @@ function ProbeForm({
           </span>
           <input
             id="probe-target"
-            type="url"
+            type="text"
+            inputMode="url"
             spellCheck={false}
             autoComplete="off"
             onKeyDown={(e) => {
@@ -208,7 +209,7 @@ function ProbeForm({
               setUrl(e.target.value);
               if (error) setError(null);
             }}
-            placeholder="paste a suspicious URL to probe — https://…"
+            placeholder="paste a suspicious URL to probe — example.com/…"
             aria-label="Target URL"
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? 'scan-form-error' : undefined}
