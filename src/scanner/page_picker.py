@@ -101,9 +101,7 @@ def extract_links(html: str, base_url: str, limit: int = 2000) -> List[str]:
         try:
             parser.feed((html or "")[:_MAX_HTML_CHARS])
             parser.close()
-        except _Done:
-            pass
-        except Exception:  # malformed markup must not take the scan down; keep what was read
+        except Exception:  # _Done at the limit; malformed markup must not take the scan down either
             pass
     seen = set()
     links = []
