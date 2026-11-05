@@ -25,6 +25,8 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from .snippets import cut_snippet
+
 YARA_MECHANISM = "yara_match"
 
 MAX_SCRIPTS = 60               # script bodies kept per page
@@ -177,17 +179,30 @@ class ScriptCollector:
             await asyncio.wait(list(self._tasks), timeout=timeout)
 
 
-async def scan_buffers(rules: YaraRules, buffers: List[Tuple[str, str, bytes]]) -> Tuple[List[dict], dict]:
+def _first_instance(match):
+    for string_match in getattr(match, "strings", [])[:1]:
+        for instance in getattr(string_match, "instances", [])[:1]:
+            return instance
+    return None
+
+
+async def scan_buffers(rules: YaraRules, buffers: List[Tuple[str, str, bytes]],
+                       per_buffer: bool = False) -> Tuple[List[dict], dict]:
     """Match every (source, url, data) buffer; one finding per rule (first hit, hit count).
+
+    With per_buffer=True there is one finding per (rule, buffer) instead, each carrying
+    `buffer_index` (position in `buffers`), `offset` (byte offset of the rule's first string
+    match in the buffer) and `context` (cut_snippet around it); `offset` and `context` are
+    None when the rule matched without a string instance.
 
     Runs libyara in a worker thread so the event loop (other profiles' pages) keeps going.
     """
-    findings: Dict[str, dict] = {}
+    findings: Dict[Any, dict] = {}
     started = time.monotonic()
     scanned = 0
     total = 0
     exhausted = False
-    for source, url, data in buffers:
+    for index, (source, url, data) in enumerate(buffers):
         if time.monotonic() - started > SCAN_BUDGET_S or total >= MAX_TOTAL_BYTES * 2:
             exhausted = True
             break
@@ -200,13 +215,15 @@ async def scan_buffers(rules: YaraRules, buffers: List[Tuple[str, str, bytes]]) 
         matches = await asyncio.to_thread(rules.match, data, name)
         scanned += 1
         for m in matches:
-            key = f"{m.namespace}:{m.rule}"
+            key: Any = f"{m.namespace}:{m.rule}"
+            if per_buffer:
+                key = (key, index)
             if key in findings:
                 findings[key]["hits"] += 1
                 continue
             meta = dict(getattr(m, "meta", {}) or {})
             tags = list(getattr(m, "tags", []) or [])
-            findings[key] = {
+            finding = findings[key] = {
                 "id": "yara_match",
                 "rule": _text(m.rule),
                 "signature_id": _meta_int(meta, "signatureId"),
@@ -218,5 +235,11 @@ async def scan_buffers(rules: YaraRules, buffers: List[Tuple[str, str, bytes]]) 
                 "snippet": _snippet(m),
                 "hits": 1,
             }
+            if per_buffer:
+                instance = _first_instance(m)
+                finding["buffer_index"] = index
+                finding["offset"] = instance.offset if instance else None
+                finding["context"] = (cut_snippet(data, instance.offset, instance.offset + instance.matched_length)
+                                      if instance else None)
     stats = {"rules": rules.count, "buffers": scanned, "bytes": total, "budget_exhausted": exhausted}
     return list(findings.values()), stats

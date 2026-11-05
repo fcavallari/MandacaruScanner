@@ -1271,6 +1271,21 @@ async def test_yara_bounds_and_dedupes(yara_rules_dir, monkeypatch):
 
 @requires_yara
 @pytest.mark.asyncio
+async def test_yara_per_buffer_keeps_each_buffer_with_context(yara_rules_dir):
+    from pnakotic.src.scanner.yara_scan import load_rules, scan_buffers
+    rules = load_rules()
+    bufs = [("served", "https://s/", b"<p>PNAKOTIC_TEST_SKIMMER</p>"),
+            ("script", "https://s/a.js", b"x\nPNAKOTIC_TEST_SKIMMER")]
+    per, _ = await scan_buffers(rules, bufs, per_buffer=True)
+    assert sorted((f["source"], f["buffer_index"]) for f in per) == [("script", 1), ("served", 0)]
+    js = next(f for f in per if f["source"] == "script")
+    assert js["context"]["line"] == 2 and js["offset"] == 2
+    folded, _ = await scan_buffers(rules, bufs)
+    assert len(folded) == 1 and folded[0]["hits"] == 2 and "context" not in folded[0]
+
+
+@requires_yara
+@pytest.mark.asyncio
 async def test_yara_filename_external_gets_an_extension(tmp_path, monkeypatch):
     from pnakotic.src.scanner import yara_scan
 
