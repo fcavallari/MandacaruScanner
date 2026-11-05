@@ -118,6 +118,32 @@ def _scored(target, final, hops=(), signals=None, **metadata):
 _NO_SIGNALS = {"title": "", "password_inputs": 0, "forms": 0, "content_type": "text/html", "error_page": False}
 
 
+def _scored_site(target, final, mechanisms, site_host):
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    result = ScanResult(target_url=target, final_url=final)
+    result.hops = [RedirectHop(url=target, mechanism=m) for m in mechanisms]
+    return PnakoticScorer().score(result, site_host=site_host), result.metadata["scoring_findings"]
+
+
+def test_site_mode_drops_identity_signals_on_site():
+    score, findings = _scored_site("https://shop.xyz/", "https://shop.xyz/", ["js_obfuscation"], "shop.xyz")
+    assert score == pytest.approx(0.0)
+    assert not any("TLD" in f or "obfuscation" in f for f in findings)
+    score, _ = _scored_site("https://zoom-help.github.io/", "https://zoom-help.github.io/", [], "zoom-help.github.io")
+    assert score == pytest.approx(0.0)
+
+
+def test_site_mode_keeps_identity_signals_off_site():
+    _, findings = _scored_site("https://shop.com/", "https://evil.xyz/", [], "shop.com")
+    assert "Suspicious TLD: .xyz" in findings
+
+
+def test_probe_scoring_unchanged_without_site_host():
+    score, _ = _scored("https://shop.xyz/", "https://shop.xyz/")
+    assert score == pytest.approx(0.3)
+
+
 def test_scoring_brand_lookalike_on_throwaway_hosting():
     target = "http://us05web-zoom-us82777747387473.pages.dev/"
     final = "https://us05web-zoom-us82777747387473.pages.dev/"

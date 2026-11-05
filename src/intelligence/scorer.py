@@ -1,10 +1,12 @@
 import ipaddress
 import json
 import re
+from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 from ..scanner.behavior import LOCK_BEHAVIORS, behavior_events, evidence_of
 from ..scanner.models import ScanResult, REDIRECT_MECHANISMS
+from ..scanner.site_identity import on_site
 
 _MICROSOFT = (
     "microsoft.com", "live.com", "office.com", "office365.com", "outlook.com",
@@ -71,6 +73,13 @@ THROWAWAY_HOSTING = (
 )
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+# Weights that describe the landing site's own identity. A site check leaves them out when a
+# load lands on the owner's site (they still apply to an off-site landing).
+IDENTITY_SIGNALS = (
+    "suspicious_tld", "watch_tld", "throwaway_hosting",
+    "brand_in_hostname", "brand_in_title", "js_obfuscated_only",
+)
 
 
 def _under(host: str, domain: str) -> bool:
@@ -160,11 +169,14 @@ class PnakoticScorer:
             "yara_weak": 0.15,   # anything else that matched
         }
 
-    def score(self, result: ScanResult) -> float:
+    def score(self, result: ScanResult, site_host: Optional[str] = None) -> float:
         score = 0.0
         findings = []
 
         host, tld = self._host_and_tld(result.final_url)
+        # Site mode: on the owner's own site, identity signals (TLD, hosting, brand, a lone atob)
+        # say nothing about malice, so they are skipped. The URL probe passes no site_host.
+        skip = set(IDENTITY_SIGNALS) if site_host and host and on_site(host, site_host) else set()
         redirect_hops = [h for h in result.hops if h.mechanism in REDIRECT_MECHANISMS]
 
         # Landing on a raw IP address is a classic malvertising / parking pattern.
@@ -172,7 +184,7 @@ class PnakoticScorer:
             score += self.WEIGHTS["ip_landing"]
             findings.append(f"IP landing: {host}")
 
-        if tld in self.SUSPICIOUS_TLDS:
+        if tld in self.SUSPICIOUS_TLDS and "suspicious_tld" not in skip:
             score += self.WEIGHTS["suspicious_tld"]
             findings.append(f"Suspicious TLD: .{tld}")
 
@@ -251,7 +263,7 @@ class PnakoticScorer:
                     or brand_hit or credential_token):
                 score += self.WEIGHTS["js_obfuscated"]
                 findings.append("JS obfuscation helpers (atob / String.fromCharCode)")
-            else:
+            elif "js_obfuscated_only" not in skip:
                 score += self.WEIGHTS["js_obfuscated_only"]
                 findings.append("JS obfuscation helpers present (no cross-site redirect)")
 
@@ -269,11 +281,12 @@ class PnakoticScorer:
             findings.append(f"Click on the page sent it to another site: {hijacks[0][0]}")
 
         # --- Phishing-oriented rules: pages that never redirect still give themselves away. ---
-        if brand_hit:
+        if brand_hit and "brand_in_hostname" not in skip:
             score += self.WEIGHTS["brand_in_hostname"]
             findings.append(f"Brand name in hostname: {brand_hit[0]} on {brand_hit[1]}")
 
-        for suffix in THROWAWAY_HOSTING:
+        hosting_suffixes = () if "throwaway_hosting" in skip else THROWAWAY_HOSTING
+        for suffix in hosting_suffixes:
             if any(h and _under(h, suffix) for h in (host, target_host)):
                 score += self.WEIGHTS["throwaway_hosting"]
                 findings.append(f"Free hosting platform: {suffix}")
@@ -285,7 +298,7 @@ class PnakoticScorer:
 
         # Page title that leads with a brand name (the first three words), on a host that is
         # not the brand's. Weaker than a credential form, so it does not stack with one.
-        if not credential_token and host:
+        if not credential_token and host and "brand_in_title" not in skip:
             lead = [w for w in _NON_ALNUM.split(title.lower()) if w][:3]
             title_brand = next((t for t in BRANDS if t in lead and not is_brand_domain(t, host)), None)
             if title_brand:
@@ -299,7 +312,7 @@ class PnakoticScorer:
             findings.append(
                 f"Redirected to a different domain: {self._apex(target_host)} -> {self._apex(host)}")
 
-        if tld in self.WATCH_TLDS:
+        if tld in self.WATCH_TLDS and "watch_tld" not in skip:
             score += self.WEIGHTS["watch_tld"]
             findings.append(f"Abuse-prone TLD: .{tld}")
 
