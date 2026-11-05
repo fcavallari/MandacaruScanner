@@ -47,6 +47,9 @@ function clientDest(hop: Hop): string | null {
   }
 }
 
+/** Evidence about a page, not a move: never a depth of its own. */
+const MARK_ONLY = new Set(['page_behavior', 'yara_match']);
+
 function buildGraph(target: string, hops: Hop[], finalUrl: string | null) {
   const nodes: GNode[] = [];
   const edges: GEdge[] = [];
@@ -65,6 +68,7 @@ function buildGraph(target: string, hops: Hop[], finalUrl: string | null) {
 
   for (const hop of hops) {
     if (hop.mechanism === 'origin') continue; // the first node already is it
+    if (MARK_ONLY.has(hop.mechanism)) continue; // marked below, once the landing exists
     if (hop.mechanism === 'http_3xx') {
       const dest = resolveDest(hop);
       const moved = dest ? pushNode(dest, { status: hop.status_code ?? null, label: 'HTTP redirect' }) : false;
@@ -91,6 +95,16 @@ function buildGraph(target: string, hops: Hop[], finalUrl: string | null) {
     if (nodes.length > 0) nodes[nodes.length - 1].url = finalUrl;
   }
   if (nodes.length > 0) nodes[nodes.length - 1].isLanding = true;
+
+  // Behaviors and YARA hits are recorded for the whole scan (a YARA hit's url is often a
+  // script on a CDN): mark the depth on that host, else the landing, never add a depth.
+  for (const hop of hops) {
+    if (!MARK_ONLY.has(hop.mechanism)) continue;
+    const host = hostnameOf(hop.url) || hop.url;
+    const n = [...nodes].reverse().find((node) => node.host === host) ?? nodes[nodes.length - 1];
+    const label = hopLabel(hop);
+    if (n && !n.marks.includes(label)) n.marks.push(label);
+  }
 
   return { nodes, edges };
 }

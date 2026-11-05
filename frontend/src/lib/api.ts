@@ -12,7 +12,7 @@ export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed';
 export interface Hop {
   url: string;
   status_code?: number | null;
-  mechanism: string; // http_3xx | meta_refresh | js_location | client_navigation | meta_refresh_code | js_location_code | js_obfuscation | static_analysis | origin
+  mechanism: string; // http_3xx | meta_refresh | js_location | client_navigation | meta_refresh_code | js_location_code | js_obfuscation | clickfix_lure | page_behavior | yara_match | static_analysis | origin
   headers?: Record<string, string>; // the engine stores response headers (Location etc.)
   evidence?: string | null;
 }
@@ -20,6 +20,26 @@ export interface Hop {
 export interface ArtifactEntry {
   name: string;
   rel_path: string; // relative to the task folder, e.g. screenshots/landing_*.png
+}
+
+/** One browser profile's own view of the URL (the requested one first). `error`: its page failed. */
+export interface ProfileVariant {
+  profile: string;
+  requested?: boolean;
+  final_url?: string | null;
+  malicious_score?: number; // that profile's own score, before the job folds them together
+  redirects?: number;
+  decisive?: string[];
+  raw_error?: string | null;
+  error?: string;
+}
+
+/** Set when profiles landed on different registrable domains (src/intelligence/scorer.py combine). */
+export interface Cloaking {
+  landings: Record<string, string>; // profile -> landing apex ('' when its page never loaded)
+  common: string; // the landing most profiles got
+  steered: string[]; // profiles that landed elsewhere
+  suspicious: string[]; // profiles whose own page scored Suspicious or worse
 }
 
 /** Identical in /tasks (list) and /tasks/{id}/results — the API returns one shape. */
@@ -30,6 +50,10 @@ export interface ScanResultData {
   hops: Hop[];
   artifacts: { artifacts?: ArtifactEntry[] };
   findings?: string[];
+  decisive?: string[]; // findings that settle the verdict alone (score forced to 1); also first in findings
+  variants?: ProfileVariant[]; // empty unless the probe compared profiles
+  cloaking?: Cloaking | null;
+  yara?: { rules: number; buffers: number; bytes: number; budget_exhausted: boolean; scripts_dropped?: number } | null;
   raw_error?: string | null;
 }
 

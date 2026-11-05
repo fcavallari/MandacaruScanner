@@ -30,11 +30,14 @@ def run_async(coro):
 
 
 @celery_app.task(name="pnakotic.scan")
-def run_scan_worker(job_id: str, url: str, profile: str, task_folder: Optional[str] = None):
+def run_scan_worker(job_id: str, url: str, profile: str, task_folder: Optional[str] = None,
+                    compare: bool = False):
     """The actual scan execution logic called by the API.
 
     `task_folder` is ignored. It is kept only so messages queued by an older API
     (which passed it) still deserialize; the engine resolves the folder from ARTIFACTS_DIR.
+    `compare` also loads the URL in every other browser profile to catch cloaking; it
+    defaults to off so those older messages keep their meaning.
     """
     # Import INSIDE task to prevent serialization errors in Celery workers
     from pnakotic.src.scanner.engine import PnakoticEngine
@@ -64,7 +67,7 @@ def run_scan_worker(job_id: str, url: str, profile: str, task_folder: Optional[s
         engine = PnakoticEngine(task_id=job_id)  # artifacts land in ARTIFACTS_DIR/<job_id>
 
         # EXECUTION: Bridge Sync Celery -> Async Playwright
-        result = run_async(engine.scan(url, profile))
+        result = run_async(engine.scan(url, profile, compare=bool(compare)))
 
         # DATABASE WRITE: Map Pydantic ScanResult to SQLAlchemy models.
         # Delete any stale row first so a re-queued message (acks_late) can't collide on the PK.
@@ -80,6 +83,10 @@ def run_scan_worker(job_id: str, url: str, profile: str, task_folder: Optional[s
                 "hops": [h.model_dump(mode="json") for h in result.hops],
                 "artifact_manifest": result.metadata.get("artifact_manifest", {}),
                 "scoring_findings": result.metadata.get("scoring_findings", []),
+                "decisive_findings": result.metadata.get("decisive_findings", []),
+                "variants": result.metadata.get("variants", []),
+                "cloaking": result.metadata.get("cloaking"),
+                "yara": result.metadata.get("yara"),  # rule count and what was scanned; None = off
                 "raw_error": result.metadata.get("raw_error"),
                 "redirect_loop": result.metadata.get("redirect_loop", False),
                 "blocked_hosts": result.metadata.get("blocked_hosts", []),

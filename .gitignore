@@ -12,7 +12,11 @@ artifacts/
 frontend/node_modules/
 frontend/dist/
 
+# Local YARA rules (mounted into the worker; never committed)
+yara-rules/
+
 # Local config and OS noise
 .env
 .env.*
 .DS_Store
+.superpowers/

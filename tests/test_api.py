@@ -84,11 +84,13 @@ class _FakeEngine:
     """Stands in for PnakoticEngine; `behaviour` decides what scan() does."""
     behaviour = None
     calls = []
+    compared = []
 
     def __init__(self, **kwargs):
         _FakeEngine.calls.append(kwargs)
 
-    async def scan(self, url, profile):
+    async def scan(self, url, profile, compare=False):
+        _FakeEngine.compared.append(compare)
         return _FakeEngine.behaviour(url, profile)
 
 
@@ -97,6 +99,7 @@ def fake_engine(monkeypatch):
     from pnakotic.src.scanner import engine as engine_mod
 
     _FakeEngine.calls = []
+    _FakeEngine.compared = []
     monkeypatch.setattr(engine_mod, "PnakoticEngine", _FakeEngine)
     return _FakeEngine
 
@@ -119,6 +122,7 @@ def test_worker_redelivery_refreshes_updated_at(db, fake_engine):
 
     assert seen["updated_at"] > datetime.now(timezone.utc) - timedelta(minutes=1)
     assert fake_engine.calls == [{"task_id": "redeliv"}]  # no base_dir patching
+    assert fake_engine.compared == [False]  # old messages carry no compare flag
     job = _job(Session, "redeliv")
     assert (job.status, job.error) == ("failed", "boom")
 
@@ -139,16 +143,21 @@ def test_worker_success_writes_result_and_replaces_stale_row(db, fake_engine):
         r = ScanResult(target_url=url, final_url="https://landing.example/", malicious_score=0.25)
         r.hops = [RedirectHop(url=url, status_code=302, mechanism="http_3xx")]
         r.is_redirect_chain_detected = True
-        r.metadata = {"scoring_findings": ["x"], "blocked_hosts": ["db"]}
+        r.metadata = {"scoring_findings": ["x"], "blocked_hosts": ["db"],
+                      "variants": [{"profile": "mobile-ios", "final_url": "https://x.example/"}],
+                      "cloaking": {"common": "landing.example"}}
         return r
 
     fake_engine.behaviour = scan
-    assert run_scan_worker("ok", "https://ok.example/", "default") == "Success: ok"
+    assert run_scan_worker("ok", "https://ok.example/", "default", None, True) == "Success: ok"
+    assert fake_engine.compared == [True]
 
     s = Session()
     res = s.query(models.ScanResult).filter_by(job_id="ok").one()
     assert res.target_url == "https://ok.example/"
     assert res.metadata_json["blocked_hosts"] == ["db"]
+    assert res.metadata_json["variants"][0]["profile"] == "mobile-ios"
+    assert res.metadata_json["cloaking"] == {"common": "landing.example"}
     assert s.query(models.ScanJob).filter_by(id="ok").one().status == "completed"
     s.close()
 
@@ -177,8 +186,10 @@ def test_scan_dispatches_without_task_folder(client, monkeypatch):
     resp = client.post("/scan", json={"url": "http://8.8.8.8/", "profile": "mobile-ios"})
     assert resp.status_code == 201
     task_id = resp.json()["task_id"]
-    assert sent == [(task_id, "http://8.8.8.8/", "mobile-ios")]
+    assert sent == [(task_id, "http://8.8.8.8/", "mobile-ios", None, True)]  # compares by default
     assert resp.json()["artifact_dir"].endswith(task_id)
+    client.post("/scan", json={"url": "http://8.8.8.8/", "compare_profiles": False})
+    assert sent[1][1:] == ("http://8.8.8.8/", "default", None, False)
 
 
 def test_scan_rejects_internal_host(client):

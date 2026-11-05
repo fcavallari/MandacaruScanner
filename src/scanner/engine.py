@@ -17,6 +17,8 @@ from ..intelligence.scorer import PnakoticScorer
 from .profiles import PROFILES
 from .static_analyzer import StaticAnalyst, SIGNATURE_MECHANISMS, MAX_CONTENT_CHARS
 from .artifacts import ArtifactManager
+from .behavior import BehaviorRecorder
+from .yara_scan import YARA_MECHANISM, ScriptCollector, load_rules, scan_buffers, MAX_FRAMES
 from .egress_proxy import EgressProxy
 from .netguard import HostCheck, host_is_public, url_is_allowed
 
@@ -188,17 +190,24 @@ class PnakoticEngine:
         self.task_id = task_id
         # Egress policy for every browser request; injectable so tests can allow a local server.
         self.host_allowed: HostCheck = host_allowed or host_is_public
+        self.yara_rules = None  # set per scan from YARA_RULES_DIR (yara_scan.load_rules)
 
-    async def scan(self, target_url: str, profile_name="default") -> ScanResult:
-        profile = PROFILES.get(profile_name, PROFILES["default"])
-        result = ScanResult(target_url=target_url)
-        intercepted: List[RedirectHop] = []
+    async def scan(self, target_url: str, profile_name="default", compare: bool = False) -> ScanResult:
+        """Scan target_url in the requested profile and return its scored result.
+
+        With compare=True every other profile loads the URL too, each in its own browser
+        context (own cookies and storage) in the same browser, all in parallel so the job
+        takes about as long as one scan. The scorer then compares where each profile landed
+        (cloaking, see PnakoticScorer.combine). The requested profile stays the job's chain;
+        the others are summarized in metadata["variants"]. Contexts share one egress IP, so
+        only user-agent, viewport and referrer cloaking can show up, not IP or geo cloaking.
+        """
+        if profile_name not in PROFILES:
+            profile_name = "default"
         task_folder = self.artifacts.create_task_folder(self.task_id)
-        os.makedirs(os.path.join(task_folder, "screenshots"), exist_ok=True)
-
-        final_url = target_url
-        redirect_count = 0
-        content_type = ""  # Content-Type of the main frame's last 2xx navigation response
+        names = [profile_name] + ([n for n in PROFILES if n != profile_name] if compare else [])
+        # Compiled once per worker process; None when YARA_RULES_DIR is unset (scanning off).
+        self.yara_rules = await asyncio.to_thread(load_rules)
 
         async with async_playwright() as p:
             # Launch-level SOCKS5 proxy: Playwright then maps every hostname to NOTFOUND in
@@ -211,274 +220,362 @@ class PnakoticEngine:
                 await proxy.stop()
                 raise
             _log_browser_once(browser)
-            guard: Optional[EgressGuard] = None
             try:
-                # Set viewport and mobile emulation from profile
-                ctx = await browser.new_context(
-                    user_agent=profile.user_agent_for(browser.version),
-                    viewport=profile.viewport,
-                    extra_http_headers=profile.extra_headers,
-                    is_mobile=profile.is_mobile,
-                    has_touch=profile.has_touch,
-                    service_workers="block",  # SW fetches would run outside the guarded page
+                outcomes = await asyncio.gather(
+                    *(self._scan_in_context(browser, target_url, name, task_folder, primary=(i == 0))
+                      for i, name in enumerate(names)),
+                    return_exceptions=True,
                 )
-                page = await ctx.new_page()
-                guard = EgressGuard(await ctx.new_cdp_session(page), self.host_allowed)
-                await guard.start()  # before goto: the first navigation is checked too
-                # The UA string alone is not enough: client hints would still say HeadlessChrome.
-                try:
-                    await guard.cdp.send("Emulation.setUserAgentOverride", {
-                        "userAgent": profile.user_agent_for(browser.version),
-                        "userAgentMetadata": profile.user_agent_metadata(browser.version),
-                    })
-                except PlaywrightError as e:
-                    print(f"[engine] client-hint override failed: {str(e)[:200]}")
-
-                tasks: Set[asyncio.Task] = set()  # strong refs; asyncio only keeps weak ones
-                # "load" until the landing is analysed, then "click" for the click probe. What
-                # happens after the click is recorded as evidence but never moves final_url.
-                phase = "load"
-                popups_seen = 0
-
-                def note_redirect() -> None:
-                    """Count one redirect (3xx or client-side); past max_hops, flag a loop and stop the page."""
-                    nonlocal redirect_count
-                    redirect_count += 1
-                    if redirect_count >= self.max_hops:
-                        result.metadata["redirect_loop"] = True
-                        task = asyncio.ensure_future(page.close())
-                        tasks.add(task)
-                        task.add_done_callback(tasks.discard)
-                        task.add_done_callback(lambda t: t.cancelled() or t.exception())  # page already gone
-
-                async def on_resp(r: Response):
-                    nonlocal final_url, content_type
-                    try:  # [P4] Sanitize header extraction from bad response
-                        if phase == "click":
-                            # Responses to our own click probe: a click-hijack's 3xx hops (its
-                            # click_hijack hop is the record) and its landing page must not
-                            # replace the content_type that page_signals was built from.
-                            return
-                        if r.status < 300:
-                            # Last main-frame navigation response wins: it is the landing document.
-                            if r.request.is_navigation_request() and r.request.frame == page.main_frame:
-                                raw = r.headers.get("content-type") or ""
-                                content_type = raw.split(";")[0].strip().lower()
-                            return
-                        if not (300 <= r.status < 400):
-                            return
-                        # Only the page's own navigation is the chain. Subresources
-                        # (pixels, CDN assets, XHR) and iframes redirect all the time.
-                        if not (r.request.is_navigation_request() and r.request.frame == page.main_frame):
-                            return
-                        note_redirect()
-                        # Resolve relative Location headers (e.g. "/next") against the
-                        # current URL so final_url is always absolute.
-                        location = r.headers.get("location")
-                        if location:
-                            final_url = str(urljoin(str(r.url), location))
-                        intercepted.append(RedirectHop(
-                            url=str(r.url),
-                            status_code=r.status,
-                            headers={k: v for k, v in r.headers.items() if isinstance(v, str)},
-                            mechanism="http_3xx",
-                        ))
-                    except Exception:
-                        pass  # Ignore malformed headers (e.g., binary payloads)
-
-                # Client-side navigations (JS, meta refresh, ...) leave the page before any
-                # regex sees them, so watch them through CDP. frameRequestedNavigation does not
-                # fire for the initial goto or for HTTP 3xx, so these never double-count with
-                # on_resp. The hop's url is the page that issued the navigation (the last
-                # committed main-frame URL), the destination goes in evidence["to"].
-                cdp = guard.cdp
-                await cdp.send("Page.enable")
-                tree = await cdp.send("Page.getFrameTree")
-                main_frame_id = tree["frameTree"]["frame"]["id"]
-                current_url = target_url
-
-                def on_frame_navigated(event: dict) -> None:
-                    nonlocal current_url
-                    frame = event.get("frame") or {}
-                    if frame.get("id") == main_frame_id and frame.get("url"):
-                        current_url = frame["url"]
-
-                def on_requested_navigation(event: dict) -> None:
-                    nonlocal final_url
-                    if event.get("frameId") != main_frame_id:
-                        return
-                    if redirect_count >= self.max_hops:
-                        return  # loop already flagged; events queued behind the close are noise
-                    reason = event.get("reason") or "other"
-                    destination = (event.get("url") or "")[:MAX_EVIDENCE_URL]
-                    if phase == "click":
-                        # Our click hit no link, yet the page left: a script hijacked the click.
-                        intercepted.append(RedirectHop(
-                            url=current_url,
-                            mechanism="click_hijack",
-                            evidence=json.dumps({
-                                "id": "click_hijack", "reason": reason, "trigger": "click", "to": destination,
-                            }),
-                        ))
-                        return
-                    mechanism = NAVIGATION_MECHANISMS.get(reason, "client_navigation")
-                    # A page reloading itself (location.href = location.href, a refresh timer
-                    # without url=) goes nowhere: record it, but not as a redirect. It still
-                    # counts toward max_hops so a reload loop stops.
-                    self_nav = (mechanism in REDIRECT_MECHANISMS and bool(destination)
-                                and urldefrag(destination)[0] == urldefrag(current_url)[0])
-                    if self_nav:
-                        mechanism = "client_navigation"
-                        note_redirect()
-                    elif mechanism in REDIRECT_MECHANISMS:
-                        note_redirect()
-                        if destination:
-                            final_url = destination
-                    evidence = {
-                        "id": mechanism,
-                        "reason": reason,
-                        "disposition": event.get("disposition"),
-                        "to": destination,
-                    }
-                    if self_nav:
-                        evidence["self"] = True
-                    intercepted.append(RedirectHop(
-                        url=current_url,
-                        mechanism=mechanism,
-                        evidence=json.dumps(evidence),
-                    ))
-
-                def on_window_open(event: dict) -> None:
-                    # window.open, target=_blank, ... Blocked by --block-new-web-contents, so
-                    # nothing loads; the attempt itself is the evidence. Not a redirect: the
-                    # visitor's own tab stays where it is.
-                    nonlocal popups_seen
-                    popups_seen += 1
-                    if popups_seen > MAX_POPUP_HOPS:
-                        result.metadata["popups_dropped"] = popups_seen - MAX_POPUP_HOPS
-                        return
-                    intercepted.append(RedirectHop(
-                        url=current_url,
-                        mechanism="popup_open",
-                        evidence=json.dumps({
-                            "id": "popup_open",
-                            "to": (event.get("url") or "")[:MAX_EVIDENCE_URL],
-                            "trigger": phase,
-                            "user_gesture": bool(event.get("userGesture")),
-                        }),
-                    ))
-
-                cdp.on("Page.frameNavigated", on_frame_navigated)
-                cdp.on("Page.frameRequestedNavigation", on_requested_navigation)
-                cdp.on("Page.windowOpen", on_window_open)
-
-                page.on("response", on_resp)
-
-                # 1. Navigate. `load` (not networkidle): one slow subresource must not sink the scan.
-                try:
-                    await page.goto(target_url, wait_until="load", timeout=self.timeout_ms)
-                except BROWSER_ERRORS as e:
-                    # [P4] Sanitize error string for Metadata Injection Protection
-                    result.metadata["raw_error"] = str(e).replace("\x00", "").strip()[:256]
-
-                # 2. Bounded settle so late client-side redirects and lazy content can show up.
-                if not page.is_closed():
-                    try:
-                        await page.wait_for_load_state("networkidle", timeout=SETTLE_MS)
-                    except (PlaywrightTimeoutError, asyncio.TimeoutError):
-                        result.metadata["settle_timed_out"] = True
-                    except PlaywrightError as e:
-                        print(f"[engine] settle failed: {str(e)[:200]}")
-
-                # 3. Analysis half. Each step stands alone; a closed page (redirect loop) skips them.
-                # Only a real http(s) page counts: a refused/failed/download navigation leaves
-                # about:blank or chrome-error://, and the tracked URL is the better answer then.
-                if not page.is_closed() and page.url.startswith(("http://", "https://")):
-                    final_url = page.url
-                # A failed navigation leaves Chrome's own error page, and a non-HTML landing document
-                # (audio, PDF, ...) is wrapped in Chrome's markup: neither is the site's HTML.
-                error_page = (not page.is_closed()) and page.url.startswith("chrome-error://")
-                if error_page:
-                    result.metadata["navigation_failed"] = final_url
-                is_html = not content_type or content_type.startswith(HTML_CONTENT_TYPES)
-                content = ""
-                if not page.is_closed() and not error_page and is_html:
-                    try:
-                        content = await page.content()
-                    except BROWSER_ERRORS as e:
-                        print(f"[engine] page.content() failed: {str(e)[:200]}")
-                signals = extract_page_signals(content) if content else {"title": "", "password_inputs": 0, "forms": 0}
-                signals["content_type"] = content_type
-                signals["error_page"] = error_page
-                result.metadata["page_signals"] = signals
-                if content:
-                    # No try/except here on purpose: a bug (or SoftTimeLimitExceeded) must fail the job.
-                    findings = self.analyst.analyze_content(content)
-                    for finding in findings:
-                        # One hop per signature with its real mechanism. Regex hits are
-                        # "code present" signals; redirects that fire come from CDP above.
-                        intercepted.append(RedirectHop(
-                            url=page.url,
-                            mechanism=SIGNATURE_MECHANISMS.get(finding["id"], "static_analysis"),
-                            evidence=json.dumps(finding),  # [P4] JSON-serializable evidence
-                        ))
-                if not page.is_closed():
-                    shot_path = os.path.join(
-                        task_folder, "screenshots",
-                        f"landing_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
-                    )
-                    try:
-                        await page.screenshot(path=shot_path, full_page=True, timeout=SCREENSHOT_TIMEOUT_MS)
-                    except (PlaywrightTimeoutError, asyncio.TimeoutError) as e:
-                        # Playwright waits for document.fonts.ready, which never resolves while the
-                        # document is still loading (the slow-subresource case). Take a plain viewport
-                        # capture straight from CDP instead of leaving the scan without a screenshot.
-                        print(f"[engine] screenshot timed out ({str(e)[:80]!r}), falling back to CDP capture")
-                        try:
-                            shot = await asyncio.wait_for(
-                                cdp.send("Page.captureScreenshot", {"format": "png"}), SCREENSHOT_TIMEOUT_MS / 1000)
-                            with open(shot_path, "wb") as fh:
-                                fh.write(base64.b64decode(shot["data"]))
-                        except BROWSER_ERRORS as e2:
-                            print(f"[engine] CDP screenshot failed: {str(e2)[:200]}")
-                    except PlaywrightError as e:
-                        print(f"[engine] screenshot failed: {str(e)[:200]}")
-
-                # 4. Click probe, after everything above has captured the landing as loaded.
-                if not page.is_closed():
-                    point = None
-                    try:
-                        raw = await page.evaluate(NEUTRAL_POINT_JS)
-                        # The page computed this: accept only [x, y, W, H] numbers with the
-                        # point inside a sane layout viewport.
-                        if (isinstance(raw, list) and len(raw) == 4
-                                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in raw)
-                                and 0 < raw[2] <= 20000 and 0 < raw[3] <= 20000
-                                and 0 <= raw[0] < raw[2] and 0 <= raw[1] < raw[3]):
-                            point = (float(raw[0]), float(raw[1]))
-                    except BROWSER_ERRORS as e:
-                        print(f"[engine] click probe: no point ({str(e)[:200]})")
-                    if point is None:
-                        result.metadata["click_probe"] = "skipped"
-                    else:
-                        phase = "click"  # before the click: its events can arrive before click() returns
-                        try:
-                            await asyncio.wait_for(page.mouse.click(*point), CLICK_SETTLE_MS / 1000 * 3)
-                            result.metadata["click_probe"] = "clicked"
-                            await asyncio.sleep(CLICK_SETTLE_MS / 1000)
-                        except BROWSER_ERRORS as e:
-                            result.metadata["click_probe"] = "failed"
-                            print(f"[engine] click probe failed: {str(e)[:200]}")
             finally:
                 try:
                     await browser.close()
                 finally:
                     await proxy.stop()
-                blocked = list(dict.fromkeys((guard.blocked_hosts if guard else []) + proxy.blocked_hosts))
-                if blocked:
-                    result.metadata["blocked_hosts"] = blocked
 
-        result.hops = intercepted
+        # The requested profile is the job: any error there fails it. A comparison profile may
+        # fail on a hostile page (browser errors only); anything else (a bug, Celery's
+        # SoftTimeLimitExceeded) still propagates.
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException) and not isinstance(outcome, BROWSER_ERRORS):
+                raise outcome
+        if isinstance(outcomes[0], BaseException):
+            raise outcomes[0]
+
+        result = outcomes[0]
+        # The proxy is shared, so its blocks can't be told apart per profile; they go on the job.
+        blocked = list(dict.fromkeys(result.metadata.pop("guard_blocked_hosts", []) + proxy.blocked_hosts))
+        if blocked:
+            result.metadata["blocked_hosts"] = blocked
+        result.metadata["artifact_manifest"] = self.artifacts.get_task_manifest(self.task_id)
+        self.scorer.score(result)
+        if compare:
+            variants: Dict[str, object] = {}
+            for name, outcome in zip(names[1:], outcomes[1:]):
+                if isinstance(outcome, BaseException):
+                    variants[name] = str(outcome).replace("\x00", "").strip()[:256]
+                    continue
+                own_blocked = outcome.metadata.pop("guard_blocked_hosts", [])
+                if own_blocked:
+                    outcome.metadata["blocked_hosts"] = own_blocked
+                self.scorer.score(outcome)
+                variants[name] = outcome
+            self.scorer.combine(result, profile_name, variants)
+        return result
+
+    async def _scan_in_context(self, browser, target_url: str, profile_name: str,
+                               task_folder: str, primary: bool) -> ScanResult:
+        """Load target_url once in a fresh context for one profile. Unscored; scan() scores.
+
+        The requested profile's screenshot goes to screenshots/ (the dashboard's landing
+        shot); comparison profiles write to profiles/<name>/.
+        """
+        profile = PROFILES[profile_name]
+        result = ScanResult(target_url=target_url)
+        result.metadata["profile"] = profile_name
+        intercepted: List[RedirectHop] = []
+        shot_dir = os.path.join(task_folder, "screenshots" if primary else os.path.join("profiles", profile_name))
+        os.makedirs(shot_dir, exist_ok=True)
+
+        final_url = target_url
+        redirect_count = 0
+        content_type = ""  # Content-Type of the main frame's last 2xx navigation response
+
+        # Set viewport and mobile emulation from profile
+        ctx = await browser.new_context(
+            user_agent=profile.user_agent_for(browser.version),
+            viewport=profile.viewport,
+            extra_http_headers=profile.extra_headers,
+            is_mobile=profile.is_mobile,
+            has_touch=profile.has_touch,
+            service_workers="block",  # SW fetches would run outside the guarded page
+        )
+        guard: Optional[EgressGuard] = None
+        behavior = BehaviorRecorder()
+        rules = getattr(self, "yara_rules", None)
+        scripts = ScriptCollector() if rules else None
+        documents: List[tuple] = []  # (source, url, html) for YARA: the landing page and its frames
+        try:
+            await behavior.attach(ctx)  # before new_page: hooks must precede every page script
+            page = await ctx.new_page()
+            behavior.watch(page)
+            guard = EgressGuard(await ctx.new_cdp_session(page), self.host_allowed)
+            await guard.start()  # before goto: the first navigation is checked too
+            # The UA string alone is not enough: client hints would still say HeadlessChrome.
+            try:
+                await guard.cdp.send("Emulation.setUserAgentOverride", {
+                    "userAgent": profile.user_agent_for(browser.version),
+                    "userAgentMetadata": profile.user_agent_metadata(browser.version),
+                })
+            except PlaywrightError as e:
+                print(f"[engine] client-hint override failed: {str(e)[:200]}")
+
+            tasks: Set[asyncio.Task] = set()  # strong refs; asyncio only keeps weak ones
+            # "load" until the landing is analysed, then "click" for the click probe. What
+            # happens after the click is recorded as evidence but never moves final_url.
+            phase = "load"
+            popups_seen = 0
+
+            def note_redirect() -> None:
+                """Count one redirect (3xx or client-side); past max_hops, flag a loop and stop the page."""
+                nonlocal redirect_count
+                redirect_count += 1
+                if redirect_count >= self.max_hops:
+                    result.metadata["redirect_loop"] = True
+                    task = asyncio.ensure_future(page.close())
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
+                    task.add_done_callback(lambda t: t.cancelled() or t.exception())  # page already gone
+
+            async def on_resp(r: Response):
+                nonlocal final_url, content_type
+                try:  # [P4] Sanitize header extraction from bad response
+                    if phase == "click":
+                        # Responses to our own click probe: a click-hijack's 3xx hops (its
+                        # click_hijack hop is the record) and its landing page must not
+                        # replace the content_type that page_signals was built from.
+                        return
+                    if r.status < 300:
+                        # Last main-frame navigation response wins: it is the landing document.
+                        if r.request.is_navigation_request() and r.request.frame == page.main_frame:
+                            raw = r.headers.get("content-type") or ""
+                            content_type = raw.split(";")[0].strip().lower()
+                        return
+                    if not (300 <= r.status < 400):
+                        return
+                    # Only the page's own navigation is the chain. Subresources
+                    # (pixels, CDN assets, XHR) and iframes redirect all the time.
+                    if not (r.request.is_navigation_request() and r.request.frame == page.main_frame):
+                        return
+                    note_redirect()
+                    # Resolve relative Location headers (e.g. "/next") against the
+                    # current URL so final_url is always absolute.
+                    location = r.headers.get("location")
+                    if location:
+                        final_url = str(urljoin(str(r.url), location))
+                    intercepted.append(RedirectHop(
+                        url=str(r.url),
+                        status_code=r.status,
+                        headers={k: v for k, v in r.headers.items() if isinstance(v, str)},
+                        mechanism="http_3xx",
+                    ))
+                except Exception:
+                    pass  # Ignore malformed headers (e.g., binary payloads)
+
+            # Client-side navigations (JS, meta refresh, ...) leave the page before any
+            # regex sees them, so watch them through CDP. frameRequestedNavigation does not
+            # fire for the initial goto or for HTTP 3xx, so these never double-count with
+            # on_resp. The hop's url is the page that issued the navigation (the last
+            # committed main-frame URL), the destination goes in evidence["to"].
+            cdp = guard.cdp
+            await cdp.send("Page.enable")
+            tree = await cdp.send("Page.getFrameTree")
+            main_frame_id = tree["frameTree"]["frame"]["id"]
+            current_url = target_url
+
+            def on_frame_navigated(event: dict) -> None:
+                nonlocal current_url
+                frame = event.get("frame") or {}
+                if frame.get("id") == main_frame_id and frame.get("url"):
+                    current_url = frame["url"]
+
+            def on_requested_navigation(event: dict) -> None:
+                nonlocal final_url
+                if event.get("frameId") != main_frame_id:
+                    return
+                if redirect_count >= self.max_hops:
+                    return  # loop already flagged; events queued behind the close are noise
+                reason = event.get("reason") or "other"
+                destination = (event.get("url") or "")[:MAX_EVIDENCE_URL]
+                if phase == "click":
+                    # Our click hit no link, yet the page left: a script hijacked the click.
+                    intercepted.append(RedirectHop(
+                        url=current_url,
+                        mechanism="click_hijack",
+                        evidence=json.dumps({
+                            "id": "click_hijack", "reason": reason, "trigger": "click", "to": destination,
+                        }),
+                    ))
+                    return
+                mechanism = NAVIGATION_MECHANISMS.get(reason, "client_navigation")
+                # A page reloading itself (location.href = location.href, a refresh timer
+                # without url=) goes nowhere: record it, but not as a redirect. It still
+                # counts toward max_hops so a reload loop stops.
+                self_nav = (mechanism in REDIRECT_MECHANISMS and bool(destination)
+                            and urldefrag(destination)[0] == urldefrag(current_url)[0])
+                if self_nav:
+                    mechanism = "client_navigation"
+                    note_redirect()
+                elif mechanism in REDIRECT_MECHANISMS:
+                    note_redirect()
+                    if destination:
+                        final_url = destination
+                evidence = {
+                    "id": mechanism,
+                    "reason": reason,
+                    "disposition": event.get("disposition"),
+                    "to": destination,
+                }
+                if self_nav:
+                    evidence["self"] = True
+                intercepted.append(RedirectHop(
+                    url=current_url,
+                    mechanism=mechanism,
+                    evidence=json.dumps(evidence),
+                ))
+
+            def on_window_open(event: dict) -> None:
+                # window.open, target=_blank, ... Blocked by --block-new-web-contents, so
+                # nothing loads; the attempt itself is the evidence. Not a redirect: the
+                # visitor's own tab stays where it is.
+                nonlocal popups_seen
+                popups_seen += 1
+                if popups_seen > MAX_POPUP_HOPS:
+                    result.metadata["popups_dropped"] = popups_seen - MAX_POPUP_HOPS
+                    return
+                intercepted.append(RedirectHop(
+                    url=current_url,
+                    mechanism="popup_open",
+                    evidence=json.dumps({
+                        "id": "popup_open",
+                        "to": (event.get("url") or "")[:MAX_EVIDENCE_URL],
+                        "trigger": phase,
+                        "user_gesture": bool(event.get("userGesture")),
+                    }),
+                ))
+
+            cdp.on("Page.frameNavigated", on_frame_navigated)
+            cdp.on("Page.frameRequestedNavigation", on_requested_navigation)
+            cdp.on("Page.windowOpen", on_window_open)
+
+            page.on("response", on_resp)
+            if scripts:
+                scripts.watch(page)
+
+            # 1. Navigate. `load` (not networkidle): one slow subresource must not sink the scan.
+            try:
+                await page.goto(target_url, wait_until="load", timeout=self.timeout_ms)
+            except BROWSER_ERRORS as e:
+                # [P4] Sanitize error string for Metadata Injection Protection
+                result.metadata["raw_error"] = str(e).replace("\x00", "").strip()[:256]
+
+            # 2. Bounded settle so late client-side redirects and lazy content can show up.
+            if not page.is_closed():
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=SETTLE_MS)
+                except (PlaywrightTimeoutError, asyncio.TimeoutError):
+                    result.metadata["settle_timed_out"] = True
+                except PlaywrightError as e:
+                    print(f"[engine] settle failed: {str(e)[:200]}")
+
+            # 3. Analysis half. Each step stands alone; a closed page (redirect loop) skips them.
+            # Only a real http(s) page counts: a refused/failed/download navigation leaves
+            # about:blank or chrome-error://, and the tracked URL is the better answer then.
+            if not page.is_closed() and page.url.startswith(("http://", "https://")):
+                final_url = page.url
+            # A failed navigation leaves Chrome's own error page, and a non-HTML landing document
+            # (audio, PDF, ...) is wrapped in Chrome's markup: neither is the site's HTML.
+            error_page = (not page.is_closed()) and page.url.startswith("chrome-error://")
+            if error_page:
+                result.metadata["navigation_failed"] = final_url
+            is_html = not content_type or content_type.startswith(HTML_CONTENT_TYPES)
+            content = ""
+            if not page.is_closed() and not error_page and is_html:
+                try:
+                    content = await page.content()
+                except BROWSER_ERRORS as e:
+                    print(f"[engine] page.content() failed: {str(e)[:200]}")
+            signals = extract_page_signals(content) if content else {"title": "", "password_inputs": 0, "forms": 0}
+            signals["content_type"] = content_type
+            signals["error_page"] = error_page
+            result.metadata["page_signals"] = signals
+            if rules:
+                if content:
+                    documents.append(("page", page.url, content))
+                # Ad slots are iframes, often cross-origin: their documents are where injected
+                # code tends to be. Bounded count; a frame that's gone is skipped.
+                for frame in (page.frames[1:MAX_FRAMES + 1] if not page.is_closed() else []):
+                    try:
+                        documents.append(("frame", frame.url, await frame.content()))
+                    except BROWSER_ERRORS:
+                        pass
+            if content:
+                # No try/except here on purpose: a bug (or SoftTimeLimitExceeded) must fail the job.
+                findings = self.analyst.analyze_content(content)
+                for finding in findings:
+                    # One hop per signature with its real mechanism. Regex hits are
+                    # "code present" signals; redirects that fire come from CDP above.
+                    intercepted.append(RedirectHop(
+                        url=page.url,
+                        mechanism=SIGNATURE_MECHANISMS.get(finding["id"], "static_analysis"),
+                        evidence=json.dumps(finding),  # [P4] JSON-serializable evidence
+                    ))
+            if not page.is_closed():
+                shot_path = os.path.join(
+                    shot_dir, f"landing_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+                try:
+                    await page.screenshot(path=shot_path, full_page=True, timeout=SCREENSHOT_TIMEOUT_MS)
+                except (PlaywrightTimeoutError, asyncio.TimeoutError) as e:
+                    # Playwright waits for document.fonts.ready, which never resolves while the
+                    # document is still loading (the slow-subresource case). Take a plain viewport
+                    # capture straight from CDP instead of leaving the scan without a screenshot.
+                    print(f"[engine] screenshot timed out ({str(e)[:80]!r}), falling back to CDP capture")
+                    try:
+                        shot = await asyncio.wait_for(
+                            cdp.send("Page.captureScreenshot", {"format": "png"}), SCREENSHOT_TIMEOUT_MS / 1000)
+                        with open(shot_path, "wb") as fh:
+                            fh.write(base64.b64decode(shot["data"]))
+                    except BROWSER_ERRORS as e2:
+                        print(f"[engine] CDP screenshot failed: {str(e2)[:200]}")
+                except PlaywrightError as e:
+                    print(f"[engine] screenshot failed: {str(e)[:200]}")
+
+            # 4. Click probe, after everything above has captured the landing as loaded.
+            if not page.is_closed():
+                point = None
+                try:
+                    raw = await page.evaluate(NEUTRAL_POINT_JS)
+                    # The page computed this: accept only [x, y, W, H] numbers with the
+                    # point inside a sane layout viewport.
+                    if (isinstance(raw, list) and len(raw) == 4
+                            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in raw)
+                            and 0 < raw[2] <= 20000 and 0 < raw[3] <= 20000
+                            and 0 <= raw[0] < raw[2] and 0 <= raw[1] < raw[3]):
+                        point = (float(raw[0]), float(raw[1]))
+                except BROWSER_ERRORS as e:
+                    print(f"[engine] click probe: no point ({str(e)[:200]})")
+                if point is None:
+                    result.metadata["click_probe"] = "skipped"
+                else:
+                    phase = "click"  # before the click: its events can arrive before click() returns
+                    behavior.trigger = "click"  # behaviors from here on followed our click
+                    try:
+                        await asyncio.wait_for(page.mouse.click(*point), CLICK_SETTLE_MS / 1000 * 3)
+                        result.metadata["click_probe"] = "clicked"
+                        await asyncio.sleep(CLICK_SETTLE_MS / 1000)
+                    except BROWSER_ERRORS as e:
+                        result.metadata["click_probe"] = "failed"
+                        print(f"[engine] click probe failed: {str(e)[:200]}")
+            if scripts:
+                await scripts.drain()  # bodies can only be read while the context is open
+        finally:
+            try:
+                await ctx.close()
+            except BROWSER_ERRORS:
+                pass  # browser already gone
+            if guard and guard.blocked_hosts:
+                result.metadata["guard_blocked_hosts"] = list(guard.blocked_hosts)
+
+        if rules:
+            buffers = [(src, url, html.encode("utf-8", "replace")) for src, url, html in documents]
+            buffers += [("script", url, body) for url, body in scripts.scripts]
+            matches, stats = await scan_buffers(rules, buffers)
+            stats["scripts_dropped"] = scripts.dropped
+            result.metadata["yara"] = stats
+            for match in matches:
+                intercepted.append(RedirectHop(url=match["url"], mechanism=YARA_MECHANISM, evidence=json.dumps(match)))
+
+        # What the page tried to do to the visitor, after the context is gone (no late events).
+        result.hops = intercepted + behavior.hops()
         result.final_url = final_url
         result.end_time = datetime.now()
         # A "chain" means at least one actual redirect mechanism was observed;
@@ -486,6 +583,4 @@ class PnakoticEngine:
         result.is_redirect_chain_detected = any(
             h.mechanism in REDIRECT_MECHANISMS for h in intercepted
         )
-        result.metadata["artifact_manifest"] = self.artifacts.get_task_manifest(self.task_id)
-        self.scorer.score(result)
         return result

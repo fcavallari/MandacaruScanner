@@ -5,6 +5,7 @@ tests
 .taste-skill
 .pytest_cache
 artifacts
+yara-rules
 SKILL.md
 **/__pycache__
 *.pyc

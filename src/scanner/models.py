@@ -21,7 +21,9 @@ class RedirectHop(BaseModel):
     # 'click_hijack' (the click probe hit no link, yet the page navigated). Neither of the
     # last two is a redirect: they never move final_url.
     # From the landing-page regexes: 'meta_refresh_code', 'js_location_code' (redirect code
-    # present but did not fire), 'js_obfuscation', 'static_analysis'.
+    # present but did not fire), 'js_obfuscation', 'clickfix_lure', 'static_analysis'.
+    # From the running page (behavior.py): 'page_behavior', with the event id in evidence.
+    # From YARA rules over the page, its frames and scripts (yara_scan.py): 'yara_match'.
     mechanism: str
     evidence: Optional[str] = None
 

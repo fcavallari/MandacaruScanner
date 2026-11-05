@@ -50,6 +50,9 @@ export const MECHANISM_LABELS: Record<string, string> = {
   js_location_code: 'JS location code',
   client_navigation: 'Navigation',
   js_obfuscation: 'Obfuscation',
+  clickfix_lure: 'ClickFix lure',
+  page_behavior: 'Page behavior',
+  yara_match: 'YARA match',
   static_analysis: 'Static finding',
   popup_open: 'Popup',
   click_hijack: 'Click hijack',
@@ -61,6 +64,17 @@ const SIGNATURE_LABELS: Record<string, string> = {
   js_location_assignment: 'JS location code',
   meta_refresh: 'Meta refresh code',
   b64_payload: 'Base64 payload',
+  clickfix_lure: 'ClickFix lure text',
+  // page_behavior event ids (src/scanner/behavior.py)
+  clipboard_write: 'Clipboard write',
+  download: 'Forced download',
+  dialog: 'JS dialog',
+  dialog_flood: 'Dialog loop',
+  fullscreen_request: 'Fullscreen request',
+  keyboard_lock: 'Keyboard lock',
+  notification_request: 'Notification prompt',
+  beforeunload_trap: 'Leave-page handler',
+  history_flood: 'History stuffing',
 };
 
 /** Words for what a hop is; static hops carry the signature id in their JSON evidence.
@@ -81,7 +95,9 @@ export function hopLabel(hop: Hop): string {
   }
   if (!REDIRECT_MECHANISMS.has(hop.mechanism) && hop.evidence) {
     try {
-      const id = JSON.parse(hop.evidence)?.id;
+      const ev = JSON.parse(hop.evidence);
+      const id = ev?.id;
+      if (id === 'yara_match' && typeof ev.rule === 'string') return `YARA ${ev.rule}`;
       if (id && SIGNATURE_LABELS[id]) return SIGNATURE_LABELS[id];
     } catch {
       /* free-text evidence: fall back to the mechanism */

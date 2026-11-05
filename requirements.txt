@@ -10,3 +10,6 @@ playwright==1.60.0; python_version < "3.10"
 alembic>=1.12.0
 pydantic>=2.4.0
 python-multipart>=0.0.6
+# YARA over page HTML, frames and scripts (src/scanner/yara_scan.py). libyara; prebuilt
+# wheels, so no compiler in the image.
+yara-python==4.5.4
