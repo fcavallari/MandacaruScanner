@@ -263,12 +263,15 @@ function HostView({ host }: { host: ExternalScriptHost }) {
   const tied = host.urls.some((u) => u.finding);
   return (
     <details className="border-b border-rule last:border-b-0">
-      <summary className={`px-4 py-2 cursor-pointer select-none flex items-baseline gap-2.5 hover:bg-raised/60 transition-colors ${tied ? 'shadow-[inset_1px_0_0_var(--accent)]' : ''}`}>
-        <span className="font-mono text-[12px] text-ink break-all min-w-0">{host.host}</span>
-        <span className="font-mono num text-[11px] text-faint flex-none ml-auto whitespace-nowrap">
-          {plural(host.urls.length, 'script')}
-          {host.your_domain ? ' · your domain' : ''}
-          {tied ? ' · tied to a finding' : ''}
+      {/* the summary stays display:list-item so it keeps its disclosure marker */}
+      <summary className={`px-4 py-2 cursor-pointer select-none text-faint hover:bg-raised/60 transition-colors ${tied ? 'shadow-[inset_1px_0_0_var(--accent)]' : ''}`}>
+        <span className="inline-flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 max-w-[calc(100%-1.5rem)] align-baseline">
+          <span className="font-mono text-[12px] text-ink break-all min-w-0">{host.host}</span>
+          <span className="font-mono num text-[11px] text-faint whitespace-nowrap">
+            {plural(host.urls.length, 'script')}
+            {host.your_domain ? ' · your domain' : ''}
+            {tied ? ' · tied to a finding' : ''}
+          </span>
         </span>
       </summary>
       <ul className="m-0 p-0 list-none px-4 pb-3 pt-1 space-y-2">
