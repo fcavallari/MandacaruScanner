@@ -263,6 +263,34 @@ def test_couldnt_check_summary_gives_the_reason():
     assert site_verdict([], [], True)["summary"] == "We couldn't reach this site"
 
 
+def test_report_flags_a_bot_check_with_vendor_and_counts():
+    from _support import _load
+    from pnakotic.src.scanner.site_report import build_report, challenge_summary
+
+    ok = _load(0, "https://s.com/", "mobile-ios")
+    blocked = [_load(0, "https://s.com/", "default", state="not_checked", reason="challenge"),
+               _load(1, "https://s.com/a/", "default", state="not_checked", reason="challenge")]
+    blocked[0].result.metadata["challenge_vendor"] = "cloudflare"
+    blocked[1].result.metadata["challenge_vendor"] = "cloudflare"
+    timed_out = _load(1, "https://s.com/a/", "googlebot", state="not_checked", reason="timeout")
+    report = build_report("s.com", "s.com", None, [ok, *blocked, timed_out], 1, [], [])
+    assert report["challenge"] == {"vendor": "cloudflare", "loads": 2, "of": 4, "homepage": True}
+    assert report["verdict"]["verdict"] == "couldnt_check"
+
+    # only later pages blocked, vendor unknown
+    later = _load(1, "https://s.com/a/", "default", state="not_checked", reason="challenge")
+    assert challenge_summary([ok, later]) == {"vendor": None, "loads": 1, "of": 2, "homepage": False}
+    # a page-supplied value that isn't a known vendor is dropped, never echoed
+    later.result.metadata["challenge_vendor"] = "<script>"
+    assert challenge_summary([ok, later])["vendor"] is None
+    # a load whose own result is missing still counts
+    later.result = None
+    assert challenge_summary([ok, later])["loads"] == 1
+    # no bot check, no alert
+    assert challenge_summary([ok, timed_out]) is None
+    assert build_report("s.com", "s.com", None, [ok], 1, [], [])["challenge"] is None
+
+
 def test_verdict_clean_paths_pinned():
     from _support import _load
     from pnakotic.src.scanner.site_report import site_verdict

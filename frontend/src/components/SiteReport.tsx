@@ -4,6 +4,7 @@ import type {
   LoadReason,
   ScanResultData,
   SiteBlock,
+  SiteChallenge,
   SiteCheckedPage,
   SiteFinding,
   SiteLoad,
@@ -453,6 +454,49 @@ function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReport
 
 /* ---------- the report ---------- */
 
+/* ---------- bot-check alert ---------- */
+
+const VENDOR_NAMES: Record<NonNullable<SiteChallenge['vendor']>, string> = {
+  cloudflare: 'Cloudflare',
+  'ddos-guard': 'DDoS-Guard',
+  incapsula: 'Imperva Incapsula',
+};
+
+/**
+ * A CDN's bot check stood between the scanner and the site. Says so plainly, says it is not a
+ * sign of a hack, and tells the owner how to let a re-check through.
+ */
+function ChallengeAlert({ data }: { data: SiteChallenge }) {
+  const vendor = data.vendor ? VENDOR_NAMES[data.vendor] : null;
+  const all = data.loads >= data.of;
+  return (
+    <div role="note" className="mt-3 rounded-card border border-warning/40 bg-warning/[0.06] px-4 py-3">
+      <p className="text-[13px] font-medium text-warning m-0">
+        {vendor ? `${vendor}'s bot check blocked our scanner` : 'A bot check blocked our scanner'}
+      </p>
+      <p className="text-[12px] text-muted m-0 mt-1 leading-relaxed">
+        {all ? 'It blocked every check' : `It blocked ${data.loads} of ${data.of} checks`}
+        {data.homepage && !all ? ', including your homepage' : ''}, so we couldn't see what your visitors see
+        {all || data.homepage ? '' : ' on those pages'}. A bot check is not a sign of a hack.
+      </p>
+      <p className="text-[12px] text-muted m-0 mt-2 leading-relaxed">
+        {data.vendor === 'cloudflare' ? (
+          <>
+            To check your site, open your Cloudflare dashboard and, for a few minutes, turn off{' '}
+            <span className="text-ink">I&apos;m Under Attack</span> mode and{' '}
+            <span className="text-ink">Bot Fight Mode</span>, or add a WAF custom rule that skips the bot
+            checks. Run the check again, then switch them back.
+          </>
+        ) : vendor ? (
+          <>To check your site, relax {vendor}&apos;s bot protection for a few minutes, run the check again, then switch it back.</>
+        ) : (
+          <>To check your site, ask your host or CDN to relax its bot protection for a few minutes, then run the check again.</>
+        )}
+      </p>
+    </div>
+  );
+}
+
 export default function SiteReport({ taskId, result }: { taskId: string; result: ScanResultData }) {
   const report = result.site;
   if (!report) {
@@ -485,6 +529,7 @@ export default function SiteReport({ taskId, result }: { taskId: string; result:
             {n}
           </p>
         ))}
+        {report.challenge ? <ChallengeAlert data={report.challenge} /> : null}
 
         {/* 2. the cleanup pointer */}
         {cleanup ? (

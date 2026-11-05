@@ -25,7 +25,7 @@ from .egress_proxy import EgressProxy
 from .netguard import HostCheck, host_is_public, url_is_allowed
 from .script_trace import ScriptTracer, find_injections
 from .page_picker import extract_links
-from .challenge import looks_like_challenge
+from .challenge import challenge_vendor, looks_like_challenge
 
 # --block-new-web-contents: window.open / popups would load in a new target that the
 # page's CDP session does not intercept, so forbid them outright. Chrome still reports each
@@ -654,6 +654,8 @@ class PnakoticEngine:
                                               dict(scripts.scripts)),
                 "challenge": looks_like_challenge(main_status, signals["title"], served_text),
             })
+            if result.metadata["challenge"]:
+                result.metadata["challenge_vendor"] = challenge_vendor(signals["title"], served_text)
 
         if rules:
             buffers = [("served", served_url, served)] if site and served is not None else []

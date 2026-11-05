@@ -152,6 +152,15 @@ export interface SiteReportData {
   checked: SiteChecked;
   blocked_hosts: string[];
   notes: string[];
+  // a CDN bot check kept some loads out (src/scanner/site_report.py challenge_summary); null when none did
+  challenge?: SiteChallenge | null;
+}
+
+export interface SiteChallenge {
+  vendor: 'cloudflare' | 'ddos-guard' | 'incapsula' | null;
+  loads: number; // loads the check kept out
+  of: number; // loads in the whole check
+  homepage: boolean; // one of them was the homepage
 }
 
 /** Identical in /tasks (list) and /tasks/{id}/results — the API returns one shape. */
