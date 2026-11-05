@@ -192,6 +192,50 @@ def test_blocks_are_capped_compromised_first():
     assert all(b["findings"][0]["severity"] == "suspicious" for b in blocks[20:])
 
 
+def test_overflow_counts_the_blocks_past_the_cap():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_findings import build_blocks, build_blocks_and_overflow
+
+    loads = [_load(i, f"https://s.com/p{i:02d}/", "default", [_yara_hop("served", f"https://s.com/p{i:02d}/", "r", 2, True, 0, f"E{i}")])
+             for i in range(57)]
+    blocks, more = build_blocks_and_overflow(loads, "s.com", None)
+    assert len(blocks) == 50 and more == 7 and blocks == build_blocks(loads, "s.com", None)
+    assert build_blocks_and_overflow(loads[:3], "s.com", None)[1] == 0
+
+
+def test_a_block_keeps_twenty_findings_compromised_first():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    hops = [_yara_hop("frame", f"https://ads{i}.net/", f"r{i:02d}", 2, True, 0, f"F{i}") for i in range(24)]
+    hops.append(_yara_hop("served", "https://s.com/", "zz", 5, True, 0, "BAD"))
+    [b] = build_blocks([_load(0, "https://s.com/", "default", hops)], "s.com", None)
+    assert len(b["findings"]) == 20 and b["findings_more"] == 5
+    assert b["findings"][0]["details"]["rule"] == "zz"
+    assert [f["message"] for f in b["findings"][1:3]] == ["Synthetic r00", "Synthetic r01"]
+
+
+def test_long_urls_are_cut_to_300_characters_and_still_merge():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    long_js = "https://s.com/" + "a" * 1000 + ".js"
+    long_page = "https://s.com/" + "p" * 1000
+    inj = {"requested_url": long_js[:300], "initiator_kind": "script", "initiator_url": "https://s.com/" + "i" * 1000,
+           "block": None, "markers": [], "context": None}
+    loads = [_load(0, long_page + "0", "default", [_yara_hop("script", long_js, "r", 5, True, 0, "Z")], injections=[inj]),
+             _load(1, long_page + "1", "default", [_yara_hop("script", long_js, "r", 5, True, 0, "Z")])]
+    [b] = build_blocks(loads, "s.com", None)
+    [f] = b["findings"]
+    assert b["location"] == long_js[:300]
+    assert f["pages"] == [long_page[:300]] and all(len(u) == 300 for u in f["loaded_by"])
+    obf = {**inj, "requested_url": "https://bad.org/" + "x" * 1000, "initiator_url": "https://s.com/" + "i" * 1000,
+           "markers": ["string_array_rotation"]}
+    [b] = build_blocks([_load(0, long_page, "default", injections=[obf])], "s.com", None)
+    [f] = b["findings"]
+    assert len(b["location"]) == 300 and len(f["loaded"][0]) == 300 and len(f["details"]["initiator"]) == 300
+
+
 def test_behaviour_findings_are_compromised():
     import json
 
@@ -208,9 +252,9 @@ def test_behaviour_findings_are_compromised():
             ev(id="clipboard_write", text="hello", command=False)]
     [b] = build_blocks([_load(0, "https://s.com/", "mobile-ios", hops)], "s.com", None)
     assert [(f["kind"], f["severity"]) for f in b["findings"]] == [
-        ("clipboard", "compromised"), ("download", "compromised"), ("browser_lock", "compromised")]
-    assert "powershell" in b["findings"][0]["details"]["scoring"][0]
-    assert b["findings"][0]["visitors"] == ["mobile-ios"]
+        ("browser_lock", "compromised"), ("clipboard", "compromised"), ("download", "compromised")]
+    assert "powershell" in b["findings"][1]["details"]["scoring"][0]
+    assert b["findings"][1]["visitors"] == ["mobile-ios"]
 
 
 def test_decisive_cloaking_on_the_default_load():

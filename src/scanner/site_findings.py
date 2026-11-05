@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -17,11 +17,13 @@ from ..intelligence.scorer import PnakoticScorer
 from .behavior import LOCK_BEHAVIORS, behavior_events, evidence_of
 from .models import ScanResult
 from .profiles import PROFILES
+from .script_trace import MAX_URL_CHARS  # 300, the external-scripts rule
 from .site_identity import on_site, same_domain
 from .yara_scan import YARA_MECHANISM
 
 # Report size caps (global constraints): they bound the result's metadata_json.
 MAX_BLOCKS = 50
+MAX_BLOCK_FINDINGS = 20  # findings per block; the rest are counted in the block's findings_more
 MAX_PAGES = 20         # pages listed per finding; the rest are counted in pages_more
 MAX_URLS = 20          # URLs in loaded_by / loaded; the rest in loaded_by_more / loaded_more
 MAX_DETAIL_ITEMS = 20  # screenshots and scoring strings kept in a finding's details
@@ -119,6 +121,11 @@ def _append(items: List[str], value: Optional[str]) -> None:
         items.append(value)
 
 
+def _url(value: Any) -> str:
+    """Every URL in a finding (and in its merge key) is cut to MAX_URL_CHARS."""
+    return value[:MAX_URL_CHARS] if isinstance(value, str) else ""
+
+
 def _hostname(url: Any) -> str:
     try:
         return (urlsplit(url).hostname or "") if isinstance(url, str) else ""
@@ -192,17 +199,17 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
             mechanism=YARA_MECHANISM, rule=rule, signature_id=hit.get("signature_id"),
         )
         if source == "script":
-            url = str(hit.get("url") or "")
+            url = _url(hit.get("url"))
             finding = c.add(load, ("yara", rule, url), origin="script", location=url, location_kind="script", **common)
             _append(finding.loaded_by, load.page_url)
             for i, inj in enumerate(injections):
-                if inj["requested_url"] == url:  # this script was injected: name the code that did it
+                if _url(inj["requested_url"]) == url:  # this script was injected: name the code that did it
                     tied.add(i)
                     _append(finding.loaded_by, "inline on {}".format(load.page_url)
-                            if inj.get("initiator_kind") == "inline" else inj.get("initiator_url"))
-                if inj.get("initiator_kind") == "script" and inj.get("initiator_url") == url:
+                            if inj.get("initiator_kind") == "inline" else _url(inj.get("initiator_url")))
+                if inj.get("initiator_kind") == "script" and _url(inj.get("initiator_url")) == url:
                     tied.add(i)  # this script injected another one
-                    _append(finding.loaded, inj["requested_url"])
+                    _append(finding.loaded, _url(inj["requested_url"]))
         elif source in _HTML_ORIGINS:
             if source == "page" and rule in served_rules:
                 continue  # already reported from the HTML the server sent
@@ -219,7 +226,7 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
                             and isinstance(block.get("start"), int) and isinstance(block.get("end"), int)
                             and block["start"] <= offset < block["end"]):
                         tied.add(i)
-                        _append(finding.loaded, inj["requested_url"])
+                        _append(finding.loaded, _url(inj["requested_url"]))
 
     # An obfuscated inline or on-site injector of a cross-site script (find_injections only
     # keeps cross-site requests) is suspicious on its own.
@@ -232,13 +239,13 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
         if kind not in ("inline", "script"):
             continue
         snippet = _snippet(inj.get("context"))
-        initiator = inj.get("initiator_url") if kind == "script" else None
+        initiator = _url(inj.get("initiator_url")) if kind == "script" else None
         key = ("injection", kind, initiator or "", snippet.get("text", "") if snippet else "")
         finding = c.add(load, key, severity="suspicious", kind="injection", message=MESSAGES["injection"],
                         snippet=snippet, origin="served" if kind == "inline" else "script",
                         location=load.page_url, location_kind="page", mechanism="script_injection",
                         initiator=initiator)
-        _append(finding.loaded, inj["requested_url"])
+        _append(finding.loaded, _url(inj["requested_url"]))
 
 
 def _behaviour(c: _Collector, load: Load) -> None:
@@ -288,7 +295,7 @@ def _offsite(c: _Collector, homepage: List[Load], site_host: str, domain: str) -
     message = MESSAGES["offsite_homepage"].format(domain=domain)
     if landed and len(landed) == len(homepage):
         message = "{}. {}".format(message, MOVED_SITE)
-    location = homepage[0].page_url if homepage else "https://{}/".format(site_host)
+    location = homepage[0].page_url if homepage else _url("https://{}/".format(site_host))
     fields = dict(severity="compromised" if cloaked else "suspicious", kind="offsite_homepage", message=message,
                   snippet=None, origin=None, location=location, location_kind="page", mechanism="offsite_homepage")
     key = ("offsite_homepage", domain)
@@ -318,7 +325,18 @@ def _page_score(c: _Collector, load: Load) -> None:
 
 def build_blocks(loads: List[Load], site_host: str, offsite_domain: Optional[str]) -> List[dict]:
     """The report's finding blocks: compromised first, then by location, at most MAX_BLOCKS."""
-    usable = [l for l in sorted(loads, key=lambda l: l.page_index) if _usable(l)]
+    return build_blocks_and_overflow(loads, site_host, offsite_domain)[0]
+
+
+def build_blocks_and_overflow(loads: List[Load], site_host: str,
+                              offsite_domain: Optional[str]) -> Tuple[List[dict], int]:
+    """``build_blocks`` plus the number of blocks dropped past MAX_BLOCKS.
+
+    Each block holds at most MAX_BLOCK_FINDINGS findings (compromised first, then by kind and
+    message); ``findings_more`` counts the ones dropped.
+    """
+    usable = [replace(l, page_url=_url(l.page_url))
+              for l in sorted(loads, key=lambda l: l.page_index) if _usable(l)]
     profiles_by_page: Dict[str, set] = {}
     for load in usable:
         profiles_by_page.setdefault(load.page_url, set()).add(load.profile)
@@ -338,7 +356,8 @@ def build_blocks(loads: List[Load], site_host: str, offsite_domain: Optional[str
         grouped.setdefault((finding.location_kind, finding.location), []).append(finding.out(profiles_by_page))
     blocks = []
     for (kind, location), findings in grouped.items():
-        findings.sort(key=lambda f: f["severity"] != "compromised")
-        blocks.append({"location": location, "location_kind": kind, "findings": findings})
+        findings.sort(key=lambda f: (f["severity"] != "compromised", f["kind"], f["message"]))
+        blocks.append({"location": location, "location_kind": kind, "findings": findings[:MAX_BLOCK_FINDINGS],
+                       "findings_more": max(0, len(findings) - MAX_BLOCK_FINDINGS)})
     blocks.sort(key=lambda b: (b["findings"][0]["severity"] != "compromised", b["location"]))
-    return blocks[:MAX_BLOCKS]
+    return blocks[:MAX_BLOCKS], max(0, len(blocks) - MAX_BLOCKS)
