@@ -5,24 +5,7 @@ import json
 
 import pytest
 
-
-def _browser_available() -> bool:
-    """Skip live-browser tests when Chromium isn't installed (e.g. CI without `playwright install`)."""
-    try:
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            browser.close()
-        return True
-    except Exception:
-        return False
-
-
-requires_browser = pytest.mark.skipif(
-    not _browser_available(),
-    reason="Chromium not installed (run: playwright install chromium)",
-)
+from _support import _rules_dir, requires_browser, requires_yara, yara_rules_dir  # noqa: F401
 
 
 @requires_browser
@@ -116,6 +99,55 @@ def _scored(target, final, hops=(), signals=None, **metadata):
 
 
 _NO_SIGNALS = {"title": "", "password_inputs": 0, "forms": 0, "content_type": "text/html", "error_page": False}
+
+
+def _scored_site(target, final, mechanisms, site_host):
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    result = ScanResult(target_url=target, final_url=final)
+    result.hops = [RedirectHop(url=target, mechanism=m) for m in mechanisms]
+    return PnakoticScorer().score(result, site_host=site_host), result.metadata["scoring_findings"]
+
+
+def test_site_mode_drops_identity_signals_on_site():
+    score, findings = _scored_site("https://shop.xyz/", "https://shop.xyz/", ["js_obfuscation"], "shop.xyz")
+    assert score == pytest.approx(0.0)
+    assert not any("TLD" in f or "obfuscation" in f for f in findings)
+    score, _ = _scored_site("https://zoom-help.github.io/", "https://zoom-help.github.io/", [], "zoom-help.github.io")
+    assert score == pytest.approx(0.0)
+
+
+def test_site_mode_brand_like_host_does_not_lift_a_lone_atob():
+    url = "https://zoom-help.github.io/"
+    score, findings = _scored_site(url, url, ["js_obfuscation"], "zoom-help.github.io")
+    assert score == pytest.approx(0.0)
+    assert not any("obfuscation" in f for f in findings)
+    probe, _ = _scored(url, url, ["js_obfuscation"])
+    assert probe == pytest.approx(0.95)  # js_obfuscated 0.4 + brand_in_hostname 0.4 + free hosting 0.15
+
+
+def test_site_mode_keeps_identity_signals_off_site():
+    _, findings = _scored_site("https://shop.com/", "https://evil.xyz/", [], "shop.com")
+    assert "Suspicious TLD: .xyz" in findings
+
+
+def test_probe_scoring_unchanged_without_site_host():
+    score, _ = _scored("https://shop.xyz/", "https://shop.xyz/")
+    assert score == pytest.approx(0.3)
+
+
+def test_site_mode_ip_landing_is_identity_on_site_only():
+    score, findings = _scored_site("http://203.0.113.7/", "http://203.0.113.7/", [], "203.0.113.7")
+    assert score == pytest.approx(0.0) and not any("IP landing" in f for f in findings)
+    score, findings = _scored_site("https://shop.com/", "http://203.0.113.7/", [], "shop.com")
+    assert score == pytest.approx(0.5) and "IP landing: 203.0.113.7" in findings
+    probe, _ = _scored("http://203.0.113.7/", "http://203.0.113.7/")
+    assert probe == pytest.approx(0.5)
+
+
+def test_site_mode_on_site_ignores_a_trailing_dot():
+    score, findings = _scored_site("https://shop.com/", "https://shop.com./", ["js_obfuscation"], "shop.com")
+    assert score == pytest.approx(0.0) and not any("obfuscation" in f for f in findings)
 
 
 def test_scoring_brand_lookalike_on_throwaway_hosting():
@@ -1171,60 +1203,8 @@ def test_combine_ignores_profiles_whose_page_never_loaded():
 
 
 # ---------- YARA over the page, its frames and its scripts (yara_scan.py) ----------
-# Synthetic rules only: the real rule sets are private and live outside this repository.
-
-def _yara_available() -> bool:
-    try:
-        import yara  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
-requires_yara = pytest.mark.skipif(not _yara_available(), reason="yara-python not installed")
-
-_RULE = """rule {name} : {tag} {{
-  meta:
-    signatureId = {sid}
-    production = {production}
-    severity = {severity}
-    description = "{description}"
-    targetLanguage = "raw"
-  strings:
-    $a = "{marker}"
-  condition:
-    $a and filename != "ignore-me"
-}}
-"""
-
-
-def _rules_dir(tmp_path):
-    """A rules tree split by target: html/ and raw/js_* are used, raw/php_* and php/ are not."""
-    root = tmp_path / "YARA"
-    for sub in ("html", "raw", "php"):
-        (root / sub).mkdir(parents=True)
-
-    def rule(path, name, marker, severity, production=True):
-        tag = "production" if production else "exploratory"
-        path.write_text(_RULE.format(name=name, tag=tag, sid=42000000 + len(name), severity=severity,
-                                     production=str(production).lower(), marker=marker,
-                                     description=f"Synthetic {name}"))
-
-    rule(root / "raw" / "js_skimmer_test_001.yara", "js_skimmer_test_001", "PNAKOTIC_TEST_SKIMMER", 5)
-    rule(root / "html" / "html_adframe_test_001.yara", "html_adframe_test_001", "PNAKOTIC_TEST_ADFRAME", 4,
-         production=False)
-    rule(root / "raw" / "php_ignored_test_001.yara", "php_ignored_test_001", "shop", 5)
-    rule(root / "php" / "php_backdoor_test_001.yara", "php_backdoor_test_001", "news", 5)
-    (root / "raw" / "js_broken_test_001.yara").write_text("rule js_broken_test_001 { condition: nope(")
-    return root
-
-
-@pytest.fixture
-def yara_rules_dir(tmp_path, monkeypatch):
-    root = _rules_dir(tmp_path)
-    monkeypatch.setenv("YARA_RULES_DIR", str(root))
-    return root
-
+# Synthetic rules only (tests/_support.py): the real rule sets are private and live outside
+# this repository.
 
 @requires_yara
 def test_yara_rule_selection_and_broken_files(yara_rules_dir):
@@ -1267,6 +1247,21 @@ async def test_yara_bounds_and_dedupes(yara_rules_dir, monkeypatch):
     monkeypatch.setattr(yara_scan, "SCAN_BUDGET_S", -1.0)
     _, stats = await yara_scan.scan_buffers(rules, buffers)
     assert stats["budget_exhausted"] is True and stats["buffers"] == 0
+
+
+@requires_yara
+@pytest.mark.asyncio
+async def test_yara_per_buffer_keeps_each_buffer_with_context(yara_rules_dir):
+    from pnakotic.src.scanner.yara_scan import load_rules, scan_buffers
+    rules = load_rules()
+    bufs = [("served", "https://s/", b"<p>PNAKOTIC_TEST_SKIMMER</p>"),
+            ("script", "https://s/a.js", b"x\nPNAKOTIC_TEST_SKIMMER")]
+    per, _ = await scan_buffers(rules, bufs, per_buffer=True)
+    assert sorted((f["source"], f["buffer_index"]) for f in per) == [("script", 1), ("served", 0)]
+    js = next(f for f in per if f["source"] == "script")
+    assert js["context"]["line"] == 2 and js["offset"] == 2
+    folded, _ = await scan_buffers(rules, bufs)
+    assert len(folded) == 1 and folded[0]["hits"] == 2 and "context" not in folded[0]
 
 
 @requires_yara

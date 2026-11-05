@@ -6,7 +6,7 @@ import ScanForm from './ScanForm';
 import SelectedScan from './SelectedScan';
 import IntelPanel from './IntelPanel';
 import ScanList from './ScanList';
-import { API_BASE, listTasks, startScan, taskResults, taskStatus } from '../lib/api';
+import { API_BASE, listTasks, startScan, startSiteScan, taskResults, taskStatus } from '../lib/api';
 import type { TaskState } from '../lib/api';
 import { clockTime, computeFinding, computeIntel, computeKpis } from '../lib/format';
 
@@ -99,7 +99,7 @@ export default function Dashboard() {
   const handleScan = async (url: string, profile: string): Promise<string | null> => {
     try {
       const taskId = await startScan(url, profile);
-      setTasks((prev) => ({ ...prev, [taskId]: { task_id: taskId, status: 'queued', target_url: url, profile } }));
+      setTasks((prev) => ({ ...prev, [taskId]: { task_id: taskId, status: 'queued', kind: 'url', target_url: url, profile } }));
       setSelectedId(taskId); // the lead block follows the new probe
       return null;
     } catch (err) {
@@ -110,6 +110,29 @@ export default function Dashboard() {
       // The voice frames it, the real reason always follows.
       if (typeof detail === 'string') return `The gate is sealed. ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
       if (Array.isArray(detail)) return 'The gate is sealed. Only http(s) URLs can be probed.';
+      return `The observatory is unreachable. No answer from ${API_BASE}.`;
+    }
+  };
+
+  /** Same contract for a site check; polling and the list treat it like any other job. */
+  const handleSiteScan = async (site: string): Promise<string | null> => {
+    try {
+      const taskId = await startSiteScan(site);
+      setTasks((prev) => ({ ...prev, [taskId]: { task_id: taskId, status: 'queued', kind: 'site', target_url: site, profile: 'default' } }));
+      setSelectedId(taskId);
+      return null;
+    } catch (err) {
+      const detail = err && typeof err === 'object' && 'response' in err
+        ? (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+        : null;
+      // 422 carries the normaliser's sentence (a string) or pydantic's list of field errors.
+      if (typeof detail === 'string') return `The gate is sealed. ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
+      if (Array.isArray(detail)) {
+        const msgs = detail
+          .map((d) => (d && typeof d === 'object' && typeof (d as { msg?: unknown }).msg === 'string' ? (d as { msg: string }).msg : ''))
+          .filter(Boolean);
+        return `The gate is sealed. ${msgs.length ? `${msgs.join('; ')}.` : 'Enter a site such as example.com.'}`;
+      }
       return `The observatory is unreachable. No answer from ${API_BASE}.`;
     }
   };
@@ -215,7 +238,7 @@ export default function Dashboard() {
       <KpiStrip kpis={kpis} phase={phase} onRetry={retry} />
 
       <div className="mt-6">
-        <ScanForm onSubmit={handleScan} />
+        <ScanForm onSubmit={handleScan} onSubmitSite={handleSiteScan} />
       </div>
 
       {/* main row: 12 cols, gap 24 — left 8 (the selected probe) + right 4 (the list that

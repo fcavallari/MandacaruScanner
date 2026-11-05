@@ -4,11 +4,13 @@ import json
 import html as htmllib
 import os
 import re
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional, Set
+from typing import AsyncIterator, Dict, List, Optional, Set, Tuple
 from urllib.parse import urldefrag, urljoin, urlparse
 
-from playwright.async_api import async_playwright, CDPSession, Response
+from playwright.async_api import async_playwright, Browser, CDPSession, Response
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -18,9 +20,12 @@ from .profiles import PROFILES
 from .static_analyzer import StaticAnalyst, SIGNATURE_MECHANISMS, MAX_CONTENT_CHARS
 from .artifacts import ArtifactManager
 from .behavior import BehaviorRecorder
-from .yara_scan import YARA_MECHANISM, ScriptCollector, load_rules, scan_buffers, MAX_FRAMES
+from .yara_scan import YARA_MECHANISM, ScriptCollector, load_rules, scan_buffers, MAX_BUFFER_BYTES, MAX_FRAMES
 from .egress_proxy import EgressProxy
 from .netguard import HostCheck, host_is_public, url_is_allowed
+from .script_trace import ScriptTracer, find_injections
+from .page_picker import extract_links
+from .challenge import looks_like_challenge
 
 # --block-new-web-contents: window.open / popups would load in a new target that the
 # page's CDP session does not intercept, so forbid them outright. Chrome still reports each
@@ -37,6 +42,8 @@ CHROMIUM_ARGS = [
 SETTLE_MS = 3000
 # Cap on the landing-page screenshot so one stuck paint can't eat the whole job.
 SCREENSHOT_TIMEOUT_MS = 10000
+# Site mode: how long to wait for the served main document's body (as ScriptCollector.drain).
+SERVED_BODY_TIMEOUT_S = 5.0
 # After the landing is analysed, one click on an empty spot of the page: popunder scripts
 # open their ad on the visitor's first click, which a load-only scan never sees.
 CLICK_SETTLE_MS = 1500
@@ -128,6 +135,20 @@ def extract_page_signals(content: str) -> dict:
     }
 
 
+@dataclass
+class LoadOptions:
+    """How _scan_in_context() loads one page. Without options it is the URL probe's load.
+
+    shot_dir: screenshot folder relative to the task folder (default: screenshots/ or
+    profiles/<name>/). full_page: full-page screenshot, else the viewport. site: also
+    capture what the site check needs (served HTML, links, script initiators, per-buffer
+    YARA, challenge detection).
+    """
+    shot_dir: Optional[str] = None
+    full_page: bool = True
+    site: bool = False
+
+
 class EgressGuard:
     """Second egress layer: fails HTTP requests whose host isn't public, including redirect hops.
 
@@ -178,6 +199,27 @@ class EgressGuard:
             print(f"[egress-guard] could not settle paused request {url[:200]!r}: {exc}")
 
 
+async def _served_body(resp: Response) -> Optional[bytes]:
+    """The HTML body of a main-frame navigation response, capped; None when it isn't HTML,
+    is too large to pull, or the browser can't give it any more."""
+    headers = resp.headers
+    raw_type = (headers.get("content-type") or "").split(";")[0].strip().lower()
+    if raw_type and not raw_type.startswith(HTML_CONTENT_TYPES):
+        return None
+    try:
+        length = int(headers.get("content-length") or 0)
+    except ValueError:
+        length = 0
+    if length > MAX_BUFFER_BYTES * 4:  # don't pull a huge body just to truncate it
+        return None
+    try:
+        # Bounded: a document that streams forever never finishes its body.
+        return (await asyncio.wait_for(resp.body(), SERVED_BODY_TIMEOUT_S))[:MAX_BUFFER_BYTES]
+    except BROWSER_ERRORS as e:
+        print(f"[engine] served body unavailable: {str(e)[:200]}")
+        return None
+
+
 class PnakoticEngine:
     def __init__(self, max_hops=10, timeout_ms=30000, task_id="default",
                  host_allowed: Optional[HostCheck] = None):
@@ -206,31 +248,13 @@ class PnakoticEngine:
             profile_name = "default"
         task_folder = self.artifacts.create_task_folder(self.task_id)
         names = [profile_name] + ([n for n in PROFILES if n != profile_name] if compare else [])
-        # Compiled once per worker process; None when YARA_RULES_DIR is unset (scanning off).
-        self.yara_rules = await asyncio.to_thread(load_rules)
 
-        async with async_playwright() as p:
-            # Launch-level SOCKS5 proxy: Playwright then maps every hostname to NOTFOUND in
-            # Chromium's own resolver, so names reach the proxy, which resolves and pins them.
-            proxy = EgressProxy(self.host_allowed)
-            proxy_port = await proxy.start()
-            try:
-                browser = await p.chromium.launch(**launch_options(proxy_port))
-            except BaseException:
-                await proxy.stop()
-                raise
-            _log_browser_once(browser)
-            try:
-                outcomes = await asyncio.gather(
-                    *(self._scan_in_context(browser, target_url, name, task_folder, primary=(i == 0))
-                      for i, name in enumerate(names)),
-                    return_exceptions=True,
-                )
-            finally:
-                try:
-                    await browser.close()
-                finally:
-                    await proxy.stop()
+        async with self.browser_session() as (browser, proxy):
+            outcomes = await asyncio.gather(
+                *(self._scan_in_context(browser, target_url, name, task_folder, primary=(i == 0))
+                  for i, name in enumerate(names)),
+                return_exceptions=True,
+            )
 
         # The requested profile is the job: any error there fails it. A comparison profile may
         # fail on a hostile page (browser errors only); anything else (a bug, Celery's
@@ -262,23 +286,64 @@ class PnakoticEngine:
             self.scorer.combine(result, profile_name, variants)
         return result
 
+    @asynccontextmanager
+    async def browser_session(self) -> AsyncIterator[Tuple[Browser, EgressProxy]]:
+        """One browser behind its own egress proxy, closed (browser, then proxy) on exit.
+
+        Also loads the YARA rules into self.yara_rules for the loads run in the session.
+        """
+        # Compiled once per worker process; None when YARA_RULES_DIR is unset (scanning off).
+        self.yara_rules = await asyncio.to_thread(load_rules)
+        async with async_playwright() as p:
+            # Launch-level SOCKS5 proxy: Playwright then maps every hostname to NOTFOUND in
+            # Chromium's own resolver, so names reach the proxy, which resolves and pins them.
+            proxy = EgressProxy(self.host_allowed)
+            proxy_port = await proxy.start()
+            try:
+                browser = await p.chromium.launch(**launch_options(proxy_port))
+            except BaseException:
+                await proxy.stop()
+                raise
+            _log_browser_once(browser)
+            try:
+                yield browser, proxy
+            finally:
+                try:
+                    await browser.close()
+                finally:
+                    await proxy.stop()
+
     async def _scan_in_context(self, browser, target_url: str, profile_name: str,
-                               task_folder: str, primary: bool) -> ScanResult:
+                               task_folder: str, primary: bool,
+                               options: Optional[LoadOptions] = None) -> ScanResult:
         """Load target_url once in a fresh context for one profile. Unscored; scan() scores.
 
         The requested profile's screenshot goes to screenshots/ (the dashboard's landing
-        shot); comparison profiles write to profiles/<name>/.
+        shot); comparison profiles write to profiles/<name>/; options.shot_dir overrides
+        both. With options.site, metadata also gets main_status, served_bytes, links,
+        script_requests, injections and challenge, and YARA keeps one finding per buffer
+        (the served HTML first, as source "served").
         """
         profile = PROFILES[profile_name]
         result = ScanResult(target_url=target_url)
         result.metadata["profile"] = profile_name
         intercepted: List[RedirectHop] = []
-        shot_dir = os.path.join(task_folder, "screenshots" if primary else os.path.join("profiles", profile_name))
+        site = bool(options and options.site)
+        if options is not None and options.shot_dir:
+            shot_dir = os.path.join(task_folder, options.shot_dir)
+        else:
+            shot_dir = os.path.join(task_folder, "screenshots" if primary else os.path.join("profiles", profile_name))
+        full_page = options.full_page if options is not None else True
         os.makedirs(shot_dir, exist_ok=True)
 
         final_url = target_url
         redirect_count = 0
         content_type = ""  # Content-Type of the main frame's last 2xx navigation response
+        main_status: Optional[int] = None  # site mode: the last main-frame navigation status
+        served_resp: Optional[Response] = None  # site mode: the last non-3xx one
+        served: Optional[bytes] = None  # its body (capped)
+        tracer: Optional[ScriptTracer] = None
+        links: List[str] = []
 
         # Set viewport and mobile emulation from profile
         ctx = await browser.new_context(
@@ -292,7 +357,8 @@ class PnakoticEngine:
         guard: Optional[EgressGuard] = None
         behavior = BehaviorRecorder()
         rules = getattr(self, "yara_rules", None)
-        scripts = ScriptCollector() if rules else None
+        # Site mode keeps script bodies for the injection evidence even with YARA off.
+        scripts = ScriptCollector() if (rules or site) else None
         documents: List[tuple] = []  # (source, url, html) for YARA: the landing page and its frames
         try:
             await behavior.attach(ctx)  # before new_page: hooks must precede every page script
@@ -327,13 +393,17 @@ class PnakoticEngine:
                     task.add_done_callback(lambda t: t.cancelled() or t.exception())  # page already gone
 
             async def on_resp(r: Response):
-                nonlocal final_url, content_type
+                nonlocal final_url, content_type, main_status, served_resp
                 try:  # [P4] Sanitize header extraction from bad response
                     if phase == "click":
                         # Responses to our own click probe: a click-hijack's 3xx hops (its
                         # click_hijack hop is the record) and its landing page must not
                         # replace the content_type that page_signals was built from.
                         return
+                    if site and r.request.is_navigation_request() and r.request.frame == page.main_frame:
+                        main_status = r.status
+                        if not (300 <= r.status < 400):
+                            served_resp = r
                     if r.status < 300:
                         # Last main-frame navigation response wins: it is the landing document.
                         if r.request.is_navigation_request() and r.request.frame == page.main_frame:
@@ -370,6 +440,9 @@ class PnakoticEngine:
             await cdp.send("Page.enable")
             tree = await cdp.send("Page.getFrameTree")
             main_frame_id = tree["frameTree"]["frame"]["id"]
+            if site:
+                tracer = ScriptTracer()
+                await tracer.attach(cdp, main_frame_id)
             current_url = target_url
 
             def on_frame_navigated(event: dict) -> None:
@@ -484,6 +557,10 @@ class PnakoticEngine:
                     content = await page.content()
                 except BROWSER_ERRORS as e:
                     print(f"[engine] page.content() failed: {str(e)[:200]}")
+            if served_resp is not None:
+                served = await _served_body(served_resp)
+            if site and content:
+                links = extract_links(content, final_url, limit=2000)
             signals = extract_page_signals(content) if content else {"title": "", "password_inputs": 0, "forms": 0}
             signals["content_type"] = content_type
             signals["error_page"] = error_page
@@ -513,7 +590,7 @@ class PnakoticEngine:
                 shot_path = os.path.join(
                     shot_dir, f"landing_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
                 try:
-                    await page.screenshot(path=shot_path, full_page=True, timeout=SCREENSHOT_TIMEOUT_MS)
+                    await page.screenshot(path=shot_path, full_page=full_page, timeout=SCREENSHOT_TIMEOUT_MS)
                 except (PlaywrightTimeoutError, asyncio.TimeoutError) as e:
                     # Playwright waits for document.fonts.ready, which never resolves while the
                     # document is still loading (the slow-subresource case). Take a plain viewport
@@ -565,10 +642,24 @@ class PnakoticEngine:
             if guard and guard.blocked_hosts:
                 result.metadata["guard_blocked_hosts"] = list(guard.blocked_hosts)
 
+        served_url = str(served_resp.url) if served_resp is not None else final_url
+        if site:
+            served_text = served.decode("utf-8", "replace") if served is not None else content
+            result.metadata.update({
+                "main_status": main_status,
+                "served_bytes": len(served) if served is not None else 0,
+                "links": links,
+                "script_requests": list(tracer.records) if tracer else [],
+                "injections": find_injections(tracer.records if tracer else [], served_url, served,
+                                              dict(scripts.scripts)),
+                "challenge": looks_like_challenge(main_status, signals["title"], served_text),
+            })
+
         if rules:
-            buffers = [(src, url, html.encode("utf-8", "replace")) for src, url, html in documents]
+            buffers = [("served", served_url, served)] if site and served is not None else []
+            buffers += [(src, url, html.encode("utf-8", "replace")) for src, url, html in documents]
             buffers += [("script", url, body) for url, body in scripts.scripts]
-            matches, stats = await scan_buffers(rules, buffers)
+            matches, stats = await scan_buffers(rules, buffers, per_buffer=site)
             stats["scripts_dropped"] = scripts.dropped
             result.metadata["yara"] = stats
             for match in matches:

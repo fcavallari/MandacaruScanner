@@ -1,6 +1,7 @@
 import React from 'react';
 import type { TaskState } from '../lib/api';
 import { hostnameOf, profileLabel, profileShort, redirectCount, relativeTime, scoreTone, shortHost, verdictOf } from '../lib/format';
+import { siteVerdictTone } from './SiteReport';
 import { Bar, EmptyWell, ErrorNote } from './states';
 
 /**
@@ -33,6 +34,17 @@ function Status({ task }: { task: TaskState }) {
         </span>
       );
     default: {
+      if (task.kind === 'site') {
+        // a site's verdict is its own, never derived from the score (Couldn't check scores 0)
+        const sv = task.result?.site?.verdict;
+        const t = siteVerdictTone(sv?.verdict, sv?.rules_loaded);
+        return (
+          <span className={`inline-flex items-center gap-1.5 ${t === 'negative' ? 'text-negative' : t === 'warning' ? 'text-warning' : 'text-muted'}`}>
+            <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full flex-none ${t === 'negative' ? 'bg-negative' : t === 'warning' ? 'bg-warning' : t === 'positive' ? 'bg-positive' : 'bg-faint'}`} />
+            {sv?.label ?? 'No report'}
+          </span>
+        );
+      }
       const s = task.result?.malicious_score ?? 0;
       const tone = scoreTone(s);
       return (
@@ -66,13 +78,27 @@ function Landing({ landing, finalUrl }: { landing: string; finalUrl: string }) {
   );
 }
 
+/** Which kind of job a row is: a whole-site check or a single-URL probe. */
+function KindTag({ kind }: { kind: TaskState['kind'] }) {
+  return (
+    <span
+      className="font-mono text-[10px] leading-none tracking-[0.06em] px-1.5 py-[3px] rounded-chip flex-none translate-y-[-1px]"
+      style={{ background: 'var(--pill-neutral-bg)', color: 'var(--pill-neutral-ink)' }}
+    >
+      {kind === 'site' ? 'SITE' : 'URL'}
+    </span>
+  );
+}
+
 function Row({ task, selected, onSelect, now }: { task: TaskState; selected: boolean; onSelect: (id: string) => void; now: number }) {
-  const host = hostnameOf(task.target_url) || task.target_url;
+  const site = task.kind === 'site';
+  const host = (site && task.result?.site?.site) || hostnameOf(task.target_url) || task.target_url;
   const done = task.status === 'completed' && task.result;
-  const score = done ? task.result!.malicious_score ?? 0 : null;
+  // a site check has a verdict, not a score, persona, landing or hop count
+  const score = done && !site ? task.result!.malicious_score ?? 0 : null;
   const tone = score != null ? scoreTone(score) : 'ink';
-  const landing = done ? hostnameOf(task.result!.final_url) : '';
-  const redirects = done ? redirectCount(task.result!.hops) : null;
+  const landing = done && !site ? hostnameOf(task.result!.final_url) : '';
+  const redirects = done && !site ? redirectCount(task.result!.hops) : null;
 
   return (
     <li className="border-b border-rule last:border-b-0">
@@ -85,7 +111,10 @@ function Row({ task, selected, onSelect, now }: { task: TaskState; selected: boo
           ${selected ? 'bg-active shadow-[inset_1px_0_0_var(--accent)]' : 'bg-transparent hover:bg-raised/60'}`}
       >
         <span className="flex items-baseline justify-between gap-3">
-          <span className={`text-[13px] truncate min-w-0 ${selected ? 'text-ink font-medium' : 'text-ink'}`}>{shortHost(host, 40)}</span>
+          <span className="flex items-baseline gap-2 min-w-0">
+            <KindTag kind={task.kind} />
+            <span className={`text-[13px] truncate min-w-0 ${selected ? 'text-ink font-medium' : 'text-ink'}`}>{shortHost(host, 40)}</span>
+          </span>
           <span className={`font-mono num text-[13px] flex-none ${tone === 'negative' ? 'text-negative' : tone === 'warning' ? 'text-warning' : score != null ? 'text-ink' : 'text-faint'}`}>
             {score != null ? score.toFixed(2) : '—'}
           </span>
@@ -93,8 +122,12 @@ function Row({ task, selected, onSelect, now }: { task: TaskState; selected: boo
         <span className="flex items-baseline justify-between gap-3 mt-1 text-[12px]">
           <span className="flex items-baseline gap-1.5 min-w-0 whitespace-nowrap">
             <Status task={task} />
-            <span className="text-faint" aria-hidden="true">·</span>
-            <span className="text-faint" title={profileLabel(task.profile)}>{profileShort(task.profile)}</span>
+            {site ? null : (
+              <>
+                <span className="text-faint" aria-hidden="true">·</span>
+                <span className="text-faint" title={profileLabel(task.profile)}>{profileShort(task.profile)}</span>
+              </>
+            )}
             {landing ? (
               <span className="hidden sm:contents">
                 <span className="text-faint" aria-hidden="true">·</span>
