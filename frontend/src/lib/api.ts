@@ -42,8 +42,117 @@ export interface Cloaking {
   suspicious: string[]; // profiles whose own page scored Suspicious or worse
 }
 
+/* ---------- site quick check (mirror src/scanner/site_findings.py and site_report.py) ---------- */
+
+export type SiteVerdict = 'compromised' | 'suspicious' | 'partly_checked' | 'clean' | 'couldnt_check';
+export type FindingSeverity = 'compromised' | 'suspicious';
+/** served: the HTML the server sent; rendered: added while the page loaded; frame: in an embedded frame;
+ *  script: in a script file; null: unknown (no served HTML) or not a code finding. */
+export type FindingOrigin = 'served' | 'rendered' | 'frame' | 'script';
+export type LoadState = 'checked' | 'partial' | 'not_checked';
+export type LoadReason = 'budget' | 'timeout' | 'load_failed' | 'challenge';
+
+/** A window of page-supplied text around a match; offsets are code points into `text`. */
+export interface Snippet {
+  text: string;
+  match_start: number;
+  match_end: number;
+  line: number; // 1-based
+}
+
+export interface SiteFindingDetails {
+  rule: string | null;
+  signature_id: number | null;
+  mechanism: string;
+  profiles: string[];
+  screenshots: string[]; // rel paths under the task folder
+  scoring: string[];
+  initiator: string | null;
+}
+
+export interface SiteFinding {
+  id: string;
+  severity: FindingSeverity;
+  kind: string; // yara | injection | clipboard | download | browser_lock | cloaking | offsite_homepage | page_score
+  message: string;
+  snippet: Snippet | null;
+  origin: FindingOrigin | null;
+  visitors: string[];
+  all_visitors: boolean;
+  pages: string[];
+  pages_more: number;
+  loaded_by: string[];
+  loaded_by_more: number;
+  loaded: string[];
+  loaded_more: number;
+  details: SiteFindingDetails;
+}
+
+/** One place the owner has to fix something: a page URL or a script URL. */
+export interface SiteBlock {
+  location: string;
+  location_kind: 'page' | 'script';
+  findings: SiteFinding[];
+  findings_more: number;
+}
+
+export interface ExternalScriptUrl {
+  url: string;
+  pages: string[];
+  profiles: string[];
+  how: 'html' | 'script';
+  injected_by: string | null; // the injecting script's URL, or "inline on <page>"
+  in_frame: string | null; // the frame's host when requested inside a frame
+  finding: boolean; // tied to a finding
+}
+
+export interface ExternalScriptHost {
+  host: string;
+  your_domain: boolean;
+  urls: ExternalScriptUrl[];
+}
+
+export interface SiteLoad {
+  profile: string;
+  state: LoadState;
+  reason: LoadReason | null;
+  status: number | null;
+  screenshot: string | null; // rel path under the task folder
+  score: number | null;
+  landing: string | null;
+}
+
+export interface SiteCheckedPage {
+  index: number; // 0 = the homepage
+  url: string;
+  loads: SiteLoad[];
+}
+
+export interface SiteChecked {
+  pages: SiteCheckedPage[];
+  rules: number; // YARA rule files loaded; 0 = not configured
+  scripts_scanned: number;
+  frames_scanned: number;
+  not_checked: number;
+  total: number;
+}
+
+export interface SiteReportData {
+  site: string;
+  entered: string;
+  redirected_from: string | null;
+  verdict: { verdict: SiteVerdict; label: string; summary: string; rules_loaded: boolean };
+  blocks: SiteBlock[];
+  blocks_more: number;
+  external_scripts: { hosts: ExternalScriptHost[]; hosts_more: number; urls_more: number };
+  checked: SiteChecked;
+  blocked_hosts: string[];
+  notes: string[];
+}
+
 /** Identical in /tasks (list) and /tasks/{id}/results — the API returns one shape. */
 export interface ScanResultData {
+  kind?: 'url' | 'site';
   final_url: string | null;
   malicious_score: number; // 0..1
   is_redirect_chain_detected: boolean;
@@ -55,11 +164,14 @@ export interface ScanResultData {
   cloaking?: Cloaking | null;
   yara?: { rules: number; buffers: number; bytes: number; budget_exhausted: boolean; scripts_dropped?: number } | null;
   raw_error?: string | null;
+  site?: SiteReportData | null; // site checks only
+  cleanup_url?: string; // site checks only
 }
 
 export interface TaskState {
   task_id: string;
   status: TaskStatus;
+  kind: 'url' | 'site';
   target_url: string;
   profile?: string | null;
   error?: string | null;
@@ -76,6 +188,12 @@ export async function listTasks(limit = 20): Promise<TaskState[]> {
 
 export async function startScan(url: string, profile: string): Promise<string> {
   const res = await http.post('/scan', { url, profile });
+  return res.data.task_id as string;
+}
+
+/** `site`: a bare host or a URL; the API normalises it to the homepage. */
+export async function startSiteScan(site: string): Promise<string> {
+  const res = await http.post('/site-scan', { site });
   return res.data.task_id as string;
 }
 

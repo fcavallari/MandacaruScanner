@@ -5,6 +5,7 @@ import { hostnameOf, redirectCount, relativeTime, verdictOf } from '../lib/forma
 import DepthGauge from './DepthGauge';
 import ProfileSplit from './ProfileSplit';
 import RedirectChain from './RedirectChain';
+import SiteReport, { SiteVerdictPill } from './SiteReport';
 import { Bar, EmptyWell, ErrorNote } from './states';
 
 /**
@@ -31,6 +32,11 @@ function StatusMark({ task }: { task: TaskState }) {
         </span>
       );
     default: {
+      if (task.kind === 'site') {
+        // a site's verdict is its own, never derived from the score (Couldn't check scores 0)
+        const sv = task.result?.site?.verdict;
+        return sv ? <SiteVerdictPill verdict={sv.verdict} label={sv.label} /> : <span className="text-[12px] text-faint whitespace-nowrap">No report</span>;
+      }
       const v = verdictOf(task.result?.malicious_score ?? 0);
       const style =
         v === 'Malicious'
@@ -119,7 +125,7 @@ export default function SelectedScan({ task, phase, onRetry, now = Date.now() }:
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="min-w-0 max-w-full">
             <p className="text-[16px] font-semibold text-ink m-0 truncate" title={task.target_url}>
-              {hostnameOf(task.target_url) || task.target_url}
+              {(task.kind === 'site' && task.result?.site?.site) || hostnameOf(task.target_url) || task.target_url}
             </p>
             <p className="font-mono text-[11px] text-faint m-0 mt-1 truncate max-w-full" title={task.target_url}>
               {task.target_url}
@@ -160,6 +166,13 @@ export default function SelectedScan({ task, phase, onRetry, now = Date.now() }:
           <p className="text-[13px] text-negative m-0 break-all">{task.error || 'The probe failed'}</p>
           <p className="font-mono text-[11px] text-faint m-0">probe {task.task_id.slice(0, 8)}</p>
         </div>
+      ) : task.kind === 'site' ? (
+        <>
+          {task.result ? <SiteReport taskId={task.task_id} result={task.result} /> : <p className="text-[13px] text-muted m-0">This site check has no report.</p>}
+          <p className="font-mono text-[11px] text-faint m-0 mt-auto pt-2 border-t border-rule">
+            site check {task.task_id.slice(0, 8)} · {relativeTime(task.created_at, now)}
+          </p>
+        </>
       ) : (
         <>
           {task.result ? (
