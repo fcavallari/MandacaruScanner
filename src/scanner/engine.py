@@ -1,10 +1,12 @@
 import asyncio
 import base64
 import json
+import html as htmllib
 import os
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Set
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse
 
 from playwright.async_api import async_playwright, CDPSession, Response
 from playwright.async_api import Error as PlaywrightError
@@ -13,7 +15,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from .models import RedirectHop, ScanResult, REDIRECT_MECHANISMS
 from ..intelligence.scorer import PnakoticScorer
 from .profiles import PROFILES
-from .static_analyzer import StaticAnalyst, SIGNATURE_MECHANISMS
+from .static_analyzer import StaticAnalyst, SIGNATURE_MECHANISMS, MAX_CONTENT_CHARS
 from .artifacts import ArtifactManager
 from .behavior import BehaviorRecorder
 from .yara_scan import YARA_MECHANISM, ScriptCollector, load_rules, scan_buffers, MAX_FRAMES
@@ -21,7 +23,8 @@ from .egress_proxy import EgressProxy
 from .netguard import HostCheck, host_is_public, url_is_allowed
 
 # --block-new-web-contents: window.open / popups would load in a new target that the
-# page's CDP session does not intercept, so forbid them outright.
+# page's CDP session does not intercept, so forbid them outright. Chrome still reports each
+# attempt as Page.windowOpen, which is how popups are recorded (see "popup_open" below).
 # WebRTC never uses the proxy; this policy disables its direct UDP paths.
 CHROMIUM_ARGS = [
     "--block-new-web-contents",
@@ -34,6 +37,31 @@ CHROMIUM_ARGS = [
 SETTLE_MS = 3000
 # Cap on the landing-page screenshot so one stuck paint can't eat the whole job.
 SCREENSHOT_TIMEOUT_MS = 10000
+# After the landing is analysed, one click on an empty spot of the page: popunder scripts
+# open their ad on the visitor's first click, which a load-only scan never sees.
+CLICK_SETTLE_MS = 1500
+# A page can call window.open in a loop; keep the first few, count the rest.
+MAX_POPUP_HOPS = 10
+# Stored URLs from the page are attacker-controlled; bound them.
+MAX_EVIDENCE_URL = 2048
+
+# Finds a point to click that is not a link or control, so the click only reaches
+# document-level listeners (where popunder and click-hijack scripts sit). Returns null if
+# every candidate lands on something interactive. Runs in the page, so a hostile page can
+# lie; the worst case is a click on a link, which is then recorded like any navigation.
+# Coordinates are the page's CSS pixels, the space page.mouse.click uses; on a mobile page
+# with no viewport meta that is the ~980px layout width, wider than the device viewport.
+NEUTRAL_POINT_JS = """() => {
+  const W = innerWidth, H = innerHeight;
+  const sel = 'a,button,input,select,textarea,label,summary,iframe,video,audio,[onclick],[role=button],[role=link],[contenteditable]';
+  const pts = [[.5,.5],[.5,.25],[.25,.5],[.75,.5],[.5,.75],[.1,.9],[.9,.1],[.05,.05]];
+  for (const [fx, fy] of pts) {
+    const x = Math.round(W * fx), y = Math.round(H * fy);
+    const el = document.elementFromPoint(x, y);
+    if (el && !el.closest(sel)) return [x, y, W, H];
+  }
+  return null;
+}"""
 
 # Browser-call failures that are expected on hostile pages: log and carry on. Anything else
 # (a bug, Celery's SoftTimeLimitExceeded) must propagate out of scan().
@@ -78,6 +106,26 @@ NAVIGATION_MECHANISMS = {
     "metaTagRefresh": "meta_refresh",
     "httpHeaderRefresh": "meta_refresh",
 }
+
+
+# Page-content signals for the scorer. The page is attacker-controlled: every quantifier is bounded
+# and the input is capped at MAX_CONTENT_CHARS.
+_TITLE_RE = re.compile(r"<title\b[^>]{0,200}>([^<]{0,1000})", re.IGNORECASE)
+_PASSWORD_INPUT_RE = re.compile(r"<input[^>]{0,500}type\s*=\s*['\"]?password", re.IGNORECASE)
+_FORM_RE = re.compile(r"<form\b", re.IGNORECASE)
+HTML_CONTENT_TYPES = ("text/html", "application/xhtml")
+
+
+def extract_page_signals(content: str) -> dict:
+    """Title, password-input count and form count of a captured HTML document."""
+    content = content[:MAX_CONTENT_CHARS]
+    m = _TITLE_RE.search(content)
+    title = " ".join(htmllib.unescape(m.group(1)).split())[:200] if m else ""
+    return {
+        "title": title,
+        "password_inputs": len(_PASSWORD_INPUT_RE.findall(content)),
+        "forms": len(_FORM_RE.findall(content)),
+    }
 
 
 class EgressGuard:
@@ -230,10 +278,11 @@ class PnakoticEngine:
 
         final_url = target_url
         redirect_count = 0
+        content_type = ""  # Content-Type of the main frame's last 2xx navigation response
 
         # Set viewport and mobile emulation from profile
         ctx = await browser.new_context(
-            user_agent=profile.user_agent,
+            user_agent=profile.user_agent_for(browser.version),
             viewport=profile.viewport,
             extra_http_headers=profile.extra_headers,
             is_mobile=profile.is_mobile,
@@ -251,8 +300,20 @@ class PnakoticEngine:
             behavior.watch(page)
             guard = EgressGuard(await ctx.new_cdp_session(page), self.host_allowed)
             await guard.start()  # before goto: the first navigation is checked too
+            # The UA string alone is not enough: client hints would still say HeadlessChrome.
+            try:
+                await guard.cdp.send("Emulation.setUserAgentOverride", {
+                    "userAgent": profile.user_agent_for(browser.version),
+                    "userAgentMetadata": profile.user_agent_metadata(browser.version),
+                })
+            except PlaywrightError as e:
+                print(f"[engine] client-hint override failed: {str(e)[:200]}")
 
             tasks: Set[asyncio.Task] = set()  # strong refs; asyncio only keeps weak ones
+            # "load" until the landing is analysed, then "click" for the click probe. What
+            # happens after the click is recorded as evidence but never moves final_url.
+            phase = "load"
+            popups_seen = 0
 
             def note_redirect() -> None:
                 """Count one redirect (3xx or client-side); past max_hops, flag a loop and stop the page."""
@@ -266,8 +327,19 @@ class PnakoticEngine:
                     task.add_done_callback(lambda t: t.cancelled() or t.exception())  # page already gone
 
             async def on_resp(r: Response):
-                nonlocal final_url
+                nonlocal final_url, content_type
                 try:  # [P4] Sanitize header extraction from bad response
+                    if phase == "click":
+                        # Responses to our own click probe: a click-hijack's 3xx hops (its
+                        # click_hijack hop is the record) and its landing page must not
+                        # replace the content_type that page_signals was built from.
+                        return
+                    if r.status < 300:
+                        # Last main-frame navigation response wins: it is the landing document.
+                        if r.request.is_navigation_request() and r.request.frame == page.main_frame:
+                            raw = r.headers.get("content-type") or ""
+                            content_type = raw.split(";")[0].strip().lower()
+                        return
                     if not (300 <= r.status < 400):
                         return
                     # Only the page's own navigation is the chain. Subresources
@@ -313,25 +385,67 @@ class PnakoticEngine:
                 if redirect_count >= self.max_hops:
                     return  # loop already flagged; events queued behind the close are noise
                 reason = event.get("reason") or "other"
+                destination = (event.get("url") or "")[:MAX_EVIDENCE_URL]
+                if phase == "click":
+                    # Our click hit no link, yet the page left: a script hijacked the click.
+                    intercepted.append(RedirectHop(
+                        url=current_url,
+                        mechanism="click_hijack",
+                        evidence=json.dumps({
+                            "id": "click_hijack", "reason": reason, "trigger": "click", "to": destination,
+                        }),
+                    ))
+                    return
                 mechanism = NAVIGATION_MECHANISMS.get(reason, "client_navigation")
-                destination = event.get("url") or ""
-                if mechanism in REDIRECT_MECHANISMS:
+                # A page reloading itself (location.href = location.href, a refresh timer
+                # without url=) goes nowhere: record it, but not as a redirect. It still
+                # counts toward max_hops so a reload loop stops.
+                self_nav = (mechanism in REDIRECT_MECHANISMS and bool(destination)
+                            and urldefrag(destination)[0] == urldefrag(current_url)[0])
+                if self_nav:
+                    mechanism = "client_navigation"
+                    note_redirect()
+                elif mechanism in REDIRECT_MECHANISMS:
                     note_redirect()
                     if destination:
                         final_url = destination
+                evidence = {
+                    "id": mechanism,
+                    "reason": reason,
+                    "disposition": event.get("disposition"),
+                    "to": destination,
+                }
+                if self_nav:
+                    evidence["self"] = True
                 intercepted.append(RedirectHop(
                     url=current_url,
                     mechanism=mechanism,
+                    evidence=json.dumps(evidence),
+                ))
+
+            def on_window_open(event: dict) -> None:
+                # window.open, target=_blank, ... Blocked by --block-new-web-contents, so
+                # nothing loads; the attempt itself is the evidence. Not a redirect: the
+                # visitor's own tab stays where it is.
+                nonlocal popups_seen
+                popups_seen += 1
+                if popups_seen > MAX_POPUP_HOPS:
+                    result.metadata["popups_dropped"] = popups_seen - MAX_POPUP_HOPS
+                    return
+                intercepted.append(RedirectHop(
+                    url=current_url,
+                    mechanism="popup_open",
                     evidence=json.dumps({
-                        "id": mechanism,
-                        "reason": reason,
-                        "disposition": event.get("disposition"),
-                        "to": destination,
+                        "id": "popup_open",
+                        "to": (event.get("url") or "")[:MAX_EVIDENCE_URL],
+                        "trigger": phase,
+                        "user_gesture": bool(event.get("userGesture")),
                     }),
                 ))
 
             cdp.on("Page.frameNavigated", on_frame_navigated)
             cdp.on("Page.frameRequestedNavigation", on_requested_navigation)
+            cdp.on("Page.windowOpen", on_window_open)
 
             page.on("response", on_resp)
             if scripts:
@@ -358,12 +472,22 @@ class PnakoticEngine:
             # about:blank or chrome-error://, and the tracked URL is the better answer then.
             if not page.is_closed() and page.url.startswith(("http://", "https://")):
                 final_url = page.url
+            # A failed navigation leaves Chrome's own error page, and a non-HTML landing document
+            # (audio, PDF, ...) is wrapped in Chrome's markup: neither is the site's HTML.
+            error_page = (not page.is_closed()) and page.url.startswith("chrome-error://")
+            if error_page:
+                result.metadata["navigation_failed"] = final_url
+            is_html = not content_type or content_type.startswith(HTML_CONTENT_TYPES)
             content = ""
-            if not page.is_closed():
+            if not page.is_closed() and not error_page and is_html:
                 try:
                     content = await page.content()
                 except BROWSER_ERRORS as e:
                     print(f"[engine] page.content() failed: {str(e)[:200]}")
+            signals = extract_page_signals(content) if content else {"title": "", "password_inputs": 0, "forms": 0}
+            signals["content_type"] = content_type
+            signals["error_page"] = error_page
+            result.metadata["page_signals"] = signals
             if rules:
                 if content:
                     documents.append(("page", page.url, content))
@@ -404,6 +528,33 @@ class PnakoticEngine:
                         print(f"[engine] CDP screenshot failed: {str(e2)[:200]}")
                 except PlaywrightError as e:
                     print(f"[engine] screenshot failed: {str(e)[:200]}")
+
+            # 4. Click probe, after everything above has captured the landing as loaded.
+            if not page.is_closed():
+                point = None
+                try:
+                    raw = await page.evaluate(NEUTRAL_POINT_JS)
+                    # The page computed this: accept only [x, y, W, H] numbers with the
+                    # point inside a sane layout viewport.
+                    if (isinstance(raw, list) and len(raw) == 4
+                            and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in raw)
+                            and 0 < raw[2] <= 20000 and 0 < raw[3] <= 20000
+                            and 0 <= raw[0] < raw[2] and 0 <= raw[1] < raw[3]):
+                        point = (float(raw[0]), float(raw[1]))
+                except BROWSER_ERRORS as e:
+                    print(f"[engine] click probe: no point ({str(e)[:200]})")
+                if point is None:
+                    result.metadata["click_probe"] = "skipped"
+                else:
+                    phase = "click"  # before the click: its events can arrive before click() returns
+                    behavior.trigger = "click"  # behaviors from here on followed our click
+                    try:
+                        await asyncio.wait_for(page.mouse.click(*point), CLICK_SETTLE_MS / 1000 * 3)
+                        result.metadata["click_probe"] = "clicked"
+                        await asyncio.sleep(CLICK_SETTLE_MS / 1000)
+                    except BROWSER_ERRORS as e:
+                        result.metadata["click_probe"] = "failed"
+                        print(f"[engine] click probe failed: {str(e)[:200]}")
             if scripts:
                 await scripts.drain()  # bodies can only be read while the context is open
         finally:

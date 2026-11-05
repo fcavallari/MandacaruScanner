@@ -16,7 +16,10 @@ class RedirectHop(BaseModel):
     # default_factory: a plain `= datetime.now()` is evaluated once at import time.
     timestamp: datetime = Field(default_factory=datetime.now)
     # Observed navigations: 'http_3xx', 'meta_refresh', 'js_location' (the redirects), plus
-    # 'client_navigation' (anchor click, form submit, ... informational).
+    # 'client_navigation' (anchor click, form submit, ... informational), 'popup_open' (a
+    # window.open / new-tab attempt, blocked; evidence "to" and "trigger": load|click) and
+    # 'click_hijack' (the click probe hit no link, yet the page navigated). Neither of the
+    # last two is a redirect: they never move final_url.
     # From the landing-page regexes: 'meta_refresh_code', 'js_location_code' (redirect code
     # present but did not fire), 'js_obfuscation', 'clickfix_lure', 'static_analysis'.
     # From the running page (behavior.py): 'page_behavior', with the event id in evidence.

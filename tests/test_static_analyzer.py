@@ -92,3 +92,34 @@ def test_clickfix_lure_needs_run_and_paste():
     assert not any(f["id"] == "clickfix_lure" for f in analyst.analyze_content("<p>Press Win+R to open Run.</p>"))
     assert not any(f["id"] == "clickfix_lure" for f in analyst.analyze_content("<p>Copy with Ctrl+C, paste with Ctrl+V.</p>"))
     assert not any(f["id"] == "clickfix_lure" for f in analyst.analyze_content("twin+rocket ctrl+value"))
+
+
+def test_meta_refresh_without_url_is_a_reload_timer():
+    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+
+    a = StaticAnalyst()
+    assert "meta_refresh" not in _ids(a.analyze_content('<meta http-equiv="refresh" content="360">'))
+    assert "meta_refresh" in _ids(a.analyze_content('<meta http-equiv="refresh" content="0;URL=/x">'))
+    assert "meta_refresh" in _ids(a.analyze_content('<meta http-equiv="refresh" content="0;url=/x">'))
+
+
+def test_b64_payload_ignores_data_uris_but_not_bare_blobs():
+    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+
+    a = StaticAnalyst()
+    blob = "AbCd+fGh/jKlMnOpQrStUvWxYz0123456789" * 3  # > 60 chars, has + and /
+    assert "b64_payload" not in _ids(a.analyze_content(f'<img src="data:image/png;base64,{blob}">'))
+    assert "b64_payload" not in _ids(a.analyze_content(f"a{{src:url(data:font/woff2;base64,{blob}=)}}"))
+    assert "b64_payload" in _ids(a.analyze_content(f"var x = '{blob[:80]}';"))
+    # A data URI does not hide a separate payload elsewhere in the page.
+    page = f'<img src="data:image/png;base64,{blob}"><script>var p = "{blob}";</script>'
+    assert "b64_payload" in _ids(a.analyze_content(page))
+
+
+def test_adversarial_data_uri_openers_are_fast():
+    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+
+    html = ("data:" + "a" * 78 + ";") * 20000  # ~1.6 MB of unterminated data URI openers
+    start = time.perf_counter()
+    StaticAnalyst().analyze_content(html)
+    assert time.perf_counter() - start < 1.0
