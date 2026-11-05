@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -40,11 +41,30 @@ SWEEP_INTERVAL_SECONDS = int(os.getenv("SWEEP_INTERVAL_SECONDS", "60"))
 _db_ready = False
 
 
+# A leading "<scheme>://"; anything else is treated as a bare host and given https.
+_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://")
+
+
 class ScanRequest(BaseModel):
-    url: str = Field(..., pattern=r"^https?://")  # [P2] Validated input
+    url: str = Field(..., pattern=r"^https?://\S")  # [P2] Validated input
     profile: str = "default"
     # Also load the URL in every other browser profile and compare landings (cloaking).
     compare_profiles: bool = True
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def _default_https(cls, v):
+        # "example.com/x" means https://example.com/x. An explicit scheme is kept (lowercased)
+        # so ftp:// still fails the pattern instead of becoming https://ftp://...
+        if not isinstance(v, str):
+            return v
+        v = v.strip()
+        if not v:
+            return v
+        m = _SCHEME.match(v)
+        if m:
+            return m.group(1).lower() + v[m.end(1):]
+        return "https://" + v.lstrip("/")
 
     @field_validator("profile")
     @classmethod

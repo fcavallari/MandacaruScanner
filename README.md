@@ -222,7 +222,7 @@ The site check is for internal use. It has no rate limit and no per-site cap. Th
 
 | Method & path | Description |
 |---------------|-------------|
-| `POST /scan` | Body `{"url": "https://…", "profile": "default", "compare_profiles": true}`. Returns `201` with `task_id`. `400` for a non-public host, `422` for a non-http(s) URL or an unknown profile, `503` if the queue is unavailable. |
+| `POST /scan` | Body `{"url": "https://…", "profile": "default", "compare_profiles": true}`. A URL with no scheme is probed as `https://`. Returns `201` with `task_id`. `400` for a non-public host, `422` for a scheme other than http(s) or an unknown profile, `503` if the queue is unavailable. |
 | `POST /site-scan` | Body `{"site": "example.com"}`, a bare host or a URL. Returns `201` with `task_id`. `400` for a non-public host, `422` for input that is empty, not http(s), has credentials in it or has a bad port, `503` if the queue is unavailable. |
 | `GET /tasks?limit=20` | Most recent jobs (newest first, `limit` 1–100), with results where available. Each job has a `kind`: `url` or `site`. |
 | `GET /tasks/{id}/status` | `queued`, `running`, `completed` or `failed`, plus `error`. |
