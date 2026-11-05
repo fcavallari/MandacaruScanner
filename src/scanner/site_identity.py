@@ -33,9 +33,16 @@ def registrable_domain(host: str) -> str:
     return "{}.{}".format(ext.domain, ext.suffix)
 
 
+def _bare(host: str) -> str:
+    """``host`` without a trailing dot (``example.com.`` is ``example.com``)."""
+    return (host or "").rstrip(".")
+
+
 def same_domain(a: str, b: str) -> bool:
     """True when both hosts share a registrable domain; a host without one stands for
-    itself, so ``127.0.0.1`` and ``localhost`` are different domains."""
+    itself, so ``127.0.0.1`` and ``localhost`` are different domains. A trailing dot is
+    ignored."""
+    a, b = _bare(a), _bare(b)
     if not a or not b:
         return False
     return (registrable_domain(a) or a) == (registrable_domain(b) or b)
@@ -51,7 +58,8 @@ def www_twin(host: str) -> str:
 
 
 def on_site(host: str, site_host: str) -> bool:
-    """True when ``host`` is the site host itself or its www twin."""
+    """True when ``host`` is the site host itself or its www twin. A trailing dot is ignored."""
+    host, site_host = _bare(host), _bare(site_host)
     if not host or not site_host:
         return False
     return host == site_host or host == www_twin(site_host)

@@ -78,7 +78,7 @@ _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 # load lands on the owner's site (they still apply to an off-site landing).
 IDENTITY_SIGNALS = (
     "suspicious_tld", "watch_tld", "throwaway_hosting",
-    "brand_in_hostname", "brand_in_title", "js_obfuscated_only",
+    "brand_in_hostname", "brand_in_title", "js_obfuscated_only", "ip_landing",
 )
 
 
@@ -174,13 +174,14 @@ class PnakoticScorer:
         findings = []
 
         host, tld = self._host_and_tld(result.final_url)
-        # Site mode: on the owner's own site, identity signals (TLD, hosting, brand, a lone atob)
-        # say nothing about malice, so they are skipped. The URL probe passes no site_host.
+        # Site mode: on the owner's own site, identity signals (TLD, hosting, brand, a lone atob,
+        # a site served from an IP) say nothing about malice, so they are skipped. The URL probe
+        # passes no site_host.
         skip = set(IDENTITY_SIGNALS) if site_host and host and on_site(host, site_host) else set()
         redirect_hops = [h for h in result.hops if h.mechanism in REDIRECT_MECHANISMS]
 
         # Landing on a raw IP address is a classic malvertising / parking pattern.
-        if host and self._is_ip(host):
+        if host and self._is_ip(host) and "ip_landing" not in skip:
             score += self.WEIGHTS["ip_landing"]
             findings.append(f"IP landing: {host}")
 

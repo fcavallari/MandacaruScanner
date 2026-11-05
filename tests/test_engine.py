@@ -136,6 +136,20 @@ def test_probe_scoring_unchanged_without_site_host():
     assert score == pytest.approx(0.3)
 
 
+def test_site_mode_ip_landing_is_identity_on_site_only():
+    score, findings = _scored_site("http://203.0.113.7/", "http://203.0.113.7/", [], "203.0.113.7")
+    assert score == pytest.approx(0.0) and not any("IP landing" in f for f in findings)
+    score, findings = _scored_site("https://shop.com/", "http://203.0.113.7/", [], "shop.com")
+    assert score == pytest.approx(0.5) and "IP landing: 203.0.113.7" in findings
+    probe, _ = _scored("http://203.0.113.7/", "http://203.0.113.7/")
+    assert probe == pytest.approx(0.5)
+
+
+def test_site_mode_on_site_ignores_a_trailing_dot():
+    score, findings = _scored_site("https://shop.com/", "https://shop.com./", ["js_obfuscation"], "shop.com")
+    assert score == pytest.approx(0.0) and not any("obfuscation" in f for f in findings)
+
+
 def test_scoring_brand_lookalike_on_throwaway_hosting():
     target = "http://us05web-zoom-us82777747387473.pages.dev/"
     final = "https://us05web-zoom-us82777747387473.pages.dev/"

@@ -19,6 +19,16 @@ def test_same_domain_and_on_site():
     assert not on_site("blog.example.com", "example.com")
 
 
+def test_same_domain_and_on_site_ignore_a_trailing_dot():
+    from pnakotic.src.scanner.site_identity import on_site, same_domain
+
+    assert on_site("example.com.", "example.com") and on_site("example.com", "example.com.")
+    assert on_site("www.example.com.", "example.com") and on_site("example.com.", "www.example.com.")
+    assert same_domain("www.example.com.", "shop.example.com") and same_domain("localhost.", "localhost")
+    assert not on_site("blog.example.com.", "example.com") and not on_site(".", ".")
+    assert not same_domain("127.0.0.1.", "localhost")
+
+
 def test_normalize_site_input_messy():
     from pnakotic.src.scanner.site_identity import normalize_site_input
 
