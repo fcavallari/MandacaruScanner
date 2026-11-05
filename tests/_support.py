@@ -157,3 +157,44 @@ def site_server():
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{srv.server_address[1]}"
     srv.shutdown()
+
+
+# ---------- site-check loads built by hand (no browser) ----------
+
+def _yara_hop(source, url, rule, sev, production, offset, text):
+    """A per-buffer `yara_match` hop as a site-mode load records it."""
+    import json
+
+    from pnakotic.src.scanner.models import RedirectHop
+    from pnakotic.src.scanner.yara_scan import YARA_MECHANISM
+
+    return RedirectHop(url=url, mechanism=YARA_MECHANISM, evidence=json.dumps({
+        "id": "yara_match", "rule": rule, "signature_id": 1, "severity": sev, "production": production,
+        "description": f"Synthetic {rule}", "source": source, "url": url, "offset": offset,
+        "buffer_index": 0, "hits": 1,
+        "context": {"text": text, "match_start": 0, "match_end": len(text), "line": 1},
+    }))
+
+
+def _load(page_index, page_url, profile, hops=(), injections=(), state="checked", reason=None, final_url=None,
+          script_requests=(), score=0.0):
+    """A site-check Load around a hand-built ScanResult."""
+    from pnakotic.src.scanner.models import ScanResult
+    from pnakotic.src.scanner.site_findings import Load
+
+    result = ScanResult(target_url=page_url, final_url=final_url or page_url, hops=list(hops), malicious_score=score)
+    result.metadata = {
+        "injections": list(injections), "script_requests": list(script_requests),
+        "scoring_findings": [], "decisive_findings": [], "cloaking": None,
+    }
+    return Load(page_index=page_index, page_url=page_url, profile=profile, state=state, reason=reason,
+                result=result, shot=None)
+
+
+def _result(**metadata):
+    """A ScanResult carrying just the given metadata (plus a page title, default "x")."""
+    from pnakotic.src.scanner.models import ScanResult
+
+    signals = {"title": metadata.pop("title", "x")}
+    return ScanResult(target_url="https://s.com/", final_url="https://s.com/",
+                      metadata={"page_signals": signals, **metadata})
