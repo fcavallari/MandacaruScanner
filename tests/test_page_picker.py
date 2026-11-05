@@ -124,3 +124,19 @@ def test_extract_links_attribute_forms_comments_and_entities():
     assert extract_links(html, HOME) == [
         "https://example.com/single/", "https://example.com/bare/",
         "https://example.com/spaced/?a=1&b=2", "https://example.com/after-comment/"]
+
+
+def test_extract_links_unquoted_href_before_closing_bracket():
+    from pnakotic.src.scanner.page_picker import extract_links
+
+    assert extract_links("<a href=/x/>t</a><a href=/y/ >u</a><a href=/z/?a=1&amp;b=2>v</a>", HOME) == [
+        "https://example.com/x/", "https://example.com/y/", "https://example.com/z/?a=1&b=2"]
+
+
+def test_extract_links_empty_comments_do_not_swallow_the_document():
+    from pnakotic.src.scanner.page_picker import extract_links
+
+    assert extract_links('<!--><a href="/a/">a</a>', HOME) == ["https://example.com/a/"]
+    assert extract_links('<!---><a href="/b/">b</a>', HOME) == ["https://example.com/b/"]
+    assert extract_links('<!----><a href="/c/">c</a><!-- <a href="/h/"> --><a href="/d/">d</a>', HOME) == [
+        "https://example.com/c/", "https://example.com/d/"]

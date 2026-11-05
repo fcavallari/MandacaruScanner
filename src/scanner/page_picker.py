@@ -48,7 +48,7 @@ _CONTACT_RE = re.compile(r"contact|kontakt|contacto|contatto")
 # '<' or '>' (so an unterminated '<a' flood is scanned once, not once per start) and is
 # at most 4096 characters.
 _TOKEN_RE = re.compile(r"<!--|<a\s[^<>]{0,4096}>", re.IGNORECASE)
-_HREF_RE = re.compile(r"\shref\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s]+))", re.IGNORECASE)
+_HREF_RE = re.compile(r"\shref\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))", re.IGNORECASE)
 
 
 def _anchor_hrefs(markup: str, limit: int) -> List[str]:
@@ -61,7 +61,8 @@ def _anchor_hrefs(markup: str, limit: int) -> List[str]:
         if token is None:
             break
         if token.group(0) == "<!--":
-            end = markup.find("-->", token.end())
+            # '<!-->' and '<!--->' are complete empty comments: the '-->' overlaps the opener
+            end = markup.find("-->", token.start() + 2)
             if end < 0:  # an unterminated comment swallows the rest of the document
                 break
             pos = end + 3
