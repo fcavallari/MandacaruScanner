@@ -136,6 +136,22 @@ def test_find_injections_hostile_html_is_fast_and_capped():
     assert inj["block"] is None
 
 
+def test_find_injections_many_newlines_many_records_is_fast():
+    from pnakotic.src.scanner.script_trace import find_injections
+    html = b"\n" * 2000000 + b"<script>load('https://h0.example/a.js')</script>"
+    recs = [_rec(url="https://h%d.example/a.js" % i, line=1999990, column=3) for i in range(60)]
+    body = b"\n" * 2000000 + b"x"
+    recs += [_rec(url="https://g%d.example/a.js" % i, initiator_url="https://s.com/app.js", line=1999999, column=0)
+             for i in range(60)]
+    t0 = time.time()
+    out = find_injections(recs, "https://s.com/", html, {"https://s.com/app.js": body})
+    assert time.time() - t0 < 1.0
+    assert len(out) == 50
+    # a line past the end of the document finds no offset, falling back to the host search
+    [inj] = find_injections([_rec(url="https://h0.example/a.js", line=5000000, column=0)], "https://s.com/", html, {})
+    assert inj["block"] is not None
+
+
 def test_find_injections_block_matching_is_case_insensitive():
     from pnakotic.src.scanner.script_trace import find_injections
     html = b"<P>x</P><SCRIPT type='text/javascript'>load('HTTPS://X.EXAMPLE/a.js')</SCRIPT >"
@@ -169,6 +185,16 @@ def test_record_from_event_parser_other_parent_and_truncation():
     bare = record_from_event({**base, "initiator": {"type": "script"}}, "G")
     assert bare["initiator"] == "script" and bare["initiator_url"] is None
     assert record_from_event({"type": "Script"}, "G") is None
+
+
+def test_record_from_event_skips_redirect_hops():
+    from pnakotic.src.scanner.script_trace import record_from_event
+    ev = {"type": "Script", "frameId": "F", "documentURL": "https://s.com/", "request": {"url": "https://x.com/b.js"},
+          "initiator": {"type": "parser", "url": "https://s.com/", "lineNumber": 1},
+          "redirectResponse": {"url": "https://x.com/a.js", "status": 302}}
+    assert record_from_event(ev, "F") is None
+    del ev["redirectResponse"]
+    assert record_from_event(ev, "F") is not None
 
 
 class _FakeCDP:

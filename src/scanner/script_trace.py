@@ -49,6 +49,8 @@ def record_from_event(event: Dict[str, Any], main_frame_id: str) -> Optional[Dic
     """A record for a ``Network.requestWillBeSent`` event of ``type == "Script"``, else None."""
     if not isinstance(event, dict) or event.get("type") != "Script":
         return None
+    if event.get("redirectResponse"):
+        return None  # a redirect hop is the same request continuing, already recorded
     request = event.get("request")
     url = request.get("url") if isinstance(request, dict) else None
     if not isinstance(url, str) or not url:
@@ -123,16 +125,25 @@ def _inline_blocks(data: bytes, lowered: bytes) -> List[Tuple[int, int]]:
     return blocks
 
 
-def _offset_of(data: bytes, line: Optional[int], column: Optional[int]) -> Optional[int]:
-    """Byte offset of the 0-based CDP ``(line, column)`` in ``data``."""
-    if line is None:
-        return None
-    line_start = 0
-    for _ in range(line):
-        nl = data.find(b"\n", line_start)
+def _line_starts(data: bytes, upto: int) -> List[int]:
+    """Byte offsets where lines 0..``upto`` start (fewer if ``data`` has fewer lines).
+    One forward pass, built once per document and shared by every record."""
+    starts = [0]
+    while len(starts) <= upto:
+        nl = data.find(b"\n", starts[-1])
         if nl < 0:
-            return None
-        line_start = nl + 1
+            break
+        starts.append(nl + 1)
+    return starts
+
+
+def _offset_of(data: bytes, starts: List[int], line: Optional[int],
+               column: Optional[int]) -> Optional[int]:
+    """Byte offset of the 0-based CDP ``(line, column)`` in ``data``; ``starts`` is
+    ``_line_starts(data, ...)`` covering ``line``."""
+    if line is None or line >= len(starts):
+        return None
+    line_start = starts[line]
     column = column or 0
     line_end = data.find(b"\n", line_start)
     if line_end < 0:
@@ -181,6 +192,9 @@ def find_injections(records: List[Dict[str, Any]], page_url: str, served_html: O
     page_host = _host(page_url or "")
     blocks = None  # type: Optional[List[Tuple[int, int]]]
     lowered = b""
+    html_starts = None  # type: Optional[List[int]]
+    body_starts = {}  # type: Dict[str, List[int]]
+    max_line = max([r["line"] for r in records if isinstance(r.get("line"), int)] or [0])
     out = []  # type: List[Dict[str, Any]]
     for rec in records:
         if len(out) >= MAX_INJECTIONS:
@@ -204,7 +218,8 @@ def find_injections(records: List[Dict[str, Any]], page_url: str, served_html: O
                 if blocks is None:
                     lowered = served_html.lower()
                     blocks = _inline_blocks(served_html, lowered)
-                picked = _pick_block(blocks, lowered, _offset_of(served_html, line, column), url)
+                    html_starts = _line_starts(served_html, max_line)
+                picked = _pick_block(blocks, lowered, _offset_of(served_html, html_starts, line, column), url)
                 if picked is not None:
                     block = {"start": picked[0], "end": picked[1]}
                     markers = _markers_of(served_html[picked[0]:picked[1]])
@@ -213,7 +228,9 @@ def find_injections(records: List[Dict[str, Any]], page_url: str, served_html: O
         elif initiator_url is not None and initiator_url in script_bodies:
             body = script_bodies[initiator_url]
             markers = _markers_of(body)
-            offset = _offset_of(body, line, column)
+            if initiator_url not in body_starts:
+                body_starts[initiator_url] = _line_starts(body, max_line)
+            offset = _offset_of(body, body_starts[initiator_url], line, column)
             if offset is not None:
                 context = cut_snippet(body, offset, offset + 1)
         out.append({
