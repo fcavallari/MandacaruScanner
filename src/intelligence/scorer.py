@@ -260,7 +260,7 @@ class PnakoticScorer:
         # something else: a redirect that left the site, or a brand being impersonated.
         if any(h.mechanism == "js_obfuscation" for h in result.hops):
             if (any(self._hop_crosses_sites(h) for h in redirect_hops)
-                    or brand_hit or credential_token):
+                    or (brand_hit and "brand_in_hostname" not in skip) or credential_token):
                 score += self.WEIGHTS["js_obfuscated"]
                 findings.append("JS obfuscation helpers (atob / String.fromCharCode)")
             elif "js_obfuscated_only" not in skip:

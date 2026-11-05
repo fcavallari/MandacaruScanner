@@ -134,6 +134,15 @@ def test_site_mode_drops_identity_signals_on_site():
     assert score == pytest.approx(0.0)
 
 
+def test_site_mode_brand_like_host_does_not_lift_a_lone_atob():
+    url = "https://zoom-help.github.io/"
+    score, findings = _scored_site(url, url, ["js_obfuscation"], "zoom-help.github.io")
+    assert score == pytest.approx(0.0)
+    assert not any("obfuscation" in f for f in findings)
+    probe, _ = _scored(url, url, ["js_obfuscation"])
+    assert probe == pytest.approx(0.95)  # js_obfuscated 0.4 + brand_in_hostname 0.4 + free hosting 0.15
+
+
 def test_site_mode_keeps_identity_signals_off_site():
     _, findings = _scored_site("https://shop.com/", "https://evil.xyz/", [], "shop.com")
     assert "Suspicious TLD: .xyz" in findings
