@@ -48,6 +48,29 @@ async def test_site_load_flags_challenge(site_server, tmp_path):
 
 @requires_browser
 @pytest.mark.asyncio
+async def test_site_load_finishes_when_the_main_document_never_ends(site_server, tmp_path, monkeypatch):
+    import asyncio
+    import time
+    from pnakotic.src.scanner import engine as engine_mod
+    from pnakotic.src.scanner.engine import LoadOptions
+
+    # Short waits elsewhere (the screenshot also waits on a still-loading document) keep this
+    # test fast; the served-body bound itself stays at its real 5 s.
+    monkeypatch.setattr(engine_mod, "SETTLE_MS", 500)
+    monkeypatch.setattr(engine_mod, "SCREENSHOT_TIMEOUT_MS", 1000)
+    engine = _site_engine(tmp_path)
+    engine.timeout_ms = 3000
+    started = time.monotonic()
+    async with engine.browser_session() as (browser, _):
+        r = await asyncio.wait_for(engine._scan_in_context(
+            browser, f"{site_server}/stream", "default", engine.artifacts.create_task_folder("j"),
+            primary=False, options=LoadOptions(site=True, shot_dir="pages/2/default", full_page=False)), 25)
+    assert r.metadata["main_status"] == 200 and r.metadata["served_bytes"] == 0
+    assert time.monotonic() - started < 15
+
+
+@requires_browser
+@pytest.mark.asyncio
 async def test_probe_load_without_options_has_no_site_metadata(site_server, tmp_path):
     engine = _site_engine(tmp_path)
     async with engine.browser_session() as (browser, _):

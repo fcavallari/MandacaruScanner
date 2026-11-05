@@ -101,12 +101,15 @@ def _site_engine(tmp_path):
 def site_server():
     """127.0.0.1 server for site-mode loads. Yields its base URL."""
     import threading
+    import time
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     class Server(ThreadingHTTPServer):
         daemon_threads = True
 
     class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"  # chunked /stream needs it
+
         def log_message(self, *args):
             pass
 
@@ -132,6 +135,19 @@ def site_server():
                 self._send(403, "text/html", b"<html><head><title>One more step</title></head><body>"
                                              b"<script src=\"/cdn-cgi/challenge-platform/h/b\"></script>"
                                              b"</body></html>")
+            elif self.path == "/stream":  # a main document that never finishes (chunked, no length)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                chunk = b"<html><body><p>still loading</p>"
+                try:
+                    for _ in range(300):  # 30 s at most, then the thread gives up
+                        self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                        self.wfile.flush()
+                        time.sleep(0.1)
+                except OSError:
+                    pass  # the browser went away
             elif self.path == "/clean.js":
                 self._send(200, "text/javascript", b"var clean = 1;")
             else:

@@ -42,6 +42,8 @@ CHROMIUM_ARGS = [
 SETTLE_MS = 3000
 # Cap on the landing-page screenshot so one stuck paint can't eat the whole job.
 SCREENSHOT_TIMEOUT_MS = 10000
+# Site mode: how long to wait for the served main document's body (as ScriptCollector.drain).
+SERVED_BODY_TIMEOUT_S = 5.0
 # After the landing is analysed, one click on an empty spot of the page: popunder scripts
 # open their ad on the visitor's first click, which a load-only scan never sees.
 CLICK_SETTLE_MS = 1500
@@ -211,7 +213,8 @@ async def _served_body(resp: Response) -> Optional[bytes]:
     if length > MAX_BUFFER_BYTES * 4:  # don't pull a huge body just to truncate it
         return None
     try:
-        return (await resp.body())[:MAX_BUFFER_BYTES]
+        # Bounded: a document that streams forever never finishes its body.
+        return (await asyncio.wait_for(resp.body(), SERVED_BODY_TIMEOUT_S))[:MAX_BUFFER_BYTES]
     except BROWSER_ERRORS as e:
         print(f"[engine] served body unavailable: {str(e)[:200]}")
         return None
