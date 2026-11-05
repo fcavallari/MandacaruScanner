@@ -5,21 +5,24 @@ pass. Plain substring checks over capped, lower-cased input (the page is attacke
 """
 from typing import Optional
 
-HTML_MARKERS = ("cf-chl", "challenge-platform", "cf_chl_opt", "ddos-guard", "/_incapsula_resource")
 TITLE_MARKERS = ("just a moment...", "attention required! | cloudflare")
-SMALL_PAGE_BYTES = 20_000  # a 403/503 this small that mentions a captcha is a challenge
+HTML_MARKERS = ("cf-chl", "cf_chl_opt", "ddos-guard", "/_incapsula_resource")
+# Only on a small 403/503: Cloudflare injects /cdn-cgi/challenge-platform/scripts/jsd/main.js
+# into ordinary pages, and plenty of sites mention a captcha.
+BLOCKED_PAGE_MARKERS = ("challenge-platform", "captcha")
+SMALL_PAGE_BYTES = 20_000
 MAX_HTML_CHARS = 2_000_000
 
 
 def looks_like_challenge(status: Optional[int], title: str, html: str) -> bool:
-    """True for any known challenge marker in the title or HTML, and for a 403/503 whose
-    HTML is under 20 kB and mentions a captcha."""
+    """True for a challenge title or a challenge-only HTML marker at any status, and for a
+    403/503 whose HTML is under 20 kB and mentions challenge-platform or a captcha."""
     title = (title or "")[:1000].lower()
     if any(m in title for m in TITLE_MARKERS):
         return True
     html = html or ""
-    small = len(html) < SMALL_PAGE_BYTES and len(html.encode("utf-8", "replace")) < SMALL_PAGE_BYTES
     text = html[:MAX_HTML_CHARS].lower()
     if any(m in text for m in HTML_MARKERS):
         return True
-    return status in (403, 503) and small and "captcha" in text
+    small = len(html) < SMALL_PAGE_BYTES and len(html.encode("utf-8", "replace")) < SMALL_PAGE_BYTES
+    return status in (403, 503) and small and any(m in text for m in BLOCKED_PAGE_MARKERS)

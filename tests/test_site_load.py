@@ -62,7 +62,10 @@ def test_looks_like_challenge():
     from pnakotic.src.scanner.challenge import looks_like_challenge
 
     assert looks_like_challenge(403, "Just a moment...", "<html>")
-    assert looks_like_challenge(200, "", '<script src="/cdn-cgi/challenge-platform/h/b"></script>')
+    # Cloudflare injects challenge-platform scripts into ordinary pages: only a small 403/503 counts
+    assert not looks_like_challenge(200, "Home", '<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script>')
+    assert looks_like_challenge(403, "", '<script src="/cdn-cgi/challenge-platform/h/b"></script>')
+    assert not looks_like_challenge(403, "", '<script src="/cdn-cgi/challenge-platform/h/b"></script>' + "x" * 20000)
     assert not looks_like_challenge(403, "Forbidden", "<h1>Forbidden</h1>")
     assert looks_like_challenge(503, "", "<p>Please complete the CAPTCHA</p>")
     assert not looks_like_challenge(200, "", "<p>Please complete the CAPTCHA</p>")  # only on 403/503
