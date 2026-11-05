@@ -44,6 +44,7 @@ async def test_site_load_flags_challenge(site_server, tmp_path):
         r = await engine._scan_in_context(browser, f"{site_server}/challenge", "googlebot", engine.artifacts.create_task_folder("j"),
                                           primary=False, options=LoadOptions(site=True, shot_dir="pages/1/googlebot", full_page=False))
     assert r.metadata["challenge"] is True and r.metadata["main_status"] == 403
+    assert r.metadata["challenge_vendor"] == "cloudflare"
 
 
 @requires_browser
@@ -95,3 +96,16 @@ def test_looks_like_challenge():
     assert not looks_like_challenge(403, "", "<p>captcha</p>" + "x" * 20000)  # too big to be a bare challenge
     assert looks_like_challenge(None, "Attention Required! | Cloudflare", "")
     assert looks_like_challenge(200, "", "<script>window._cf_chl_opt={}</script>")
+
+
+def test_challenge_vendor_names_who_showed_the_check():
+    from pnakotic.src.scanner.challenge import challenge_vendor
+
+    assert challenge_vendor("Just a moment...", "<html>") == "cloudflare"
+    assert challenge_vendor("Attention Required! | Cloudflare", "") == "cloudflare"
+    assert challenge_vendor("", "<script>window._cf_chl_opt={}</script>") == "cloudflare"
+    assert challenge_vendor("", '<script src="/cdn-cgi/challenge-platform/h/b"></script>') == "cloudflare"
+    assert challenge_vendor("DDoS-Guard", "<div>ddos-guard</div>") == "ddos-guard"
+    assert challenge_vendor("", '<script src="/_Incapsula_Resource?x=1"></script>') == "incapsula"
+    assert challenge_vendor("", "<p>Please complete the CAPTCHA</p>") is None  # a bot check, vendor unknown
+    assert challenge_vendor(None, None) is None

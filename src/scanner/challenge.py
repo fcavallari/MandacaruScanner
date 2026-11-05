@@ -26,3 +26,22 @@ def looks_like_challenge(status: Optional[int], title: str, html: str) -> bool:
         return True
     small = len(html) < SMALL_PAGE_BYTES and len(html.encode("utf-8", "replace")) < SMALL_PAGE_BYTES
     return status in (403, 503) and small and any(m in text for m in BLOCKED_PAGE_MARKERS)
+
+
+# Who put the check up, for the report's alert. Read only once a load is already a challenge.
+VENDOR_MARKERS = (
+    ("cloudflare", ("just a moment...", "attention required! | cloudflare", "cf-chl", "cf_chl_opt",
+                    "challenge-platform")),
+    ("ddos-guard", ("ddos-guard",)),
+    ("incapsula", ("/_incapsula_resource", "incapsula incident")),
+)
+VENDORS = tuple(name for name, _ in VENDOR_MARKERS)
+
+
+def challenge_vendor(title: Optional[str], html: Optional[str]) -> Optional[str]:
+    """The CDN whose bot check this is ("cloudflare", "ddos-guard", "incapsula"), or None."""
+    text = (title or "")[:1000].lower() + "\n" + (html or "")[:MAX_HTML_CHARS].lower()
+    for name, markers in VENDOR_MARKERS:
+        if any(m in text for m in markers):
+            return name
+    return None

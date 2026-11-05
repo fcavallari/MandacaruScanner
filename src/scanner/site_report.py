@@ -6,10 +6,12 @@ count and length in the output is bounded.
 """
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from .models import ScanResult
+from .challenge import VENDORS
 from .profiles import PROFILES
 from .script_trace import MAX_URL_CHARS  # 300, the external-scripts rule
 from .site_findings import Load, build_blocks_and_overflow, cap_findings, ended_off_site, own_score, usable_load
@@ -282,6 +284,22 @@ def _checked(loads: List[Load], rules_count: int, probe: Optional[int]) -> dict:
     }
 
 
+def challenge_summary(loads: List[Load]) -> Optional[dict]:
+    """The bot-check alert: how many loads a CDN challenge kept out, whether the homepage was one,
+    and the vendor most of them named (only a known name; the page supplied it). None if none."""
+    blocked = [l for l in loads if l.state == "not_checked" and l.reason == "challenge"]
+    if not blocked:
+        return None
+    vendors = [l.result.metadata.get("challenge_vendor") for l in blocked if l.result is not None]
+    vendors = [v for v in vendors if v in VENDORS]
+    return {
+        "vendor": Counter(vendors).most_common(1)[0][0] if vendors else None,
+        "loads": len(blocked),
+        "of": len(loads),
+        "homepage": any(l.page_index == 0 for l in blocked),
+    }
+
+
 def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str], loads: List[Load],
                  rules_count: int, blocked_hosts: List[str], notes: List[str]) -> dict:
     """The site report stored in the result's metadata_json."""
@@ -306,4 +324,5 @@ def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str
         "checked": _checked(loads, rules_count, probe),
         "blocked_hosts": list(dict.fromkeys(h[:253] for h in blocked_hosts if isinstance(h, str)))[:MAX_BLOCKED_HOSTS],
         "notes": list(notes),
+        "challenge": challenge_summary(loads),  # a CDN bot check kept some loads out
     }
