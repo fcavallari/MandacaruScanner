@@ -37,7 +37,7 @@ function Status({ task }: { task: TaskState }) {
       if (task.kind === 'site') {
         // a site's verdict is its own, never derived from the score (Couldn't check scores 0)
         const sv = task.result?.site?.verdict;
-        const t = siteVerdictTone(sv?.verdict);
+        const t = siteVerdictTone(sv?.verdict, sv?.rules_loaded);
         return (
           <span className={`inline-flex items-center gap-1.5 ${t === 'negative' ? 'text-negative' : t === 'warning' ? 'text-warning' : 'text-muted'}`}>
             <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full flex-none ${t === 'negative' ? 'bg-negative' : t === 'warning' ? 'bg-warning' : t === 'positive' ? 'bg-positive' : 'bg-faint'}`} />

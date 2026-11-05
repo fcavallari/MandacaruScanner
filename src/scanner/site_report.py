@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from .models import ScanResult
 from .profiles import PROFILES
 from .script_trace import MAX_URL_CHARS  # 300, the external-scripts rule
-from .site_findings import Load, build_blocks_and_overflow, ended_off_site, own_score, usable_load
+from .site_findings import Load, build_blocks_and_overflow, cap_findings, ended_off_site, own_score, usable_load
 from .site_identity import on_site, same_domain
 
 # External scripts per site (global constraints): hosts, and URLs over all listed hosts.
@@ -37,6 +37,15 @@ COULDNT_CHECK = {
     "timeout": "The homepage took too long to load",
     None: "We couldn't reach this site",  # load_failed, or no homepage load at all
 }
+
+
+NOTE_YARA_BUDGET = "Some page content was too large to check in full for malware patterns"
+
+
+def _yara_cut(load: Load) -> bool:
+    """YARA's per-load byte or time budget ran out, so some buffers weren't scanned."""
+    stats = load.result.metadata.get("yara")
+    return isinstance(stats, dict) and stats.get("budget_exhausted") is True
 
 
 def _profile_key(profile: str) -> Tuple[int, str]:
@@ -190,8 +199,9 @@ def _count(n: int, noun: str) -> str:
     return "{} {}".format(n, noun if n == 1 else noun + "s")
 
 
-def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool) -> dict:
-    """The site verdict (spec §5.5): the label and a one-line summary for the report header."""
+def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool, findings_more_total: int = 0) -> dict:
+    """The site verdict (spec §5.5): the label and a one-line summary for the report header.
+    ``findings_more_total`` (findings dropped by the report-wide cap) counts in the summary."""
     severities = [f.get("severity") for b in blocks for f in b.get("findings") or []]
     not_checked = [l for l in loads if l.state == "not_checked"]
     homepage = [l for l in loads if l.page_index == 0]
@@ -200,7 +210,7 @@ def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool) -> d
 
     if "compromised" in severities or "suspicious" in severities:
         verdict = "compromised" if "compromised" in severities else "suspicious"
-        count = len(severities) + sum(b.get("findings_more") or 0 for b in blocks)
+        count = len(severities) + sum(b.get("findings_more") or 0 for b in blocks) + findings_more_total
         summary = "{} · {} on {} of {} pages".format(
             LABELS[verdict], _count(count, "finding"), len(_pages_with_findings(blocks)),
             len({l.page_index for l in loads}))
@@ -276,6 +286,10 @@ def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str
                  rules_count: int, blocked_hosts: List[str], notes: List[str]) -> dict:
     """The site report stored in the result's metadata_json."""
     blocks, blocks_more = build_blocks_and_overflow(loads, site_host, offsite_domain)
+    blocks, emptied, findings_more_total = cap_findings(blocks)
+    blocks_more += emptied
+    if any(_yara_cut(l) for l in loads if usable_load(l)):
+        notes = list(notes) + [NOTE_YARA_BUDGET]
     probe = _probe_index(loads)
     probe_url = next((_url(l.page_url) for l in loads if l.page_index == probe), None) if probe is not None else None
     for block in blocks:
@@ -284,9 +298,10 @@ def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str
         "site": site_host,
         "entered": entered_host,
         "redirected_from": entered_host if entered_host != site_host else None,
-        "verdict": site_verdict(blocks, loads, rules_count > 0),
+        "verdict": site_verdict(blocks, loads, rules_count > 0, findings_more_total),
         "blocks": blocks,
-        "blocks_more": blocks_more,
+        "blocks_more": blocks_more,  # blocks past MAX_BLOCKS, plus blocks the findings cap left empty
+        "findings_more_total": findings_more_total,  # findings dropped by the report-wide MAX_FINDINGS cap
         "external_scripts": external_scripts(loads, site_host, blocks),
         "checked": _checked(loads, rules_count, probe),
         "blocked_hosts": list(dict.fromkeys(h[:253] for h in blocked_hosts if isinstance(h, str)))[:MAX_BLOCKED_HOSTS],

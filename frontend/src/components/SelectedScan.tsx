@@ -35,7 +35,7 @@ function StatusMark({ task }: { task: TaskState }) {
       if (task.kind === 'site') {
         // a site's verdict is its own, never derived from the score (Couldn't check scores 0)
         const sv = task.result?.site?.verdict;
-        return sv ? <SiteVerdictPill verdict={sv.verdict} label={sv.label} /> : <span className="text-[12px] text-faint whitespace-nowrap">No report</span>;
+        return sv ? <SiteVerdictPill verdict={sv.verdict} label={sv.label} rulesLoaded={sv.rules_loaded} /> : <span className="text-[12px] text-faint whitespace-nowrap">No report</span>;
       }
       const v = verdictOf(task.result?.malicious_score ?? 0);
       const style =

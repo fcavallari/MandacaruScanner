@@ -132,7 +132,7 @@ Every page is loaded in a real browser, in a fresh context (no cookies or storag
 2. **Homepage.** The homepage is loaded in four profiles at once: `default`, `mobile-ios`, `googlebot` and `search-clicker`. If the `default` load fails with a network-level error (`net::ERR_…`) over https, all four are redone once over http and the report notes "Checked over http".
 3. **The site is one host.** It is the host that was entered. If the `default` homepage load is redirected to another host on the same registrable domain (`www.example.com` → `example.com`), that host becomes the site and the report says so. Domains are compared with the public suffix list bundled with `tldextract` (never fetched at run time), so `a.github.io` and `b.github.io` are different sites. If the homepage lands on a different domain instead, that is a Suspicious finding on `/` ("Your homepage sends desktop visitors to …"), and the site stays the entered host.
 4. **Pages.** Up to 5 internal pages are picked from the rendered links of the first homepage load that stayed on the site (`default`, then `mobile-ios`, `googlebot`, `search-clicker`). Only links on the site host (or its www/apex twin) that pass the egress check are kept. `wp-admin`, `wp-login.php`, `xmlrpc.php`, `wp-json`, feeds, logout and add-to-cart style URLs, `?replytocom=` and non-page files (images, PDF, archives, media, `.xml`, `.txt`, …) are dropped. One slot goes to each kind the site has, in this order: a post (a `/YYYY/MM/` path, `?p=N`, or the deepest path), a page (`/about/`), an archive (`/category/`, `/tag/`, `/author/`, `/page/2/`) and a contact page; the rest are filled in document order, preferring a first path segment not used yet. A homepage that left the site is never crawled: if no homepage load stayed on the site, only the 404 probe runs and the report says why.
-5. **404 probe.** `/pnakotic-<12 random hex>/` is loaded too, since hacks hide in 404 templates.
+5. **404 probe.** `/pnakotic-<12 random hex>/` is loaded too, since hacks hide in 404 templates. The report shows it as "Your 'page not found' page" (`probe: true` on its page and its blocks).
 6. **Other pages.** Each picked page and the probe are loaded as `default`, `mobile-ios` and `googlebot`: up to 22 loads in all with the homepage. Screenshots are full-page for the homepage's `default` load and viewport-only for the rest. Each load goes through the same per-load pipeline as a URL probe (redirects, page behaviours, click probe, static analysis, YARA).
 7. Each load is scored (site-mode scoring, below), each page's profiles are folded together for cloaking, and the findings are rolled up into the report and a verdict.
 
@@ -166,6 +166,7 @@ A bot-check page is the CDN's, not the site's, so its content is never scanned a
 | Any other YARA match | Suspicious | As above |
 | Page behaviour that is decisive in the URL probe: shell command on the clipboard, executable download, two or more browser-lock behaviours | Compromised | The page URL |
 | Cloaking that is decisive (profiles landed on different sites and one scores 0.4 or more in site mode) | Compromised | The page URL, with the visitors who were steered |
+| Cloaking that is not decisive, when the page's combined score is still 0.4 or more (for example only phones get a 302 to another domain) | Suspicious | The page URL: "Some visitors are sent to a different website", with those visitors and where they land |
 | Homepage lands on another domain | Suspicious (Compromised if decisive cloaking) | `/` |
 | Obfuscated injector: an inline block or same-site script with obfuscator.io markers that adds a script from another site | Suspicious | The page URL, with the injecting snippet and the loaded URL |
 | A page whose own site-mode score is 0.4 or more, with no compromised finding of its own | Suspicious | The page URL, with the scoring lines under Details |
@@ -175,7 +176,8 @@ A bot-check page is the CDN's, not the site's, so its content is never scanned a
 - **Merging.** The same rule with the same snippet on several pages is one finding listing every page, so a footer injection on every page is one block. Each finding says which visitors saw it (all profiles, or for example only Googlebot).
 - **Observed script injection.** Script requests started by a script are recorded from the browser's network events (200 per load, 50 injections). A requested script is tied to an inline block only when the initiator's line and column fall inside the block in the served HTML, or the block's text contains the requested URL. A tied YARA finding gains "this code loaded …", and a YARA-matched script gains "loaded by". An injection with no YARA match and no obfuscator markers is never a finding: Tag Manager, Analytics and ad networks do the same on clean sites. The markers are `string_array_rotation` (a function returning a string array plus a `push(shift())` rotation) and `hex_identifier_density` (30 or more `_0x…` identifiers, at least one per 200 characters), over the first 200 000 characters.
 - **Owner wording.** A YARA finding shows the rule's `description` meta as written; anything else, or a rule without one, gets a generic plain line ("Code matching a known malware pattern", "Some visitors are sent to a different website", …).
-- **Size.** A report holds at most 50 blocks, 20 findings per block and 20 pages per finding; what is left out is counted.
+- **Off-site landings.** When a load ends on another site, the code matched there belongs to that site: it is shown at the landing URL (or its script URL), marked as being on the website visitors were sent to, with the owner's pages that sent them. That page's injections and scripts are not reported as the site's.
+- **Size.** A report holds at most 50 blocks, 20 findings per block, 200 findings in all (compromised ones kept first) and 20 pages per finding; what is left out is counted (`blocks_more`, each block's `findings_more`, `findings_more_total`). When YARA's per-load budget ran out the report notes that some content was too large to check in full.
 
 ### Site-mode scoring
 
@@ -228,7 +230,7 @@ The site check is for internal use. It has no rate limit and no per-site cap. Th
 | `GET /tasks/{id}/artifacts/{path}` | A stored artifact, e.g. `screenshots/landing_20261104_101500.png`. |
 | `GET /health` | Liveness check. |
 
-`/tasks` and `/tasks/{id}/results` return the same `result` object: `final_url`, `malicious_score`, `is_redirect_chain_detected`, `hops`, `artifacts`, `findings`, `decisive`, `variants` (each profile's landing, redirect count and own score, the requested one first), `cloaking` (landing per profile, or `null`), `yara` (rules loaded and what was scanned, or `null` when YARA is off) and `raw_error`. It also has `kind` (`url` or `site`; results stored before the site check existed read as `url`). For a `site` job `final_url` is the homepage's `default` landing, `malicious_score` is the worst score of any load, `hops` is empty, and two more fields appear: `site` (the report: `site`, `entered`, `redirected_from`, `verdict`, `blocks`, `external_scripts`, `checked`, `blocked_hosts`, `notes`) and `cleanup_url`.
+`/tasks` and `/tasks/{id}/results` return the same `result` object: `final_url`, `malicious_score`, `is_redirect_chain_detected`, `hops`, `artifacts`, `findings`, `decisive`, `variants` (each profile's landing, redirect count and own score, the requested one first), `cloaking` (landing per profile, or `null`), `yara` (rules loaded and what was scanned, or `null` when YARA is off) and `raw_error`. It also has `kind` (`url` or `site`; results stored before the site check existed read as `url`). For a `site` job `final_url` is the homepage's `default` landing, `malicious_score` is the worst score of any load, `hops` is empty, and two more fields appear: `site` (the report: `site`, `entered`, `redirected_from`, `verdict`, `blocks`, `blocks_more`, `findings_more_total`, `external_scripts`, `checked`, `blocked_hosts`, `notes`) and `cleanup_url`.
 
 ## Configuration
 
@@ -244,7 +246,7 @@ The site check is for internal use. It has no rate limit and no per-site cap. Th
 | `VITE_API_BASE` | `http://localhost:8000` | Frontend, set at build time (`--build-arg`) |
 | `YARA_RULES_DIR` | unset (YARA off) | Worker; `/app/yara-rules` in compose |
 | `YARA_RULES_HOST_DIR` | `./yara-rules` | Compose only: the host directory mounted read-only at `/app/yara-rules` |
-| `CLEANUP_URL` | `https://elderward.space.fast` | API: the cleanup link in a Compromised or Suspicious site report. `docker-compose.yml` doesn't pass it through; add it under the `api` service's `environment` to change it |
+| `CLEANUP_URL` | `https://elderward.space.fast` | API: the cleanup link in a Compromised or Suspicious site report. `docker-compose.yml` passes it to the `api` service from your shell or `.env` |
 
 ### YARA rules
 

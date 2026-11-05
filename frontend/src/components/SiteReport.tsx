@@ -29,16 +29,17 @@ const PILL: Record<'negative' | 'warning' | 'neutral' | 'positive', React.CSSPro
   positive: { background: 'var(--pill-positive-bg)', color: 'var(--positive)' },
 };
 
-export function siteVerdictTone(verdict: SiteVerdict | undefined): 'negative' | 'warning' | 'neutral' | 'positive' {
+/** Clean without malware rules loaded is not a reassuring result, so it stays neutral. */
+export function siteVerdictTone(verdict: SiteVerdict | undefined, rulesLoaded?: boolean): 'negative' | 'warning' | 'neutral' | 'positive' {
   if (verdict === 'compromised') return 'negative';
   if (verdict === 'suspicious') return 'warning';
-  if (verdict === 'clean') return 'positive';
+  if (verdict === 'clean') return rulesLoaded === false ? 'neutral' : 'positive';
   return 'neutral';
 }
 
-export function SiteVerdictPill({ verdict, label }: { verdict: SiteVerdict | undefined; label: string }) {
+export function SiteVerdictPill({ verdict, label, rulesLoaded }: { verdict: SiteVerdict | undefined; label: string; rulesLoaded?: boolean }) {
   return (
-    <span className="px-2 py-[3px] text-[11px] font-medium rounded-full whitespace-nowrap" style={PILL[siteVerdictTone(verdict)]}>
+    <span className="px-2 py-[3px] text-[11px] font-medium rounded-full whitespace-nowrap" style={PILL[siteVerdictTone(verdict, rulesLoaded)]}>
       {label}
     </span>
   );
@@ -469,7 +470,7 @@ export default function SiteReport({ taskId, result }: { taskId: string; result:
       {/* 1. the verdict */}
       <div>
         <p className="text-[18px] leading-snug font-semibold text-ink m-0">
-          <span className={{ negative: 'text-negative', warning: 'text-warning', neutral: 'text-ink', positive: 'text-positive' }[siteVerdictTone(v.verdict)]}>
+          <span className={{ negative: 'text-negative', warning: 'text-warning', neutral: 'text-ink', positive: 'text-positive' }[siteVerdictTone(v.verdict, v.rules_loaded)]}>
             {v.label}
           </span>
           <span className="text-muted font-normal">{rest}</span>
@@ -511,8 +512,14 @@ export default function SiteReport({ taskId, result }: { taskId: string; result:
               <BlockView key={`${b.location_kind}:${b.location}`} taskId={taskId} block={b} />
             ))}
           </div>
-          {report.blocks_more > 0 ? (
-            <p className="text-[11px] text-faint m-0 mt-1.5">and {plural(report.blocks_more, 'more place')} with findings, not shown</p>
+          {report.blocks_more > 0 || (report.findings_more_total ?? 0) > 0 ? (
+            <p className="text-[11px] text-faint m-0 mt-1.5">
+              Not shown:{' '}
+              {[report.blocks_more > 0 ? plural(report.blocks_more, 'more place') + ' with findings' : '',
+                (report.findings_more_total ?? 0) > 0 ? `+${plural(report.findings_more_total ?? 0, 'more finding')}` : '']
+                .filter(Boolean)
+                .join(', ')}
+            </p>
           ) : null}
         </div>
       ) : null}

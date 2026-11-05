@@ -24,6 +24,7 @@ from .yara_scan import YARA_MECHANISM
 # Report size caps (global constraints): they bound the result's metadata_json.
 MAX_BLOCKS = 50
 MAX_BLOCK_FINDINGS = 20  # findings per block; the rest are counted in the block's findings_more
+MAX_FINDINGS = 200     # findings in all blocks together (cap_findings); the rest in findings_more_total
 MAX_PAGES = 20         # pages listed per finding; the rest are counted in pages_more
 MAX_URLS = 20          # URLs in loaded_by / loaded; the rest in loaded_by_more / loaded_more
 MAX_DETAIL_ITEMS = 20  # screenshots and scoring strings kept in a finding's details
@@ -442,3 +443,20 @@ def build_blocks_and_overflow(loads: List[Load], site_host: str,
                        "findings_more": max(0, len(findings) - MAX_BLOCK_FINDINGS)})
     blocks.sort(key=lambda b: (b["findings"][0]["severity"] != "compromised", b["location"]))
     return blocks[:MAX_BLOCKS], max(0, len(blocks) - MAX_BLOCKS)
+
+
+def cap_findings(blocks: List[dict]) -> Tuple[List[dict], int, int]:
+    """At most MAX_FINDINGS findings over all blocks: compromised ones first, then in block order.
+
+    Returns the kept blocks (a block left without findings is dropped), how many blocks were
+    dropped, and how many findings were. A block's own ``findings_more`` is left as it was.
+    """
+    order = sorted((f.get("severity") != "compromised", bi, fi)
+                   for bi, block in enumerate(blocks) for fi, f in enumerate(block["findings"]))
+    keep = {(bi, fi) for _, bi, fi in order[:MAX_FINDINGS]}
+    kept = []
+    for bi, block in enumerate(blocks):
+        findings = [f for fi, f in enumerate(block["findings"]) if (bi, fi) in keep]
+        if findings:
+            kept.append(dict(block, findings=findings))
+    return kept, len(blocks) - len(kept), max(0, len(order) - MAX_FINDINGS)

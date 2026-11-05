@@ -146,7 +146,8 @@ export interface SiteReportData {
   redirected_from: string | null;
   verdict: { verdict: SiteVerdict; label: string; summary: string; rules_loaded: boolean };
   blocks: SiteBlock[];
-  blocks_more: number;
+  blocks_more: number; // blocks past the 50-block cap, plus blocks the 200-finding cap left empty
+  findings_more_total?: number; // findings dropped by the report-wide 200-finding cap (not in any block's findings_more)
   external_scripts: { hosts: ExternalScriptHost[]; hosts_more: number; urls_more: number };
   checked: SiteChecked;
   blocked_hosts: string[];

@@ -211,6 +211,45 @@ def test_build_report_counts_blocks_past_the_cap():
     assert len(report["blocks"]) == 50 and report["blocks_more"] == 10
 
 
+def test_build_report_keeps_200_findings_in_all_compromised_first():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_report import build_report
+
+    # 20 script blocks of 12 suspicious findings, then one page block with 5 compromised and 5 suspicious.
+    hops = [_yara_hop("script", f"https://s.com/a{i:02}.js", f"r{j:02}", 2, False, 0, "S") for i in range(20) for j in range(12)]
+    hops += [_yara_hop("served", "https://s.com/", f"c{j}", 5, True, 0, f"C{j}") for j in range(5)]
+    hops += [_yara_hop("served", "https://s.com/", f"s{j}", 2, False, 0, f"S{j}") for j in range(5)]
+    r = build_report("s.com", "s.com", None, [_load(0, "https://s.com/", "default", hops)], 1, [], [])
+    findings = [f for b in r["blocks"] for f in b["findings"]]
+    assert len(findings) == 200 and sum(f["severity"] == "compromised" for f in findings) == 5
+    assert r["blocks"][0]["location"] == "https://s.com/" and len(r["blocks"][0]["findings"]) == 10
+    # 190 more: 15 whole script blocks and 10 of the 16th; the last 4 are left empty and dropped.
+    assert [len(b["findings"]) for b in r["blocks"][1:]] == [12] * 15 + [10]
+    assert r["findings_more_total"] == 50 and r["blocks_more"] == 4
+    assert all(b["findings_more"] == 0 for b in r["blocks"])
+    assert r["verdict"]["summary"] == "Compromised · 250 findings on 1 of 1 pages"
+
+    small = build_report("s.com", "s.com", None, [_load(0, "https://s.com/", "default", hops[:3])], 1, [], [])
+    assert small["findings_more_total"] == 0 and small["blocks_more"] == 0
+
+
+def test_build_report_notes_a_yara_budget_cut():
+    from _support import _load
+    from pnakotic.src.scanner.site_report import build_report
+
+    cut = _load(1, "https://s.com/a/", "default")
+    cut.result.metadata["yara"] = {"rules": 1, "buffers": 3, "bytes": 10, "budget_exhausted": True}
+    ok = _load(0, "https://s.com/", "default")
+    ok.result.metadata["yara"] = {"rules": 1, "buffers": 3, "bytes": 10, "budget_exhausted": False}
+    note = "Some page content was too large to check in full for malware patterns"
+    assert build_report("s.com", "s.com", None, [ok, cut, cut], 1, [], ["Checked over http"])["notes"] == ["Checked over http", note]
+    assert build_report("s.com", "s.com", None, [ok], 1, [], [])["notes"] == []
+    unused = _load(1, "https://s.com/a/", "default", state="not_checked", reason="timeout")
+    unused.result.metadata["yara"] = {"budget_exhausted": True}
+    assert build_report("s.com", "s.com", None, [ok, unused], 1, [], [])["notes"] == []
+    assert build_report("s.com", "s.com", None, [ok], 1, [], [])["verdict"]["verdict"] == "clean"
+
+
 def test_couldnt_check_summary_gives_the_reason():
     from _support import _load
     from pnakotic.src.scanner.site_report import site_verdict
