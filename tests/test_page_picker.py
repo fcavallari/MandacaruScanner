@@ -95,3 +95,32 @@ def test_pick_pages_respects_limit_and_prefers_distinct_first_segment():
     links = [HOME + "a/1/", HOME + "a/2/", HOME + "b/1/", HOME + "c/1/"]
     assert pick_pages(links, "example.com", HOME, limit=3) == [HOME + "a/1/", HOME + "b/1/", HOME + "c/1/"]
     assert pick_pages(links, "example.com", HOME, limit=0) == []
+
+
+def test_extract_links_is_linear_on_hostile_markup():
+    import time
+
+    from pnakotic.src.scanner.page_picker import extract_links
+
+    anchor = '<a href="/x/">x</a>'
+    floods = ["<!--" * 100_000, "<![" * 100_000, "<a " * 100_000, "<a " + "x" * 3_000_000,
+              '<a href="' * 100_000, "<" * 1_000_000]
+    for flood in floods:
+        start = time.monotonic()
+        before = extract_links(anchor + flood, HOME)
+        after = extract_links(flood + anchor, HOME)
+        assert time.monotonic() - start < 2.0, flood[:12]
+        assert before[0] == "https://example.com/x/"
+        if not flood.startswith("<!--"):  # an unterminated comment swallows what follows it
+            assert after[-1] == "https://example.com/x/"
+
+
+def test_extract_links_attribute_forms_comments_and_entities():
+    from pnakotic.src.scanner.page_picker import extract_links
+
+    html = ("<A HREF='/single/'>1</A><a class=x href=/bare/ >2</a><a\nhref = \"/spaced/?a=1&amp;b=2\">3</a>"
+            "<!-- <a href='/hidden/'>h</a> --><a href=\"/after-comment/\">4</a>"
+            "<abbr href='/not-an-anchor/'>5</abbr><a data-href='/nope/'>6</a>")
+    assert extract_links(html, HOME) == [
+        "https://example.com/single/", "https://example.com/bare/",
+        "https://example.com/spaced/?a=1&b=2", "https://example.com/after-comment/"]

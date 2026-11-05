@@ -3,10 +3,12 @@
 ``extract_links`` reads the anchors of a rendered homepage; ``pick_pages`` chooses up to
 a handful of varied internal pages to visit; ``probe_url`` builds the 404-template probe.
 Hosts are lower-case and port-less when compared; URLs keep their port. All page-supplied
-input is bounded: the HTML is capped, parsing stops after ``limit`` anchors, and every
-regex here has a bounded shape.
+input is bounded and handled in linear time: the HTML is capped, anchors are found with a
+regex tokenizer (not ``html.parser``, which rescans the buffer on every unterminated
+``<!--`` and goes quadratic), each tag is limited to a bounded length that cannot span a
+``<``, and scanning stops after ``limit`` anchors.
 """
-from html.parser import HTMLParser
+import html as html_lib
 from typing import List, Optional, Tuple
 from urllib.parse import urljoin, urlsplit, urlunsplit
 import re
@@ -42,25 +44,34 @@ _ARCHIVE_RE = re.compile(r"/(?:category|tag|author)/|/page/\d{1,6}/")
 _CONTACT_RE = re.compile(r"contact|kontakt|contacto|contatto")
 
 
-class _Done(Exception):
-    """Raised inside the parser to abandon the rest of the document."""
+# One token is either a comment opener or an anchor start tag. The tag body may not contain
+# '<' or '>' (so an unterminated '<a' flood is scanned once, not once per start) and is
+# at most 4096 characters.
+_TOKEN_RE = re.compile(r"<!--|<a\s[^<>]{0,4096}>", re.IGNORECASE)
+_HREF_RE = re.compile(r"\shref\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s]+))", re.IGNORECASE)
 
 
-class _AnchorParser(HTMLParser):
-    def __init__(self, limit: int) -> None:
-        super().__init__(convert_charrefs=True)
-        self.limit = limit
-        self.hrefs = []  # type: List[str]
-
-    def handle_starttag(self, tag, attrs):
-        if tag != "a":
-            return
-        for name, value in attrs:
-            if name == "href" and value is not None:
-                self.hrefs.append(value)
-                if len(self.hrefs) >= self.limit:
-                    raise _Done()
-                return
+def _anchor_hrefs(markup: str, limit: int) -> List[str]:
+    """Raw ``href`` values of the first ``limit`` ``<a href>`` tags, skipping comments.
+    Linear in the size of ``markup``."""
+    hrefs = []  # type: List[str]
+    pos = 0
+    while len(hrefs) < limit:
+        token = _TOKEN_RE.search(markup, pos)
+        if token is None:
+            break
+        if token.group(0) == "<!--":
+            end = markup.find("-->", token.end())
+            if end < 0:  # an unterminated comment swallows the rest of the document
+                break
+            pos = end + 3
+            continue
+        pos = token.end()
+        href = _HREF_RE.search(token.group(0))
+        if href is not None:
+            value = next(g for g in href.groups() if g is not None)
+            hrefs.append(html_lib.unescape(value))
+    return hrefs
 
 
 def _netloc(host: str, port: Optional[int]) -> str:
@@ -96,16 +107,10 @@ def _normalize(url: str) -> Optional[str]:
 def extract_links(html: str, base_url: str, limit: int = 2000) -> List[str]:
     """Absolute http(s) links of the ``<a href>`` anchors in ``html``, in first-seen order
     and without duplicates. Parsing stops once ``limit`` anchors have been seen."""
-    parser = _AnchorParser(max(limit, 0))
-    if parser.limit:
-        try:
-            parser.feed((html or "")[:_MAX_HTML_CHARS])
-            parser.close()
-        except Exception:  # _Done at the limit; malformed markup must not take the scan down either
-            pass
+    hrefs = _anchor_hrefs((html or "")[:_MAX_HTML_CHARS], max(limit, 0))
     seen = set()
     links = []
-    for href in parser.hrefs:
+    for href in hrefs:
         href = href.strip()
         if len(href) > _MAX_URL_CHARS:
             continue
