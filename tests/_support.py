@@ -107,6 +107,14 @@ def site_server():
     class Server(ThreadingHTTPServer):
         daemon_threads = True
 
+    # The same footer on several pages: the filler on both sides is longer than the YARA
+    # snippet window (240 bytes), so the snippet, and with it the finding, is identical.
+    filler = "<p>" + "Thanks for reading. " * 15 + "</p>"
+    footer = f"<footer>{filler}<script>/*PNAKOTIC_TEST_SKIMMER*/</script>{filler}</footer></body></html>"
+    obf = ("function _0x34e5(){var _0x18b8=['a','b'];_0x34e5=function(){return _0x18b8;};return _0x34e5();}"
+           "(function(_0x44e7,_0x5d16){var _0x7eb7=_0x44e7();while(!![]){try{break;}catch(_0x1){"
+           "_0x7eb7['push'](_0x7eb7['shift']());}}}(_0x34e5,0x1));")
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"  # chunked /stream needs it
 
@@ -122,13 +130,43 @@ def site_server():
 
         def do_GET(self):
             port = self.server.server_address[1]
+
+            def loader(name):  # the Task 5 LOADER shape, to a script on localhost
+                return (";;(function(f,i,u,w,s){w=f.createElement(i);s=f.getElementsByTagName(i)[0];"
+                        "w.async=1;w.src=u;s.parentNode.insertBefore(w,s);})"
+                        f"(document,'script','http://localhost:{port}/{name}');")
             if self.path == "/":  # the Task 5 loader shape, injecting a script from another site
                 self._send(200, "text/html", (
-                    "<html><head><title>Shop</title></head><body><a href='/about'>About</a><script>"
-                    ";;(function(f,i,u,w,s){w=f.createElement(i);s=f.getElementsByTagName(i)[0];"
-                    "w.async=1;w.src=u;s.parentNode.insertBefore(w,s);})"
-                    f"(document,'script','http://localhost:{port}/payload.js');"
-                    "</script></body></html>").encode())
+                    "<html><head><title>Shop</title></head><body><a href='/about'>About</a>"
+                    "<a href='/2024/05/post/'>Post</a><a href='/about/'>About us</a>"
+                    "<a href='/category/x/'>Category</a>"
+                    f"<script>{loader('payload.js')}</script>{footer}").encode())
+            elif self.path in ("/about", "/about/", "/2024/05/post/", "/category/x/"):
+                self._send(200, "text/html", (
+                    f"<html><head><title>Page {self.path}</title></head><body><h1>{self.path}</h1>"
+                    f"{footer}").encode())
+            elif self.path == "/g/":  # the footer only for Googlebot
+                bot = "Googlebot" in (self.headers.get("User-Agent") or "")
+                self._send(200, "text/html", ("<html><head><title>G</title></head><body><h1>G</h1>"
+                                              + (footer if bot else "</body></html>")).encode())
+            elif self.path == "/hang/":
+                time.sleep(20)
+                try:
+                    self._send(200, "text/html", b"<html><body>late</body></html>")
+                except OSError:
+                    pass  # the browser went away
+            elif self.path == "/plain/":  # a plain GA-shaped loader
+                self._send(200, "text/html", ("<html><head><title>Plain</title></head><body><h1>Plain</h1>"
+                                              f"<script>{loader('clean.js')}</script></body></html>").encode())
+            elif self.path == "/obf/":  # obfuscator.io code injecting a script from another site
+                self._send(200, "text/html", (
+                    "<html><head><title>Obf</title></head><body><h1>Obf</h1>"
+                    f"<script>{obf}{loader('clean.js')}</script></body></html>").encode())
+            elif self.path == "/to-other/":
+                self.send_response(302)
+                self.send_header("Location", f"http://localhost:{port}/about/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
             elif self.path == "/payload.js":
                 self._send(200, "text/javascript", b"var PNAKOTIC_TEST_SKIMMER = 1;")
             elif self.path == "/challenge":

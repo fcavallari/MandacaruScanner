@@ -189,8 +189,10 @@ def test_build_report_assembles_everything():
     assert checked["scripts_scanned"] == 2 and checked["frames_scanned"] == 1
     assert [(p["index"], p["url"]) for p in checked["pages"]] == [(0, "https://s.com/"), (1, "https://s.com/about")]
     assert checked["pages"][0]["loads"] == [
-        {"profile": "default", "state": "checked", "reason": None, "status": 200, "screenshot": "pages/0/default/landing_1.png", "score": 0.3},
-        {"profile": "googlebot", "state": "not_checked", "reason": "challenge", "status": None, "screenshot": None, "score": None}]
+        {"profile": "default", "state": "checked", "reason": None, "status": 200, "screenshot": "pages/0/default/landing_1.png", "score": 0.3,
+         "landing": "https://s.com/"},
+        {"profile": "googlebot", "state": "not_checked", "reason": "challenge", "status": None, "screenshot": None, "score": None,
+         "landing": None}]
     assert checked["pages"][1]["loads"][0]["status"] == 404
     assert report["notes"] == ["note"] and report["blocked_hosts"] == ["10.0.0.1"]
 

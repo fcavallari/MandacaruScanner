@@ -232,6 +232,7 @@ def _checked(loads: List[Load], rules_count: int) -> dict:
                 "status": l.result.metadata.get("main_status") if l.result else None,
                 "screenshot": l.shot,
                 "score": own_score(l.result)[0] if l.result else None,
+                "landing": _url(l.result.final_url) if l.result else None,
             } for l in page_loads],
         })
 
