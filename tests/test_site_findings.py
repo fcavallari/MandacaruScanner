@@ -157,6 +157,41 @@ def test_obfuscated_injecting_file_counts_only_when_it_is_on_the_site():
     assert build_blocks([_load(0, "https://s.com/", "default", [], injections=[gtm])], "s.com", None) == []
 
 
+def test_code_on_an_offsite_landing_sits_at_the_landing_not_the_owners_page():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    inj = {"requested_url": "https://bad.org/x.js", "initiator_kind": "inline", "initiator_url": "https://evil.net/land",
+           "block": {"start": 0, "end": 50}, "markers": ["string_array_rotation"], "context": {"text": "obf", "match_start": 0, "match_end": 3, "line": 1}}
+    hops = [_yara_hop("served", "https://evil.net/land", "html_scam", 2, False, 10, "SCAMCODE"),
+            _yara_hop("script", "https://cdn.evil.net/x.js", "js_bad", 5, True, 0, "JS")]
+    loads = [_load(0, "https://s.com/", "default"),
+             _load(0, "https://s.com/", "mobile-ios", hops, injections=[inj], final_url="https://evil.net/land"),
+             _load(1, "https://s.com/about/", "default"),
+             _load(1, "https://s.com/about/", "mobile-ios", hops[:1], final_url="https://evil.net/land")]
+    blocks = {(b["location_kind"], b["location"]): b["findings"] for b in build_blocks(loads, "s.com", None)}
+    assert set(blocks) == {("script", "https://cdn.evil.net/x.js"), ("page", "https://evil.net/land")}  # no injection finding
+    [html] = blocks[("page", "https://evil.net/land")]
+    assert (html["kind"], html["severity"], html["origin"], html["details"]["offsite"]) == ("yara", "suspicious", None, True)
+    assert html["pages"] == ["https://s.com/", "https://s.com/about/"] and html["visitors"] == ["mobile-ios"]
+    [js] = blocks[("script", "https://cdn.evil.net/x.js")]
+    assert (js["severity"], js["details"]["offsite"], js["loaded_by"]) == ("compromised", True, [])
+
+    # The same rule and snippet on the owner's own page stays a separate, on-site finding.
+    own = _load(2, "https://s.com/c/", "default", hops[:1])
+    found = {b["location"]: b["findings"] for b in build_blocks(loads + [own], "s.com", None)}
+    assert found["https://s.com/c/"][0]["origin"] == "served" and found["https://s.com/c/"][0]["details"]["offsite"] is False
+
+
+def test_all_visitors_is_false_without_checked_profiles():
+    from _support import _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    # The default homepage load decided the off-site domain but isn't usable: nothing to compare.
+    [b] = build_blocks([_load(0, "https://s.com/", "default", state="not_checked", reason="timeout")], "s.com", "elsewhere.net")
+    assert b["findings"][0]["visitors"] == ["default"] and b["findings"][0]["all_visitors"] is False
+
+
 def test_visitors_subset_and_all():
     from _support import _load, _yara_hop
     from pnakotic.src.scanner.site_findings import build_blocks

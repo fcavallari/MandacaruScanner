@@ -236,6 +236,33 @@ def test_verdict_clean_paths_pinned():
     assert site_verdict([], [ok(0, "default"), ok(0, "mobile-ios")], True)["verdict"] == "clean"
 
 
+def test_external_scripts_skip_loads_that_ended_off_site():
+    from _support import _load
+    from pnakotic.src.scanner.site_report import build_report
+
+    rec = {"url": "https://cdn.evil.net/x.js", "initiator": "parser", "initiator_url": None, "main_frame": True}
+    own = {**rec, "url": "https://ads.net/a.js"}
+    loads = [_load(0, "https://s.com/", "default", script_requests=[own]),
+             _load(0, "https://s.com/", "mobile-ios", final_url="https://evil.net/", script_requests=[rec, own])]
+    hosts = build_report("s.com", "s.com", None, loads, 1, [], [])["external_scripts"]["hosts"]
+    assert [(h["host"], h["urls"][0]["profiles"]) for h in hosts] == [("ads.net", ["default"])]
+
+
+def test_offsite_homepage_landing_code_is_the_landings():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_report import build_report
+
+    # The homepage default load lands on evil.net, whose HTML matches a weak rule.
+    hop = _yara_hop("served", "https://evil.net/", "html_scam", 2, False, 10, "SCAMCODE")
+    home = _load(0, "https://s.com/", "default", [hop], final_url="https://evil.net/",
+                 script_requests=[{"url": "https://cdn.evil.net/x.js", "initiator": "parser", "main_frame": True}])
+    others = [_load(0, "https://s.com/", p) for p in ("mobile-ios", "googlebot", "search-clicker")]
+    r = build_report("s.com", "s.com", "evil.net", [home] + others, 1, [], [])
+    found = {b["location"]: [(f["kind"], f["origin"], f["details"]["offsite"]) for f in b["findings"]] for b in r["blocks"]}
+    assert found == {"https://s.com/": [("offsite_homepage", None, False)], "https://evil.net/": [("yara", None, True)]}
+    assert r["external_scripts"]["hosts"] == []
+
+
 def test_unchecked_loads_do_not_feed_scripts_or_counts():
     from _support import _load
     from pnakotic.src.scanner.site_report import build_report, external_scripts

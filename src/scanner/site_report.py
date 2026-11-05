@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 from .models import ScanResult
 from .profiles import PROFILES
 from .script_trace import MAX_URL_CHARS  # 300, the external-scripts rule
-from .site_findings import Load, build_blocks_and_overflow, own_score, usable_load
+from .site_findings import Load, build_blocks_and_overflow, ended_off_site, own_score, usable_load
 from .site_identity import on_site, same_domain
 
 # External scripts per site (global constraints): hosts, and URLs over all listed hosts.
@@ -99,9 +99,11 @@ def external_scripts(loads: List[Load], site_host: str, blocks: List[dict]) -> d
     some visitors, then added by a script, then the rest alphabetically. At most MAX_HOSTS
     hosts and MAX_EXTERNAL_URLS URLs are listed; ``hosts_more`` counts the hosts left out and
     ``urls_more`` the URLs left out of listed hosts. A bot-check page's scripts are not the
-    site's, so those loads are skipped, and so are loads that were not checked.
+    site's, so those loads are skipped, and so are loads that were not checked or that ended
+    on another site (that page's scripts are not the site's either).
     """
-    usable = sorted((l for l in loads if usable_load(l)), key=lambda l: l.page_index)
+    usable = sorted((l for l in loads if usable_load(l) and not ended_off_site(l.result, site_host)),
+                    key=lambda l: l.page_index)
     profiles_by_page = {}  # type: Dict[str, set]
     for load in usable:
         profiles_by_page.setdefault(_url(load.page_url), set()).add(load.profile)

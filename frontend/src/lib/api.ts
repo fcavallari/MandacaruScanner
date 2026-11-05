@@ -57,7 +57,7 @@ export interface Snippet {
   text: string;
   match_start: number;
   match_end: number;
-  line: number; // 1-based
+  line: number | null; // 1-based; null when the snippet is evidence, not code (e.g. where visitors land)
 }
 
 export interface SiteFindingDetails {
@@ -68,6 +68,7 @@ export interface SiteFindingDetails {
   screenshots: string[]; // rel paths under the task folder
   scoring: string[];
   initiator: string | null;
+  offsite?: boolean; // code on the page a visitor was sent to on another site; `pages` are the owner's pages that sent them
 }
 
 export interface SiteFinding {

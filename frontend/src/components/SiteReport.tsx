@@ -206,7 +206,9 @@ function FindingView({ taskId, finding, block }: { taskId: string; finding: Site
   const compromised = finding.severity === 'compromised';
   const pages = finding.pages ?? [];
   const showPages = block.location_kind === 'script' || pages.length > 1 || (pages.length === 1 && pages[0] !== block.location) || finding.pages_more > 0;
-  const origin = finding.origin ? ORIGINS[finding.origin] : null;
+  const offsite = finding.details?.offsite === true;
+  const origin = offsite ? 'On the website these visitors were sent to, not on your site' : finding.origin ? ORIGINS[finding.origin] : null;
+  const pagesLabel = offsite ? 'Visitors were sent there from' : block.location_kind === 'script' ? 'Loaded on' : 'Found on';
   return (
     <li className="py-3 first:pt-0 last:pb-0 border-b border-rule last:border-b-0 flex flex-col gap-2">
       <div className="flex items-baseline gap-2.5">
@@ -229,7 +231,7 @@ function FindingView({ taskId, finding, block }: { taskId: string; finding: Site
       </div>
       {showPages ? (
         <div>
-          <p className="text-[11px] text-faint m-0 mb-0.5">{block.location_kind === 'script' ? 'Loaded on' : 'Found on'}</p>
+          <p className="text-[11px] text-faint m-0 mb-0.5">{pagesLabel}</p>
           <UrlList urls={pages} more={finding.pages_more} noun="page" />
         </div>
       ) : null}

@@ -64,7 +64,8 @@ class _Finding:
 
     def __init__(self, key: tuple, severity: str, kind: str, message: str, snippet: Optional[dict],
                  origin: Optional[str], location: str, location_kind: str, mechanism: str,
-                 rule: Optional[str] = None, signature_id: Optional[int] = None, initiator: Optional[str] = None):
+                 rule: Optional[str] = None, signature_id: Optional[int] = None, initiator: Optional[str] = None,
+                 offsite: bool = False):
         self.key = key
         self.severity = severity
         self.kind = kind
@@ -77,6 +78,7 @@ class _Finding:
         self.rule = rule
         self.signature_id = signature_id
         self.initiator = initiator
+        self.offsite = offsite  # code on the page a visitor was sent to on another site
         self.visitors: List[str] = []
         self.pages: List[str] = []
         self.loaded_by: List[str] = []
@@ -97,7 +99,7 @@ class _Finding:
             "snippet": self.snippet,
             "origin": self.origin,
             "visitors": visitors,
-            "all_visitors": bool(visitors) and checked <= set(visitors),
+            "all_visitors": bool(visitors) and bool(checked) and checked <= set(visitors),
             "pages": self.pages[:MAX_PAGES],
             "pages_more": max(0, len(self.pages) - MAX_PAGES),
             "loaded_by": self.loaded_by[:MAX_URLS],
@@ -112,6 +114,7 @@ class _Finding:
                 "screenshots": self.screenshots[:MAX_DETAIL_ITEMS],
                 "scoring": self.scoring[:MAX_DETAIL_ITEMS],
                 "initiator": self.initiator,
+                "offsite": self.offsite,
             },
         }
 
@@ -137,6 +140,12 @@ def usable_load(load: Load) -> bool:
     """not_checked loads and bot-challenge pages say nothing about the site."""
     return (load.state != "not_checked" and load.result is not None
             and not load.result.metadata.get("challenge"))
+
+
+def ended_off_site(result: ScanResult, site_host: str) -> bool:
+    """The load ended on another site's page, so its HTML and scripts are that site's."""
+    host = _hostname(result.final_url)
+    return bool(host) and not on_site(host, site_host)
 
 
 def _injections(result: ScanResult) -> List[dict]:
@@ -188,6 +197,8 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
     tied = set()  # indexes of injections attached to a YARA finding
     served_rules = {str(h.get("rule") or "") for h in hits if h.get("source") == "served"}
     served_missing = result.metadata.get("served_bytes") == 0
+    offsite = ended_off_site(result, site_host)
+    landing = _url(result.final_url)
 
     for hit in hits:
         source = hit.get("source")
@@ -198,6 +209,18 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
             kind="yara", message=hit.get("description") or MESSAGES["yara"], snippet=snippet,
             mechanism=YARA_MECHANISM, rule=rule, signature_id=hit.get("signature_id"),
         )
+        if offsite:
+            # The visitor was sent to another site: this code is that page's, not the owner's.
+            # It sits at the landing (HTML) or the script URL; the owner's page is only in `pages`.
+            if source == "script":
+                url = _url(hit.get("url"))
+                c.add(load, ("yara", rule, url, "offsite"), origin="script", location=url, location_kind="script",
+                      offsite=True, **common)
+            elif source in _HTML_ORIGINS and not (source == "page" and rule in served_rules):
+                text = snippet.get("text", "") if snippet else ""
+                c.add(load, ("yara", rule, text, "offsite", landing), origin=None, location=landing,
+                      location_kind="page", offsite=True, **common)
+            continue
         if source == "script":
             url = _url(hit.get("url"))
             finding = c.add(load, ("yara", rule, url), origin="script", location=url, location_kind="script", **common)
@@ -228,6 +251,8 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
                         tied.add(i)
                         _append(finding.loaded, _url(inj["requested_url"]))
 
+    if offsite:
+        return  # another site's injectors are not the owner's page code
     # An obfuscated inline or on-site injector of a cross-site script (find_injections only
     # keeps cross-site requests) is suspicious on its own.
     for i, inj in enumerate(injections):
