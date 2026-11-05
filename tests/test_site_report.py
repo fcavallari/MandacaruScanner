@@ -259,3 +259,68 @@ def test_unchecked_loads_do_not_feed_scripts_or_counts():
 
     checked = build_report("s.com", "s.com", None, [ok, failed], 1, [], [])["checked"]
     assert (checked["scripts_scanned"], checked["frames_scanned"], checked["not_checked"]) == (1, 0, 1)
+
+
+def _redirect_page(index, url, steered_profile, profiles, to="https://cheap-deals-shop.com/promo"):
+    """Real scorer: `steered_profile` (or every profile, for "all") gets a 302 to `to`; the page's
+    default result is folded with combine() as the site engine does."""
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from pnakotic.src.scanner.site_findings import Load
+
+    scorer = PnakoticScorer()
+    loads = []
+    for profile in profiles:
+        steered = steered_profile in (profile, "all")
+        hops = [RedirectHop(url=url, status_code=302, mechanism="http_3xx", headers={"location": to})] if steered else []
+        r = ScanResult(target_url=url, final_url=to if steered else url, hops=hops)
+        r.metadata = {"page_signals": {"title": "Deals", "password_inputs": 0, "forms": 0, "content_type": "text/html"},
+                      "main_status": 200, "served_bytes": 1000, "script_requests": [], "injections": []}
+        scorer.score(r, site_host="s.com")
+        loads.append(Load(index, url, profile, "checked", None, r, None))
+    scorer.combine(loads[0].result, "default", {l.profile: l.result for l in loads[1:]})
+    return loads
+
+
+def test_conditional_redirect_to_another_domain_is_suspicious_not_clean():
+    from pnakotic.src.scanner.site_report import build_report
+
+    home_profiles = ("default", "mobile-ios", "googlebot", "search-clicker")
+    page_profiles = ("default", "mobile-ios", "googlebot")
+    probe = _redirect_page(2, "https://s.com/pnakotic-abc/", None, page_profiles)
+    for steered in ("mobile-ios", "search-clicker"):
+        home = _redirect_page(0, "https://s.com/", steered, home_profiles)
+        about = _redirect_page(1, "https://s.com/about/", "mobile-ios", page_profiles)
+        assert home[0].result.metadata["cloaking"]["suspicious"] == []  # the landing alone isn't Suspicious
+        r = build_report("s.com", "s.com", None, home + about + probe, 3, [], [])
+        assert r["verdict"]["verdict"] == "suspicious"
+        found = {b["location"]: b["findings"] for b in r["blocks"]}
+        [f] = found["https://s.com/"]
+        assert (f["kind"], f["severity"], f["visitors"]) == ("cloaking", "suspicious", [steered])
+        assert f["message"] == "Some visitors are sent to a different website"
+        assert "https://cheap-deals-shop.com/promo" in f["snippet"]["text"]
+        assert any(s.startswith("Cloaking: ") for s in f["details"]["scoring"])
+        assert found["https://s.com/about/"][0]["visitors"] == ["mobile-ios"]
+
+    # Every visitor sent to the same other domain is not cloaking: no new finding.
+    moved = _redirect_page(1, "https://s.com/old/", "all", page_profiles)
+    assert moved[0].result.metadata["cloaking"] is None
+    r = build_report("s.com", "s.com", None, _redirect_page(0, "https://s.com/", None, home_profiles) + moved, 3, [], [])
+    assert r["blocks"] == [] and r["verdict"]["verdict"] == "clean"
+
+
+def test_offsite_homepage_folds_in_its_non_decisive_cloaking():
+    from _support import _load
+    from pnakotic.src.scanner.site_report import build_report
+
+    # Desktop visitors leave the site; Googlebot stays. One finding: the off-site homepage.
+    home = [_load(0, "https://s.com/", p, final_url="https://s.com/" if p == "googlebot" else "https://elsewhere.net/")
+            for p in ("default", "mobile-ios", "googlebot", "search-clicker")]
+    home[0].result.malicious_score = 0.55  # combined; its own page scored 0.2
+    home[0].result.metadata["variants"] = [{"profile": "default", "requested": True, "malicious_score": 0.2}]
+    home[0].result.metadata["cloaking"] = {"landings": {}, "common": "elsewhere.net", "steered": ["googlebot"], "suspicious": []}
+    home[0].result.metadata["scoring_findings"] = ["Cloaking: landing depends on the browser profile (y)"]
+    [b] = build_report("s.com", "s.com", "elsewhere.net", home, 3, [], [])["blocks"]
+    [f] = b["findings"]
+    assert (f["kind"], f["severity"]) == ("offsite_homepage", "suspicious")
+    assert "Cloaking: landing depends on the browser profile (y)" in f["details"]["scoring"]

@@ -52,6 +52,20 @@ async def test_site_scan_obfuscated_injector_is_suspicious_plain_loader_is_clean
 
 @requires_browser
 @pytest.mark.asyncio
+async def test_site_scan_phone_only_redirect_to_another_site_is_suspicious(site_server, tmp_path):
+    from pnakotic.src.scanner.site_engine import SiteScanner
+
+    out = await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/m/")
+    r = out.report
+    assert r["verdict"]["verdict"] == "suspicious"
+    [f] = [f for b in r["blocks"] for f in b["findings"] if f["kind"] == "cloaking"]
+    assert f["severity"] == "suspicious" and f["visitors"] == ["mobile-ios"]
+    assert f["message"] == "Some visitors are sent to a different website"
+    assert "/plain/" in f["snippet"]["text"] and "localhost" in f["snippet"]["text"]
+
+
+@requires_browser
+@pytest.mark.asyncio
 async def test_site_scan_budget_marks_not_checked(site_server, tmp_path):
     import time
     from pnakotic.src.scanner.site_engine import SiteScanner

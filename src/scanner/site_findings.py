@@ -265,26 +265,76 @@ def _behaviour(c: _Collector, load: Load) -> None:
                 _append(finding.scoring, text[:MAX_DETAIL_TEXT])
 
 
-def _cloaking_decisive(load: Load) -> Optional[dict]:
+def _page_cloaking(load: Load) -> Optional[dict]:
     if load.profile != "default":
         return None  # combine() writes the page's cloaking on its default result
     cloaking = load.result.metadata.get("cloaking")
-    return cloaking if isinstance(cloaking, dict) and cloaking.get("suspicious") else None
+    return cloaking if isinstance(cloaking, dict) else None
+
+
+def _names(value: Any) -> List[str]:
+    return [p for p in value if isinstance(p, str)] if isinstance(value, list) else []
+
+
+def _cloaking_decisive(load: Load) -> Optional[dict]:
+    cloaking = _page_cloaking(load)
+    return cloaking if cloaking is not None and cloaking.get("suspicious") else None
+
+
+def _cloaking_steered(load: Load) -> Optional[dict]:
+    """Cloaking that isn't decisive (no profile's own page is Suspicious) but lifts the page's
+    combined score to Suspicious: some visitors are sent to another domain."""
+    cloaking = _page_cloaking(load)
+    if cloaking is None or cloaking.get("suspicious") or not _names(cloaking.get("steered")):
+        return None
+    return cloaking if load.result.malicious_score >= SUSPICIOUS_SCORE else None
 
 
 def _cloaking_strings(load: Load) -> List[str]:
-    return [f[:MAX_DETAIL_TEXT] for f in load.result.metadata.get("decisive_findings") or []
-            if isinstance(f, str) and f.startswith("Decisive: cloaking")]
+    decisive = [f for f in load.result.metadata.get("decisive_findings") or []
+                if isinstance(f, str) and f.startswith("Decisive: cloaking")]
+    plain = [f for f in load.result.metadata.get("scoring_findings") or []
+             if isinstance(f, str) and f.startswith("Cloaking: ")]
+    return [f[:MAX_DETAIL_TEXT] for f in decisive + plain]
 
 
-def _cloaking(c: _Collector, load: Load) -> None:
+def _sent_away(cloaking: dict, site_host: str) -> List[str]:
+    """The profiles that landed off the site's domain; combine()'s "steered" (the minority
+    landing) when its landings don't say."""
+    landings = cloaking.get("landings")
+    away = [p for p, apex in (landings.items() if isinstance(landings, dict) else ())
+            if isinstance(p, str) and isinstance(apex, str) and apex
+            and not (on_site(apex, site_host) or same_domain(apex, site_host))]
+    return away or _names(cloaking.get("steered"))
+
+
+def _landing_snippet(visitors: List[str], landed: Dict[str, str], cloaking: dict) -> Optional[dict]:
+    """Where the sent-away visitors land: one "<profile> → <landing URL>" line each."""
+    landings = cloaking.get("landings") if isinstance(cloaking.get("landings"), dict) else {}
+    lines = []
+    for profile in visitors[:MAX_DETAIL_ITEMS]:
+        where = landed.get(profile) or landings.get(profile)
+        if isinstance(where, str) and where:
+            lines.append((profile, _url(where)))
+    if not lines:
+        return None
+    start = len(lines[0][0]) + 3
+    return {"text": "\n".join("{} → {}".format(p, w) for p, w in lines), "match_start": start,
+            "match_end": start + len(lines[0][1]), "line": None}
+
+
+def _cloaking(c: _Collector, load: Load, site_host: str, landed: Dict[str, str], offsite_homepage: bool) -> None:
     cloaking = _cloaking_decisive(load)
+    severity = "compromised"
     if cloaking is None:
-        return
-    steered = [p for p in cloaking.get("steered") or [] if isinstance(p, str)]
-    finding = c.add(load, ("cloaking", load.page_url), visitors=steered or [load.profile], severity="compromised",
-                    kind="cloaking", message=MESSAGES["cloaking"], snippet=None, origin=None,
-                    location=load.page_url, location_kind="page", mechanism="cloaking")
+        cloaking = _cloaking_steered(load)
+        if cloaking is None or (offsite_homepage and load.page_index == 0):
+            return  # the off-site homepage finding carries the homepage's own (non-decisive) cloaking
+        severity = "suspicious"
+    visitors = _sent_away(cloaking, site_host)
+    finding = c.add(load, ("cloaking", load.page_url), visitors=visitors or [load.profile], severity=severity,
+                    kind="cloaking", message=MESSAGES["cloaking"], snippet=_landing_snippet(visitors, landed, cloaking),
+                    origin=None, location=load.page_url, location_kind="page", mechanism="cloaking")
     for text in _cloaking_strings(load):
         _append(finding.scoring, text)
 
@@ -308,6 +358,10 @@ def _offsite(c: _Collector, homepage: List[Load], site_host: str, domain: str) -
         finding = c.add(load, key, visitors=[], **fields)
         for text in _cloaking_strings(load):
             _append(finding.scoring, text)
+    for load in homepage:
+        if _cloaking_steered(load) is not None:  # evidence only: it doesn't make the finding compromised
+            for text in _cloaking_strings(load):
+                _append(c.found[key].scoring, text)
 
 
 def _page_score(c: _Collector, load: Load) -> None:
@@ -338,14 +392,16 @@ def build_blocks_and_overflow(loads: List[Load], site_host: str,
     usable = [replace(l, page_url=_url(l.page_url))
               for l in sorted(loads, key=lambda l: l.page_index) if usable_load(l)]
     profiles_by_page: Dict[str, set] = {}
+    landed: Dict[str, Dict[str, str]] = {}  # page URL -> profile -> where that load ended
     for load in usable:
         profiles_by_page.setdefault(load.page_url, set()).add(load.profile)
+        landed.setdefault(load.page_url, {})[load.profile] = _url(load.result.final_url)
 
     c = _Collector()
     for load in usable:
         _yara_and_injections(c, load, site_host)
         _behaviour(c, load)
-        _cloaking(c, load)
+        _cloaking(c, load, site_host, landed[load.page_url], bool(offsite_domain))
     if offsite_domain:
         _offsite(c, [l for l in usable if l.page_index == 0], site_host, offsite_domain)
     for load in usable:

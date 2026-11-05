@@ -267,7 +267,20 @@ def test_decisive_cloaking_on_the_default_load():
     [b] = build_blocks([home, _load(0, "https://s.com/", "mobile-ios", final_url="https://evil.net/")], "s.com", None)
     [f] = b["findings"]
     assert f["kind"] == "cloaking" and f["severity"] == "compromised" and f["visitors"] == ["mobile-ios"]
+    assert f["snippet"]["text"] == "mobile-ios → https://evil.net/"
+    # Not decisive: only a cloaking finding of its own when the page's combined score is Suspicious.
     home.result.metadata["cloaking"]["suspicious"] = []
+    home.result.metadata["scoring_findings"] = ["Cloaking: landing depends on the browser profile (x)"]
+    assert build_blocks([home], "s.com", None) == []  # score 0.0
+    home.result.malicious_score = 0.55  # combined; the default page's own score is 0.1
+    home.result.metadata["variants"] = [{"profile": "default", "requested": True, "malicious_score": 0.1}]
+    [b] = build_blocks([home, _load(0, "https://s.com/", "mobile-ios", final_url="https://evil.net/")], "s.com", None)
+    [f] = b["findings"]
+    assert (f["kind"], f["severity"], f["visitors"], f["message"]) == (
+        "cloaking", "suspicious", ["mobile-ios"], "Some visitors are sent to a different website")
+    assert f["details"]["scoring"] == ["Cloaking: landing depends on the browser profile (x)"]
+    assert f["snippet"]["text"] == "mobile-ios → https://evil.net/"
+    home.result.metadata["cloaking"]["steered"] = []
     assert build_blocks([home], "s.com", None) == []
 
 
@@ -327,6 +340,15 @@ def test_page_score_uses_the_default_loads_own_score_after_combine():
     [b] = build_blocks([home, phone], "s.com", None)
     [f] = b["findings"]
     assert f["visitors"] == ["mobile-ios"] and f["details"]["scoring"] == ["Phone thing"]
+
+    # combine() lifted the default result to 0.55 by cloaking alone (the phone's own page is
+    # 0.2): no page_score finding, but a suspicious cloaking one for the phone.
+    home.result.malicious_score = 0.55
+    home.result.metadata["cloaking"] = {"landings": {"default": "s.com", "mobile-ios": "deals.com"}, "common": "s.com",
+                                        "steered": ["mobile-ios"], "suspicious": []}
+    phone = _load(0, "https://s.com/", "mobile-ios", score=0.2, final_url="https://deals.com/x")
+    [b] = build_blocks([home, phone], "s.com", None)
+    assert [(f["kind"], f["severity"], f["visitors"]) for f in b["findings"]] == [("cloaking", "suspicious", ["mobile-ios"])]
 
 
 def test_not_checked_and_challenge_loads_add_nothing():

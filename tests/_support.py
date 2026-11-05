@@ -162,6 +162,13 @@ def site_server():
                 self._send(200, "text/html", (
                     "<html><head><title>Obf</title></head><body><h1>Obf</h1>"
                     f"<script>{obf}{loader('clean.js')}</script></body></html>").encode())
+            elif self.path == "/m/" and "iPhone" in (self.headers.get("User-Agent") or ""):
+                self.send_response(302)  # only phones are sent to another site (a plain page there)
+                self.send_header("Location", f"http://localhost:{port}/plain/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            elif self.path == "/m/":
+                self._send(200, "text/html", b"<html><head><title>M</title></head><body><h1>M</h1></body></html>")
             elif self.path == "/to-other/":
                 self.send_response(302)
                 self.send_header("Location", f"http://localhost:{port}/about/")
