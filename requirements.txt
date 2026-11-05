@@ -13,3 +13,4 @@ python-multipart>=0.0.6
 # YARA over page HTML, frames and scripts (src/scanner/yara_scan.py). libyara; prebuilt
 # wheels, so no compiler in the image.
 yara-python==4.5.4
+tldextract>=5.1,<6
