@@ -21,8 +21,8 @@ export default function DepthGauge({ score }: { score: number }) {
   return (
     <div>
       <div className="flex items-end justify-between mb-2">
-        <span className="text-[12px] text-muted">Maliciousness</span>
-        <span className={`font-mono num text-[32px] leading-none font-medium ${valueClass}`}>
+        <span className="text-[15px] font-semibold text-ink">Maliciousness</span>
+        <span className={`font-mono num text-[24px] leading-none font-medium ${valueClass}`}>
           {score.toFixed(2)}
         </span>
       </div>
@@ -35,14 +35,14 @@ export default function DepthGauge({ score }: { score: number }) {
         aria-valuenow={Number(clamped.toFixed(2))}
         aria-label="Maliciousness"
       >
-        <div className="relative h-2 rounded-full bg-raised border border-line overflow-hidden">
+        <div className="relative h-2.5 rounded-full bg-raised border border-line overflow-hidden">
           <div className={`h-full rounded-full ${fillClass}`} style={{ width: `${(clamped * 100).toFixed(2)}%` }} />
           {/* notches at the cut-offs, cut through the fill in the card's colour */}
           {THRESHOLDS.map((t) => (
             <span key={t.at} aria-hidden="true" className="absolute top-0 bottom-0 w-[2px] -ml-px bg-surface" style={{ left: `${t.at * 100}%` }} />
           ))}
         </div>
-        <div className="relative h-[14px] mt-1.5 font-mono num text-[11px] text-faint leading-none">
+        <div className="relative h-[16px] mt-2 font-mono num text-[12px] text-muted leading-none">
           <span className="absolute left-0">0.0</span>
           {THRESHOLDS.map((t) => (
             <span key={t.at} title={`${t.name} from ${t.at}`} className="absolute -translate-x-1/2" style={{ left: `${t.at * 100}%` }}>

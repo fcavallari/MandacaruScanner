@@ -16,7 +16,7 @@ import { artifactUrl } from '../lib/api';
 import { profileLabel } from '../lib/format';
 
 /**
- * The site quick-check report, layout A (spec §6): grouped by where the code lives.
+ * The site survey report, layout A (spec §6): grouped by where the code lives.
  * The reader is a worried site owner, so the body is plain language — no ritual words.
  * Everything in a finding is page-supplied text: it is rendered as text nodes only.
  */
@@ -40,7 +40,7 @@ export function siteVerdictTone(verdict: SiteVerdict | undefined, rulesLoaded?: 
 
 export function SiteVerdictPill({ verdict, label, rulesLoaded }: { verdict: SiteVerdict | undefined; label: string; rulesLoaded?: boolean }) {
   return (
-    <span className="px-2 py-[3px] text-[11px] font-medium rounded-full whitespace-nowrap" style={PILL[siteVerdictTone(verdict, rulesLoaded)]}>
+    <span className="px-2.5 py-1 text-[13px] leading-none font-medium rounded-full whitespace-nowrap" style={PILL[siteVerdictTone(verdict, rulesLoaded)]}>
       {label}
     </span>
   );
@@ -71,15 +71,15 @@ function plural(n: number, noun: string): string {
 
 function SectionTitle({ children, meta }: { children: React.ReactNode; meta?: React.ReactNode }) {
   return (
-    <p className="text-[12px] text-muted m-0 mb-2">
+    <p className="text-[15px] font-semibold text-ink m-0 mb-2.5">
       {children}
-      {meta != null ? <span className="text-faint"> · {meta}</span> : null}
+      {meta != null ? <span className="font-normal text-muted"> · {meta}</span> : null}
     </p>
   );
 }
 
 function More({ n, noun }: { n: number; noun: string }) {
-  return n > 0 ? <li className="text-[11px] text-faint">and {plural(n, `more ${noun}`)}</li> : null;
+  return n > 0 ? <li className="text-[12px] text-faint">and {plural(n, `more ${noun}`)}</li> : null;
 }
 
 function UrlList({ urls, more, noun }: { urls: string[]; more: number; noun: string }) {
@@ -87,7 +87,7 @@ function UrlList({ urls, more, noun }: { urls: string[]; more: number; noun: str
   return (
     <ul className="m-0 p-0 list-none space-y-0.5">
       {urls.map((u) => (
-        <li key={u} className="font-mono text-[11px] text-muted break-all">
+        <li key={u} className="font-mono text-[12px] text-muted break-all">
           {u}
         </li>
       ))}
@@ -104,12 +104,12 @@ function SnippetView({ snippet }: { snippet: Snippet }) {
   const end = Math.max(start, clamp(snippet.match_end));
   return (
     <div>
-      <pre className="m-0 bg-ground border border-line rounded-chip px-3 py-2 font-mono text-[11px] leading-[1.6] text-muted whitespace-pre-wrap break-all max-h-[180px] overflow-auto">
+      <pre className="m-0 bg-ground border border-line rounded-chip px-3 py-2 font-mono text-[12px] leading-[1.6] text-muted whitespace-pre-wrap break-all max-h-[180px] overflow-auto">
         {chars.slice(0, start).join('')}
         <mark className="bg-accent/25 text-ink rounded-[2px]">{chars.slice(start, end).join('')}</mark>
         {chars.slice(end).join('')}
       </pre>
-      {typeof snippet.line === 'number' ? <p className="font-mono num text-[11px] text-faint m-0 mt-1">line {snippet.line}</p> : null}
+      {typeof snippet.line === 'number' ? <p className="font-mono num text-[12px] text-faint m-0 mt-1">line {snippet.line}</p> : null}
     </div>
   );
 }
@@ -137,31 +137,31 @@ function FindingDetails({ taskId, finding }: { taskId: string; finding: SiteFind
   const scoring = d?.scoring ?? [];
   return (
     <details>
-      <summary className="text-[12px] text-muted hover:text-ink cursor-pointer select-none w-fit">Details</summary>
-      <dl className="m-0 mt-2 space-y-1.5 text-[12px]">
+      <summary className="text-[13px] text-muted hover:text-ink cursor-pointer select-none w-fit">Details</summary>
+      <dl className="m-0 mt-2 space-y-1.5 text-[13px]">
         {d?.rule ? (
           <DetailRow label="Rule">
-            <span className="font-mono text-[11px] text-ink break-all">{d.rule}</span>
+            <span className="font-mono text-[12px] text-ink break-all">{d.rule}</span>
           </DetailRow>
         ) : null}
         {d?.signature_id != null ? (
           <DetailRow label="Signature ID">
-            <span className="font-mono num text-[11px] text-ink">{d.signature_id}</span>
+            <span className="font-mono num text-[12px] text-ink">{d.signature_id}</span>
           </DetailRow>
         ) : null}
         {d?.mechanism ? (
           <DetailRow label="Mechanism">
-            <span className="font-mono text-[11px] text-ink">{d.mechanism}</span>
+            <span className="font-mono text-[12px] text-ink">{d.mechanism}</span>
           </DetailRow>
         ) : null}
         {profiles.length > 0 ? (
           <DetailRow label="Profiles">
-            <span className="font-mono text-[11px] text-ink">{profiles.join(', ')}</span>
+            <span className="font-mono text-[12px] text-ink">{profiles.join(', ')}</span>
           </DetailRow>
         ) : null}
         {d?.initiator ? (
           <DetailRow label="Added by">
-            <span className="font-mono text-[11px] text-muted break-all">{d.initiator}</span>
+            <span className="font-mono text-[12px] text-muted break-all">{d.initiator}</span>
           </DetailRow>
         ) : null}
         {finding.loaded_by.length > 0 || finding.loaded_by_more > 0 ? (
@@ -178,7 +178,7 @@ function FindingDetails({ taskId, finding }: { taskId: string; finding: SiteFind
           <DetailRow label="Evidence">
             <ul className="m-0 p-0 list-none space-y-0.5">
               {scoring.map((s, i) => (
-                <li key={i} className="text-[11px] text-muted break-words">
+                <li key={i} className="text-[12px] text-muted break-words">
                   {s}
                 </li>
               ))}
@@ -194,7 +194,7 @@ function FindingDetails({ taskId, finding }: { taskId: string; finding: SiteFind
                   href={artifactUrl(taskId, rel)}
                   target="_blank"
                   rel="noreferrer"
-                  className="font-mono text-[11px] text-muted bg-ground border border-line rounded-full px-2.5 py-0.5 hover:border-accent hover:text-ink transition-colors"
+                  className="font-mono text-[12px] text-muted bg-ground border border-line rounded-full px-2.5 py-0.5 hover:border-accent hover:text-ink transition-colors"
                 >
                   {shotLabel(rel)}
                 </a>
@@ -218,15 +218,15 @@ function FindingView({ taskId, finding, block }: { taskId: string; finding: Site
     <li className="py-3 first:pt-0 last:pb-0 border-b border-rule last:border-b-0 flex flex-col gap-2">
       <div className="flex items-baseline gap-2.5">
         <span
-          className="px-2 py-[2px] text-[11px] font-medium rounded-full whitespace-nowrap flex-none"
+          className="px-2.5 py-1 text-[13px] leading-none font-medium rounded-full whitespace-nowrap flex-none"
           style={compromised ? PILL.negative : PILL.warning}
         >
           {compromised ? 'Compromised' : 'Suspicious'}
         </span>
-        <p className="text-[13px] text-ink m-0 break-words min-w-0">{finding.message}</p>
+        <p className="text-[14px] text-ink m-0 break-words min-w-0">{finding.message}</p>
       </div>
       {finding.snippet ? <SnippetView snippet={finding.snippet} /> : null}
-      <div className="text-[12px] text-muted space-y-0.5">
+      <div className="text-[13px] text-muted space-y-0.5">
         {origin ? <p className="m-0">{origin}</p> : null}
         {finding.all_visitors ? (
           <p className="m-0">Seen by every visitor type</p>
@@ -236,7 +236,7 @@ function FindingView({ taskId, finding, block }: { taskId: string; finding: Site
       </div>
       {showPages ? (
         <div>
-          <p className="text-[11px] text-faint m-0 mb-0.5">{pagesLabel}</p>
+          <p className="text-[12px] text-faint m-0 mb-0.5">{pagesLabel}</p>
           <UrlList urls={pages} more={finding.pages_more} noun="page" />
         </div>
       ) : null}
@@ -250,13 +250,13 @@ function BlockView({ taskId, block }: { taskId: string; block: SiteBlock }) {
     <div className="border border-line rounded-card">
       {block.probe ? (
         <div className="px-4 py-2.5 border-b border-rule">
-          <p className="text-[12px] text-ink m-0">{PROBE_LABEL}</p>
-          <p className="font-mono text-[11px] text-faint m-0 break-all">{block.location}</p>
+          <p className="text-[13px] text-ink m-0">{PROBE_LABEL}</p>
+          <p className="font-mono text-[12px] text-faint m-0 break-all">{block.location}</p>
         </div>
       ) : (
         <div className="px-4 py-2.5 border-b border-rule flex items-baseline gap-2.5">
-          <span className="text-[11px] text-faint flex-none">{block.location_kind === 'script' ? 'Script' : 'Page'}</span>
-          <span className="font-mono text-[12px] text-ink break-all min-w-0">{block.location}</span>
+          <span className="text-[12px] text-faint flex-none">{block.location_kind === 'script' ? 'Script' : 'Page'}</span>
+          <span className="font-mono text-[13px] text-ink break-all min-w-0">{block.location}</span>
         </div>
       )}
       <ul className="m-0 p-0 list-none px-4 py-3">
@@ -264,7 +264,7 @@ function BlockView({ taskId, block }: { taskId: string; block: SiteBlock }) {
           <FindingView key={f.id} taskId={taskId} finding={f} block={block} />
         ))}
         {block.findings_more > 0 ? (
-          <li className="pt-2 text-[11px] text-faint">and {plural(block.findings_more, 'more finding')} here</li>
+          <li className="pt-2 text-[12px] text-faint">and {plural(block.findings_more, 'more finding')} here</li>
         ) : null}
       </ul>
     </div>
@@ -280,8 +280,8 @@ function HostView({ host }: { host: ExternalScriptHost }) {
       {/* the summary stays display:list-item so it keeps its disclosure marker */}
       <summary className={`px-4 py-2 cursor-pointer select-none text-faint hover:bg-raised/60 transition-colors ${tied ? 'shadow-[inset_1px_0_0_var(--accent)]' : ''}`}>
         <span className="inline-flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5 max-w-[calc(100%-1.5rem)] align-baseline">
-          <span className="font-mono text-[12px] text-ink break-all min-w-0">{host.host}</span>
-          <span className="font-mono num text-[11px] text-faint whitespace-nowrap">
+          <span className="font-mono text-[13px] text-ink break-all min-w-0">{host.host}</span>
+          <span className="font-mono num text-[12px] text-faint whitespace-nowrap">
             {plural(host.urls.length, 'script')}
             {host.your_domain ? ' · your domain' : ''}
             {tied ? ' · tied to a finding' : ''}
@@ -290,7 +290,7 @@ function HostView({ host }: { host: ExternalScriptHost }) {
       </summary>
       <ul className="m-0 p-0 list-none px-4 pb-3 pt-1 space-y-2">
         {host.urls.map((u) => (
-          <li key={u.url} className="text-[11px]">
+          <li key={u.url} className="text-[12px]">
             <p className="font-mono text-muted m-0 break-all">{u.url}</p>
             <p className="text-faint m-0">
               {u.how === 'script' ? `Added by a script${u.injected_by ? ` (${u.injected_by})` : ''}` : 'In the page HTML'}
@@ -316,14 +316,14 @@ function ExternalScripts({ data }: { data: SiteReportData['external_scripts'] })
       </SectionTitle>
       {hosts.length > 0 ? (
         <>
-          <p className="text-[12px] text-faint m-0 mb-2">Scripts your pages load from other websites. Listed for you to recognise, not judged.</p>
+          <p className="text-[13px] text-faint m-0 mb-2">Scripts your pages load from other websites. Listed for you to recognise, not judged.</p>
           <div className="border border-line rounded-card overflow-hidden">
             {hosts.map((h) => (
               <HostView key={h.host} host={h} />
             ))}
           </div>
           {data.hosts_more > 0 || data.urls_more > 0 ? (
-            <p className="text-[11px] text-faint m-0 mt-1.5">
+            <p className="text-[12px] text-faint m-0 mt-1.5">
               Not listed: {[data.hosts_more > 0 ? plural(data.hosts_more, 'more website') : '', data.urls_more > 0 ? plural(data.urls_more, 'more script') : '']
                 .filter(Boolean)
                 .join(', ')}
@@ -346,12 +346,12 @@ function LoadLine({ taskId, load }: { taskId: string; load: SiteLoad }) {
         ? "didn't finish loading; what loaded was checked"
         : (load.reason && REASONS[load.reason]) || 'not checked';
   return (
-    <li className="flex items-baseline gap-2 text-[12px]">
+    <li className="flex items-baseline gap-2 text-[13px]">
       <span className="text-ink w-[120px] flex-none truncate">{profileLabel(load.profile)}</span>
       <span className={`${tone} min-w-0`}>{words}</span>
-      {load.status != null ? <span className="font-mono num text-[11px] text-faint">{load.status}</span> : null}
+      {load.status != null ? <span className="font-mono num text-[12px] text-faint">{load.status}</span> : null}
       {load.screenshot ? (
-        <a href={artifactUrl(taskId, load.screenshot)} target="_blank" rel="noreferrer" className="text-[11px] text-muted hover:text-accent transition-colors ml-auto flex-none">
+        <a href={artifactUrl(taskId, load.screenshot)} target="_blank" rel="noreferrer" className="text-[12px] text-muted hover:text-accent transition-colors ml-auto flex-none">
           Screenshot
         </a>
       ) : null}
@@ -364,13 +364,13 @@ function PageView({ taskId, page }: { taskId: string; page: SiteCheckedPage }) {
     <li className="px-4 py-2.5 border-b border-rule last:border-b-0">
       {page.probe ? (
         <div className="mb-1">
-          <p className="text-[12px] text-ink m-0">{PROBE_LABEL}</p>
-          <p className="font-mono text-[11px] text-faint m-0 break-all">{page.url}</p>
+          <p className="text-[13px] text-ink m-0">{PROBE_LABEL}</p>
+          <p className="font-mono text-[12px] text-faint m-0 break-all">{page.url}</p>
         </div>
       ) : (
-        <p className="font-mono text-[12px] text-ink m-0 mb-1 break-all">
+        <p className="font-mono text-[13px] text-ink m-0 mb-1 break-all">
           {page.url}
-          {page.index === 0 ? <span className="font-sans text-[11px] text-faint"> · homepage</span> : null}
+          {page.index === 0 ? <span className="font-sans text-[12px] text-faint"> · homepage</span> : null}
         </p>
       )}
       <ul className="m-0 p-0 list-none space-y-0.5">
@@ -412,7 +412,7 @@ function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReport
         </ul>
         {folded.length > 0 ? (
           <details className="border-t border-rule">
-            <summary className="px-4 py-2 text-[12px] text-muted hover:text-ink cursor-pointer select-none">
+            <summary className="px-4 py-2 text-[13px] text-muted hover:text-ink cursor-pointer select-none">
               {plural(folded.length, shown.length > 0 ? 'other page' : 'page')} clean
             </summary>
             <ul className="m-0 p-0 list-none border-t border-rule">
@@ -423,7 +423,7 @@ function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReport
           </details>
         ) : null}
       </div>
-      <ul className="m-0 mt-2 p-0 list-none text-[12px] text-muted space-y-0.5">
+      <ul className="m-0 mt-2 p-0 list-none text-[13px] text-muted space-y-0.5">
         <li>
           {checked && checked.rules > 0 ? (
             <>
@@ -444,7 +444,7 @@ function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReport
         ) : null}
         {blocked.length > 0 ? (
           <li className="text-faint">
-            Requests to private addresses were blocked: <span className="font-mono text-[11px] break-all">{blocked.join(', ')}</span>
+            Requests to private addresses were blocked: <span className="font-mono text-[12px] break-all">{blocked.join(', ')}</span>
           </li>
         ) : null}
       </ul>
@@ -471,15 +471,15 @@ function ChallengeAlert({ data }: { data: SiteChallenge }) {
   const all = data.loads >= data.of;
   return (
     <div role="note" className="mt-3 rounded-card border border-warning/40 bg-warning/[0.06] px-4 py-3">
-      <p className="text-[13px] font-medium text-warning m-0">
+      <p className="text-[15px] font-semibold text-warning m-0">
         {vendor ? `${vendor}'s bot check blocked our scanner` : 'A bot check blocked our scanner'}
       </p>
-      <p className="text-[12px] text-muted m-0 mt-1 leading-relaxed">
+      <p className="text-[14px] text-muted m-0 mt-1.5 leading-relaxed">
         {all ? 'It blocked every check' : `It blocked ${data.loads} of ${data.of} checks`}
         {data.homepage && !all ? ', including your homepage' : ''}, so we couldn't see what your visitors see
         {all || data.homepage ? '' : ' on those pages'}. A bot check is not a sign of a hack.
       </p>
-      <p className="text-[12px] text-muted m-0 mt-2 leading-relaxed">
+      <p className="text-[14px] text-muted m-0 mt-2 leading-relaxed">
         {data.vendor === 'cloudflare' ? (
           <>
             To check your site, open your Cloudflare dashboard and, for a few minutes, turn off{' '}
@@ -500,7 +500,7 @@ function ChallengeAlert({ data }: { data: SiteChallenge }) {
 export default function SiteReport({ taskId, result }: { taskId: string; result: ScanResultData }) {
   const report = result.site;
   if (!report) {
-    return <p className="text-[13px] text-muted m-0">This site check has no report.</p>;
+    return <p className="text-[14px] text-muted m-0">This site survey has no report.</p>;
   }
   const v = report.verdict;
   const rest = v.summary.startsWith(v.label) ? v.summary.slice(v.label.length) : ` · ${v.summary}`;
@@ -513,19 +513,19 @@ export default function SiteReport({ taskId, result }: { taskId: string; result:
     <div className="flex flex-col gap-6">
       {/* 1. the verdict */}
       <div>
-        <p className="text-[18px] leading-snug font-semibold text-ink m-0">
+        <p className="text-[20px] leading-snug font-semibold text-ink m-0">
           <span className={{ negative: 'text-negative', warning: 'text-warning', neutral: 'text-ink', positive: 'text-positive' }[siteVerdictTone(v.verdict, v.rules_loaded)]}>
             {v.label}
           </span>
           <span className="text-muted font-normal">{rest}</span>
         </p>
         {report.redirected_from ? (
-          <p className="text-[12px] text-muted m-0 mt-1">
+          <p className="text-[13px] text-muted m-0 mt-1">
             Scanned <span className="font-mono text-ink">{report.site}</span> (<span className="font-mono">{report.redirected_from}</span> redirects here)
           </p>
         ) : null}
         {(report.notes ?? []).map((n, i) => (
-          <p key={i} className="text-[12px] text-faint m-0 mt-1">
+          <p key={i} className="text-[13px] text-faint m-0 mt-1">
             {n}
           </p>
         ))}
@@ -537,7 +537,7 @@ export default function SiteReport({ taskId, result }: { taskId: string; result:
             href={result.cleanup_url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 mt-3 text-[13px] font-medium text-accent hover:text-accent/85 border-b border-accent/40 hover:border-accent transition-colors"
+            className="inline-flex items-center gap-1.5 mt-3 text-[14px] font-medium text-accent hover:text-accent/85 border-b border-accent/40 hover:border-accent transition-colors"
           >
             {v.verdict === 'compromised' ? 'Clean it up with Elderward' : 'If you think this is a hack, Elderward can check and clean it'}
             <span aria-hidden="true">→</span>
@@ -558,7 +558,7 @@ export default function SiteReport({ taskId, result }: { taskId: string; result:
             ))}
           </div>
           {report.blocks_more > 0 || (report.findings_more_total ?? 0) > 0 ? (
-            <p className="text-[11px] text-faint m-0 mt-1.5">
+            <p className="text-[12px] text-faint m-0 mt-1.5">
               Not shown:{' '}
               {[report.blocks_more > 0 ? plural(report.blocks_more, 'more place') + ' with findings' : '',
                 (report.findings_more_total ?? 0) > 0 ? `+${plural(report.findings_more_total ?? 0, 'more finding')}` : '']

@@ -25,8 +25,8 @@ export function EmptyWell({ title, sub, className = '' }: { title: string; sub?:
       role="status"
       className={`border border-dashed border-control rounded-card flex flex-col items-center justify-center text-center px-6 ${className}`}
     >
-      <p className="text-[13px] text-muted m-0">{title}</p>
-      {sub ? <p className="text-[12px] text-faint m-0 mt-1">{sub}</p> : null}
+      <p className="text-[14px] text-muted m-0">{title}</p>
+      {sub ? <p className="text-[13px] text-faint m-0 mt-1">{sub}</p> : null}
     </div>
   );
 }
@@ -36,12 +36,12 @@ export function ErrorNote({ message, onRetry }: { message: string; onRetry?: () 
   return (
     <div role="alert" className="flex items-center gap-2.5 px-1 py-1">
       <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-negative flex-none" />
-      <p className="text-[12px] text-muted m-0 flex-1">{message}</p>
+      <p className="text-[13px] text-muted m-0 flex-1">{message}</p>
       {onRetry ? (
         <button
           type="button"
           onClick={onRetry}
-          className="text-[12px] font-medium text-accent bg-transparent border-0 p-0 cursor-pointer"
+          className="text-[13px] font-medium text-accent bg-transparent border-0 p-0 cursor-pointer"
         >
           Retry
         </button>

@@ -59,7 +59,7 @@ function Status({ task }: { task: TaskState }) {
 
 function Key({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="inline-flex h-[18px] min-w-[18px] px-1 items-center justify-center font-mono text-[11px] leading-none text-faint border border-control rounded-[4px]">
+    <kbd className="inline-flex h-[18px] min-w-[18px] px-1 items-center justify-center font-mono text-[12px] leading-none text-faint border border-control rounded-[4px]">
       {children}
     </kbd>
   );
@@ -69,20 +69,20 @@ function Key({ children }: { children: React.ReactNode }) {
 function Landing({ landing, finalUrl }: { landing: string; finalUrl: string }) {
   return (
     <>
-      <span aria-hidden="true" className="font-mono text-[11px] text-muted">→</span>
+      <span aria-hidden="true" className="font-mono text-[12px] text-muted">→</span>
       <span className="sr-only">landed on </span>
-      <span className="font-mono text-[11px] text-muted truncate min-w-0 [direction:rtl] text-left" title={finalUrl}>
+      <span className="font-mono text-[12px] text-muted truncate min-w-0 [direction:rtl] text-left" title={finalUrl}>
         <bdi dir="ltr">{shortHost(landing, 40)}</bdi>
       </span>
     </>
   );
 }
 
-/** Which kind of job a row is: a whole-site check or a single-URL probe. */
+/** Which kind of job a row is: a whole-site survey or a single-URL probe. */
 function KindTag({ kind }: { kind: TaskState['kind'] }) {
   return (
     <span
-      className="font-mono text-[10px] leading-none tracking-[0.06em] px-1.5 py-[3px] rounded-chip flex-none translate-y-[-1px]"
+      className="font-mono text-[12px] leading-none tracking-[0.06em] px-1.5 py-[3px] rounded-chip flex-none translate-y-[-1px]"
       style={{ background: 'var(--pill-neutral-bg)', color: 'var(--pill-neutral-ink)' }}
     >
       {kind === 'site' ? 'SITE' : 'URL'}
@@ -94,7 +94,7 @@ function Row({ task, selected, onSelect, now }: { task: TaskState; selected: boo
   const site = task.kind === 'site';
   const host = (site && task.result?.site?.site) || hostnameOf(task.target_url) || task.target_url;
   const done = task.status === 'completed' && task.result;
-  // a site check has a verdict, not a score, persona, landing or hop count
+  // a site survey has a verdict, not a score, persona, landing or hop count
   const score = done && !site ? task.result!.malicious_score ?? 0 : null;
   const tone = score != null ? scoreTone(score) : 'ink';
   const landing = done && !site ? hostnameOf(task.result!.final_url) : '';
@@ -107,19 +107,19 @@ function Row({ task, selected, onSelect, now }: { task: TaskState; selected: boo
         aria-current={selected ? 'true' : undefined}
         onClick={() => onSelect(task.task_id)}
         title={task.target_url}
-        className={`w-full text-left px-5 py-2.5 cursor-pointer transition-colors border-0 block
+        className={`w-full text-left px-5 py-3 cursor-pointer transition-colors border-0 block
           ${selected ? 'bg-active shadow-[inset_1px_0_0_var(--accent)]' : 'bg-transparent hover:bg-raised/60'}`}
       >
         <span className="flex items-baseline justify-between gap-3">
           <span className="flex items-baseline gap-2 min-w-0">
             <KindTag kind={task.kind} />
-            <span className={`text-[13px] truncate min-w-0 ${selected ? 'text-ink font-medium' : 'text-ink'}`}>{shortHost(host, 40)}</span>
+            <span className={`text-[14px] truncate min-w-0 ${selected ? 'text-ink font-medium' : 'text-ink'}`}>{shortHost(host, 40)}</span>
           </span>
-          <span className={`font-mono num text-[13px] flex-none ${tone === 'negative' ? 'text-negative' : tone === 'warning' ? 'text-warning' : score != null ? 'text-ink' : 'text-faint'}`}>
+          <span className={`font-mono num text-[14px] flex-none ${tone === 'negative' ? 'text-negative' : tone === 'warning' ? 'text-warning' : score != null ? 'text-ink' : 'text-faint'}`}>
             {score != null ? score.toFixed(2) : '—'}
           </span>
         </span>
-        <span className="flex items-baseline justify-between gap-3 mt-1 text-[12px]">
+        <span className="flex items-baseline justify-between gap-3 mt-1 text-[13px]">
           <span className="flex items-baseline gap-1.5 min-w-0 whitespace-nowrap">
             <Status task={task} />
             {site ? null : (
@@ -135,7 +135,7 @@ function Row({ task, selected, onSelect, now }: { task: TaskState; selected: boo
               </span>
             ) : null}
           </span>
-          <span className="font-mono num text-[11px] text-faint whitespace-nowrap flex-none">
+          <span className="font-mono num text-[12px] text-faint whitespace-nowrap flex-none">
             {redirects != null ? `${redirects} hop${redirects === 1 ? '' : 's'} · ` : null}
             {relativeTime(task.created_at, now)}
           </span>
@@ -170,11 +170,11 @@ export default function ScanList({
   return (
     <section aria-label="Recent probes" className="bg-surface border border-line rounded-card overflow-hidden h-full flex flex-col">
       <div className="flex items-baseline justify-between px-5 pt-5 pb-3 border-b border-rule">
-        <h2 className="text-[16px] font-semibold text-ink m-0">
-          Recent probes{phase === 'ready' ? <span className="font-mono num text-[13px] font-normal text-faint"> · {tasks.length}</span> : null}
+        <h2 className="text-[18px] font-semibold text-ink m-0">
+          Recent probes{phase === 'ready' ? <span className="font-mono num text-[14px] font-normal text-faint"> · {tasks.length}</span> : null}
         </h2>
         {phase === 'ready' && tasks.length > 0 ? (
-          <span className="flex items-center gap-3 text-[11px] text-faint">
+          <span className="flex items-center gap-3 text-[12px] text-faint">
             {tasks.length > MAX_ROWS ? <span>showing {MAX_ROWS} of {tasks.length}</span> : null}
             {/* keyboard hint; phones have no keyboard */}
             <span className="hidden md:flex items-center gap-1" title="Move through the list with j and k">

@@ -21,7 +21,7 @@ type Phase = 'loading' | 'ready' | 'error';
 function FindingLine({ text }: { text: string }) {
   // red is a signal, not a texture: only the failure clause carries it
   return (
-    <p className="text-[13px] text-muted m-0 mt-1.5">
+    <p className="text-[14px] text-muted m-0 mt-2">
       {text.split(' · ').map((part, i) => (
         <React.Fragment key={i}>
           {i > 0 ? <span className="text-faint"> · </span> : null}
@@ -114,7 +114,7 @@ export default function Dashboard() {
     }
   };
 
-  /** Same contract for a site check; polling and the list treat it like any other job. */
+  /** Same contract for a site survey; polling and the list treat it like any other job. */
   const handleSiteScan = async (site: string): Promise<string | null> => {
     try {
       const taskId = await startSiteScan(site);
@@ -209,40 +209,40 @@ export default function Dashboard() {
   return (
     <div className="max-w-[1408px] mx-auto px-4 sm:px-8 pt-6 sm:pt-7 pb-12">
       {/* title row: the product is named, then a noun, then the finding */}
-      <div className="flex items-start justify-between gap-4 mb-6">
-        <div className="min-w-0">
-          <p className="flex items-center gap-2 m-0 mb-1.5">
-            <Mark size={14} className="text-accent" />
-            <span className="font-display text-[12px] tracking-[0.18em] text-muted">PNAKOTIC</span>
-          </p>
-          <h1 className="text-[26px] leading-tight font-bold text-ink m-0">Observatory</h1>
-          {phase === 'ready' ? <FindingLine text={finding} /> : null}
+      <div className="flex items-start justify-between gap-4 mb-7">
+        {/* the lockup: the sigil and the wordmark are the title; the screen's noun sits beside it */}
+        <div className="min-w-0 flex items-center gap-3.5 sm:gap-4">
+          <Mark size={44} className="text-accent flex-none hidden sm:block" />
+          <Mark size={36} className="text-accent flex-none sm:hidden" />
+          <div className="min-w-0">
+            <h1 className="m-0 flex items-baseline gap-x-3 gap-y-0.5 flex-wrap leading-none">
+              <span className="font-display text-[26px] sm:text-[30px] font-semibold tracking-[0.06em] text-ink">PNAKOTIC</span>
+              <span className="text-[17px] sm:text-[18px] font-medium text-muted">Observatory</span>
+            </h1>
+            {phase === 'ready' ? <FindingLine text={finding} /> : null}
+          </div>
         </div>
 
         {lastUpdated ? (
-          <div className="flex items-center gap-2 flex-none pt-1">
-            <span className="font-mono num text-[11px] text-faint whitespace-nowrap">Updated {clockTime(lastUpdated)}</span>
+          <div className="flex items-center gap-2.5 flex-none pt-2">
+            <span className="hidden sm:inline font-mono num text-[13px] text-muted whitespace-nowrap">Updated {clockTime(lastUpdated)}</span>
             <button
               type="button"
               onClick={() => load(false)}
               aria-label="Refresh"
               title="Refresh"
-              className="w-[28px] h-[28px] flex items-center justify-center rounded-full border border-control bg-transparent text-muted hover:text-ink hover:border-faint transition-colors cursor-pointer"
+              className="w-[32px] h-[32px] flex items-center justify-center rounded-full border border-control bg-transparent text-muted hover:text-ink hover:border-faint transition-colors cursor-pointer"
             >
-              <RefreshCw size={13} strokeWidth={1.5} />
+              <RefreshCw size={15} strokeWidth={1.5} />
             </button>
           </div>
         ) : null}
       </div>
 
-      <KpiStrip kpis={kpis} phase={phase} onRetry={retry} />
-
-      <div className="mt-6">
-        <ScanForm onSubmit={handleScan} onSubmitSite={handleSiteScan} />
-      </div>
+      <ScanForm onSubmit={handleScan} onSubmitSite={handleSiteScan} />
 
       {/* main row: 12 cols, gap 24 — left 8 (the selected probe) + right 4 (the list that
-          picks it); sums to the canvas. Intel's aggregates run full width beneath. */}
+          picks it); sums to the canvas. Intel's aggregates and the totals run full width beneath. */}
       <div className="mt-6 grid grid-cols-1 xl:grid-cols-12 gap-6 items-stretch">
         <div className="xl:col-span-8 min-w-0">
           <SelectedScan task={selected} phase={phase} onRetry={retry} now={now} />
@@ -254,6 +254,12 @@ export default function Dashboard() {
 
       <div className="mt-6">
         <IntelPanel intel={intel} phase={phase} onRetry={retry} />
+      </div>
+
+      {/* running totals across every probe: useful for a team watching many sites over time,
+          not for the one-off check, so they close the page instead of opening it */}
+      <div className="mt-6">
+        <KpiStrip kpis={kpis} phase={phase} onRetry={retry} />
       </div>
     </div>
   );

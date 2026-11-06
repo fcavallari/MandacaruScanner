@@ -10,11 +10,11 @@ import { Bar, ErrorNote } from './states';
 function Cell({ label, value, sub, tone = 'ink' }: { label: string; value: string; sub?: string; tone?: 'ink' | 'negative' | 'warning' }) {
   const valueClass = tone === 'negative' ? 'text-negative' : tone === 'warning' ? 'text-warning' : 'text-ink';
   return (
-    <div className="px-5 py-3.5 min-w-0">
-      <p className="text-[12px] text-muted m-0">{label}</p>
-      <div className="flex items-baseline gap-2 mt-1.5">
-        <span className={`font-mono num text-[20px] leading-none font-medium ${valueClass}`}>{value}</span>
-        {sub ? <span className="text-[11px] text-faint leading-none">{sub}</span> : null}
+    <div className="px-6 py-4 min-w-0">
+      <p className="text-[13px] text-muted m-0">{label}</p>
+      <div className="flex items-baseline gap-2.5 mt-2">
+        <span className={`font-mono num text-[28px] leading-none font-medium ${valueClass}`}>{value}</span>
+        {sub ? <span className="text-[13px] text-muted leading-none">{sub}</span> : null}
       </div>
     </div>
   );
@@ -34,7 +34,7 @@ export default function KpiStrip({ kpis, phase, onRetry }: { kpis: Kpis; phase: 
       {phase === 'loading' ? (
         <>
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className={`px-5 py-3.5 ${SEAMS[i]}`}>
+            <div key={i} className={`px-6 py-4 ${SEAMS[i]}`}>
               <Bar h={12} w="70%" />
               <div className="mt-3">
                 <Bar h={20} w="45%" />
