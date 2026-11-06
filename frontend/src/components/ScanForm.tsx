@@ -12,14 +12,14 @@ const PROFILES = [
 type Mode = 'site' | 'url';
 
 const MODES: Array<{ value: Mode; label: string }> = [
-  { value: 'site', label: 'Site check' },
+  { value: 'site', label: 'Site survey' },
   { value: 'url', label: 'URL probe' },
 ];
 
-const control = 'h-[44px] sm:h-[34px] bg-ground border rounded-full outline-none focus:border-accent transition-colors';
+const control = 'h-[44px] sm:h-[40px] bg-ground border rounded-full outline-none focus:border-accent transition-colors';
 
 /**
- * The job the screen exists for. Two kinds: Site check (the default) quick-checks a whole
+ * The job the screen exists for. Two kinds: Site survey (the default) quick-checks a whole
  * site from its homepage; URL probe is the single-URL descent. The chosen kind carries the
  * 1px accent line exactly as wide as its label (the style's move). Each form clears its
  * field only once the job was accepted, so a rejected input can be fixed.
@@ -35,7 +35,7 @@ export default function ScanForm({
 
   return (
     <div className="bg-surface border border-line rounded-card p-3">
-      <div role="radiogroup" aria-label="Kind of scan" className="flex items-center gap-5 px-1 mb-2.5">
+      <div role="radiogroup" aria-label="Kind of scan" className="flex items-center gap-6 px-1 mb-3">
         {MODES.map((m) => {
           const on = m.value === mode;
           return (
@@ -45,7 +45,7 @@ export default function ScanForm({
               role="radio"
               aria-checked={on}
               onClick={() => setMode(m.value)}
-              className={`bg-transparent border-0 p-0 pb-1 text-[12px] cursor-pointer transition-colors
+              className={`bg-transparent border-0 p-0 pb-1.5 text-[15px] cursor-pointer transition-colors
                 ${on ? 'text-ink font-medium shadow-[inset_0_-1px_0_var(--accent)]' : 'text-muted hover:text-ink'}`}
             >
               {m.label}
@@ -59,7 +59,7 @@ export default function ScanForm({
 }
 
 /**
- * Site check: one field, a bare host or a URL; the API normalises it to the homepage.
+ * Site survey: one field, a bare host or a URL; the API normalises it to the homepage.
  * The field is text, not url (a bare host like example.com is the expected input), and it
  * keeps the #probe-target id so "/" focuses whichever prompt is shown.
  */
@@ -107,7 +107,7 @@ function SiteForm({ onSubmit }: { onSubmit: (site: string) => Promise<string | n
             aria-label="Site to check"
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? 'scan-form-error' : undefined}
-            className={`${control} peer w-full pl-9 pr-10 font-mono text-[14px] sm:text-[13px] text-ink placeholder:text-faint ${error ? 'border-negative' : 'border-control'}`}
+            className={`${control} peer w-full pl-9 pr-10 font-mono text-[15px] text-ink placeholder:text-faint ${error ? 'border-negative' : 'border-control'}`}
           />
           {site ? null : <SlashHint />}
         </div>
@@ -122,7 +122,7 @@ function SlashHint() {
   return (
     <kbd
       title="Press / to focus"
-      className="hidden sm:flex absolute right-3 top-1/2 -translate-y-1/2 h-[18px] min-w-[18px] px-1 items-center justify-center font-mono text-[11px] leading-none text-faint border border-control rounded-[4px] pointer-events-none peer-focus:hidden"
+      className="hidden sm:flex absolute right-3 top-1/2 -translate-y-1/2 h-[18px] min-w-[18px] px-1 items-center justify-center font-mono text-[12px] leading-none text-faint border border-control rounded-[4px] pointer-events-none peer-focus:hidden"
     >
       /
     </kbd>
@@ -135,7 +135,7 @@ function SummonButton({ busy, className = '' }: { busy: boolean; className?: str
       type="submit"
       disabled={busy}
       aria-busy={busy}
-      className={`${className} h-[44px] sm:h-[34px] px-5 rounded-full text-[13px] sm:text-[12px] font-semibold tracking-wide flex items-center justify-center gap-2 whitespace-nowrap transition-colors
+      className={`${className} h-[44px] sm:h-[40px] px-6 rounded-full text-[15px] font-semibold tracking-wide flex items-center justify-center gap-2 whitespace-nowrap transition-colors
         ${busy ? 'bg-accent/60 text-ground cursor-wait' : 'bg-accent text-[#08120d] hover:bg-accent/85 active:bg-accent/75 cursor-pointer'}`}
     >
       {busy ? (
@@ -152,7 +152,7 @@ function SummonButton({ busy, className = '' }: { busy: boolean; className?: str
 
 function FormError({ error }: { error: string }) {
   return (
-    <p id="scan-form-error" role="alert" className="flex items-baseline gap-2 text-[12px] text-ink m-0 mt-2.5 px-1">
+    <p id="scan-form-error" role="alert" className="flex items-baseline gap-2 text-[13px] text-ink m-0 mt-2.5 px-1">
       <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-negative flex-none translate-y-[-1px]" />
       {error}
     </p>
@@ -213,7 +213,7 @@ function ProbeForm({
             aria-label="Target URL"
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? 'scan-form-error' : undefined}
-            className={`${control} peer w-full pl-9 pr-10 font-mono text-[14px] sm:text-[13px] text-ink placeholder:text-faint ${error ? 'border-negative' : 'border-control'}`}
+            className={`${control} peer w-full pl-9 pr-10 font-mono text-[15px] text-ink placeholder:text-faint ${error ? 'border-negative' : 'border-control'}`}
           />
           {url ? null : <SlashHint />}
         </div>
@@ -223,7 +223,7 @@ function ProbeForm({
             value={profile}
             onChange={(e) => setProfile(e.target.value)}
             aria-label="Browser profile"
-            className={`${control} w-full px-3.5 pr-9 border-control text-[13px] sm:text-[12px] text-muted cursor-pointer appearance-none`}
+            className={`${control} w-full px-3.5 pr-9 border-control text-[14px] text-ink cursor-pointer appearance-none`}
           >
             {PROFILES.map((p) => (
               <option key={p.value} value={p.value} className="bg-surface text-ink">

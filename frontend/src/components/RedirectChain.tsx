@@ -116,7 +116,7 @@ function Marks({ marks }: { marks: string[] }) {
       {marks.map((m) => (
         <span
           key={m}
-          className="px-2 py-[2px] text-[11px] rounded-full whitespace-nowrap"
+          className="px-2.5 py-[3px] text-[13px] rounded-full whitespace-nowrap"
           style={{ background: 'var(--pill-warning-bg)', color: 'var(--warning)' }}
         >
           {m}
@@ -146,11 +146,11 @@ function NodeRow({ node, depth, live, hasNext }: { node: GNode; depth: number; l
         <div className="flex items-baseline justify-between gap-3">
           <span
             title={node.url}
-            className={`font-mono text-[13px] leading-[19px] break-all ${node.isLanding ? 'text-ink font-medium' : 'text-muted'}`}
+            className={`font-mono text-[14px] leading-[19px] break-all ${node.isLanding ? 'text-ink font-medium' : 'text-muted'}`}
           >
             {node.host}
           </span>
-          <span className="text-[11px] text-faint whitespace-nowrap flex-none">
+          <span className="text-[12px] text-faint whitespace-nowrap flex-none">
             {first ? (node.isLanding ? 'Origin · landed' : 'Origin') : (
               <>
                 {node.isLanding ? 'Landed · ' : null}
@@ -161,7 +161,7 @@ function NodeRow({ node, depth, live, hasNext }: { node: GNode; depth: number; l
           </span>
         </div>
         {node.isLanding && !first ? (
-          <p className="font-mono text-[11px] text-faint m-0 mt-0.5 truncate" title={node.url}>
+          <p className="font-mono text-[12px] text-faint m-0 mt-0.5 truncate" title={node.url}>
             {node.url}
           </p>
         ) : null}
@@ -176,7 +176,7 @@ function EdgeRow({ edge, live }: { edge: GEdge; live: boolean }) {
     <li className="relative grid grid-cols-[20px_minmax(0,1fr)] gap-x-2.5">
       <span aria-hidden="true" className={`absolute left-[9.5px] top-0 bottom-0 w-px ${live ? 'bg-accent/60' : 'bg-control'}`} />
       <span />
-      <p className="text-[11px] leading-none text-faint m-0 py-2">
+      <p className="text-[12px] leading-none text-faint m-0 py-2">
         {edge.status != null ? <span className="font-mono num text-muted">{edge.status}</span> : null}
         {edge.status != null && edge.label ? ' · ' : null}
         {edge.label || 'Navigated without a 3xx'}
@@ -214,7 +214,7 @@ export default function RedirectChain({
         ))}
       </ol>
       {graph.nodes.length === 1 ? (
-        <p className="text-[12px] text-faint m-0 mt-2 pl-[30px]">No redirect observed: it landed where it started.</p>
+        <p className="text-[13px] text-faint m-0 mt-2 pl-[30px]">No redirect observed: it landed where it started.</p>
       ) : null}
     </div>
   );

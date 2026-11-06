@@ -18,7 +18,7 @@ function Rail() {
       className="hidden md:flex fixed left-0 top-0 bottom-0 w-[56px] border-r border-line bg-ground flex-col items-center py-4 z-20"
     >
       <a href="#" aria-label="Pnakotic" title="Pnakotic" className="text-accent block mb-6">
-        <Mark size={24} />
+        <Mark size={32} />
       </a>
 
       {/* the one destination: this screen */}

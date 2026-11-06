@@ -14,14 +14,14 @@
   --surface: #0b100e;  /* cards, darker than ground */
   --raised: #17201b;   /* hover / raised step */
   --active: #131a16;   /* selected fill, one step off surface */
-  --border: #1e2b26;   /* structural lines, ~1.3:1 on ground */
-  --rule: #141c18;     /* row rules, one step off surface */
-  --control: #35463d;  /* interactive outlines, brighter */
+  --border: #2a3b34;   /* structural lines, ~1.55:1 on ground: panels read off the ground */
+  --rule: #1c2722;     /* row rules, one step off surface */
+  --control: #43574d;  /* interactive outlines, brighter than --border */
 
-  /* text — three tiers, all >= 4.5:1 on surface */
+  /* text — three tiers, all >= 4.5:1 on surface; muted and faint kept far apart */
   --text: #e9f2ec;     /* green-tinted white */
-  --muted: #8fa39a;    /* secondary, ~7:1 */
-  --faint: #7a8d83;    /* meta / placeholders, >= 4.5:1 on --active too */
+  --muted: #b3c4bb;    /* secondary, ~10.5:1 on surface */
+  --faint: #90a399;    /* meta / placeholders, ~7:1 on surface, 6.6:1 on --active */
 
   /* the one accent — phosphor teal (bioluminescence / terminal neon) */
   --accent: #40e0b4;
@@ -34,17 +34,17 @@
   --pill-negative-bg: #2c1a20;
   --pill-warning-bg: #2a2416;
   --pill-neutral-bg: #17201b;
-  --pill-neutral-ink: #c3d0c8;
+  --pill-neutral-ink: #d3ded8;
 
   /* charts */
   --grid: #22312a;
 
-  /* type — dealt sizes */
-  --fs-title: 26px;
-  --fs-section: 20px;
-  --fs-kpi: 20px;
-  --fs-body: 13px;
-  --fs-small: 12px;
+  /* type — dealt sizes, lifted one step for legibility (meta floor 12px) */
+  --fs-title: 30px;
+  --fs-section: 18px;
+  --fs-kpi: 28px;
+  --fs-body: 14px;
+  --fs-small: 13px;
 
   /* density — dealt (dense) */
   --row-table: 42px;

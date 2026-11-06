@@ -26,15 +26,15 @@ export default function ProfileSplit({
 
   return (
     <div>
-      <p className="text-[12px] text-muted m-0 mb-2">
+      <p className="text-[15px] font-semibold text-ink m-0 mb-2.5">
         Profiles
-        <span className="text-faint">
+        <span className="font-normal text-muted">
           {' · '}
           {cloaking ? `${steered.size} of ${variants.length} sent elsewhere` : 'same landing for every profile'}
         </span>
       </p>
       <div className="border border-line rounded-card overflow-hidden">
-        <table className="w-full text-[12px] border-collapse">
+        <table className="w-full text-[13px] border-collapse">
           <thead>
             <tr className="text-faint text-left">
               <th className="font-normal px-3 py-1.5">Profile</th>
@@ -55,7 +55,7 @@ export default function ProfileSplit({
                     {profileLabel(v.profile)}
                     {v.requested ? <span className="text-faint"> · requested</span> : null}
                   </td>
-                  <td className="px-3 py-1.5 font-mono text-[11px] min-w-0 break-all">
+                  <td className="px-3 py-1.5 font-mono text-[12px] min-w-0 break-all">
                     {v.error ? (
                       <span className="text-warning">did not load</span>
                     ) : (

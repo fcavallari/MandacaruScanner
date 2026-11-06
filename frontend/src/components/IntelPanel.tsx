@@ -11,7 +11,7 @@ import { Bar, ErrorNote } from './states';
 
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <p className="text-[12px] text-muted m-0 mb-2.5">{children}</p>;
+  return <p className="text-[15px] font-semibold text-ink m-0 mb-3">{children}</p>;
 }
 
 /** one-figure ranking: the row's fill is the bar (share of the largest) */
@@ -26,8 +26,8 @@ function BarList({ rows }: { rows: Array<{ label: string; count: number; mark?: 
             style={{ width: `${((r.count / max) * 100).toFixed(2)}%` }}
           />
           <div className="relative flex items-center justify-between h-full px-2.5">
-            <span className={`text-[12px] truncate ${i === 0 ? 'text-ink' : 'text-muted'}`}>{r.label}</span>
-            <span className="font-mono num text-[12px] text-muted flex items-center gap-1.5">
+            <span className={`text-[13px] truncate ${i === 0 ? 'text-ink' : 'text-muted'}`}>{r.label}</span>
+            <span className="font-mono num text-[13px] text-muted flex items-center gap-1.5">
               {r.mark === 'accent' ? <span aria-hidden="true" className="w-1.5 h-1.5 bg-accent flex-none" /> : null}
               {r.mark === 'warning' ? <span aria-hidden="true" className="w-1.5 h-1.5 bg-warning flex-none" /> : null}
               {r.count}
@@ -40,15 +40,15 @@ function BarList({ rows }: { rows: Array<{ label: string; count: number; mark?: 
 }
 
 function Quiet({ children }: { children: React.ReactNode }) {
-  return <p className="text-[12px] text-faint m-0">{children}</p>;
+  return <p className="text-[13px] text-faint m-0">{children}</p>;
 }
 
 export default function IntelPanel({ intel, phase, onRetry }: { intel: IntelAggregates; phase: 'loading' | 'ready' | 'error'; onRetry?: () => void }) {
   return (
     <section aria-label="Intel" className="bg-surface border border-line rounded-card p-5 flex flex-col gap-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-[16px] font-semibold text-ink m-0">Intel</h2>
-        <span className="text-[11px] text-faint">computed from probes</span>
+        <h2 className="text-[18px] font-semibold text-ink m-0">Intel</h2>
+        <span className="text-[12px] text-faint">computed from probes</span>
       </div>
 
       {phase === 'loading' ? (
@@ -96,7 +96,7 @@ export default function IntelPanel({ intel, phase, onRetry }: { intel: IntelAggr
 
           </div>
 
-          <p className="text-[11px] text-faint m-0 pt-3 border-t border-rule">
+          <p className="text-[12px] text-faint m-0 pt-3 border-t border-rule">
             <span aria-hidden="true" className="inline-block w-1.5 h-1.5 bg-accent mr-1.5 -mt-[2px]" />
             high-value landing after redirect
           </p>

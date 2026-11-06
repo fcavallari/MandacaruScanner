@@ -417,11 +417,11 @@ export default function ProbeRitual({ task }: { task: TaskState }) {
         style={{ maskImage: 'linear-gradient(to bottom, transparent, black 18%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 18%)' }}
       />
       <div role="status" className="absolute inset-x-0 bottom-0 px-5 pb-5 pt-10 text-center bg-gradient-to-t from-surface via-surface/80 to-transparent">
-        <p className="text-[13px] text-muted m-0">
+        <p className="text-[14px] text-muted m-0">
           {running ? `${task.kind === 'site' ? 'Checking' : 'Probing'} ${host}…` : 'Waiting for a worker in the dark…'}
         </p>
-        <p className="font-mono text-[11px] text-faint m-0 mt-1">
-          {running ? 'the deep is listening' : 'queued'} · {task.kind === 'site' ? 'site check' : 'probe'} {task.task_id.slice(0, 8)}
+        <p className="font-mono text-[12px] text-faint m-0 mt-1">
+          {running ? 'the deep is listening' : 'queued'} · {task.kind === 'site' ? 'site survey' : 'probe'} {task.task_id.slice(0, 8)}
         </p>
       </div>
     </div>

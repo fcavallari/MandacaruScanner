@@ -177,8 +177,8 @@ export interface ScanResultData {
   cloaking?: Cloaking | null;
   yara?: { rules: number; buffers: number; bytes: number; budget_exhausted: boolean; scripts_dropped?: number } | null;
   raw_error?: string | null;
-  site?: SiteReportData | null; // site checks only
-  cleanup_url?: string; // site checks only
+  site?: SiteReportData | null; // site surveys only
+  cleanup_url?: string; // site surveys only
 }
 
 export interface TaskState {

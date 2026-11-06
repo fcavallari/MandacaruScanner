@@ -2,7 +2,7 @@
 
 Pnakotic follows a URL to see where it really goes. It opens the URL in headless Chromium, records every redirect on the way, checks the landing page for redirect and obfuscation tricks, and gives the result a malvertising risk score from 0 to 1, with a screenshot of where the browser ended up.
 
-It has a second mode for site owners, the [site check](#site-check): type a domain and Pnakotic loads a handful of its pages as several kinds of visitor and reports where on the site any compromise lives, with the URL and a code snippet.
+It has a second mode for site owners, the [site survey](#site-survey): type a domain and Pnakotic loads a handful of its pages as several kinds of visitor and reports where on the site any compromise lives, with the URL and a code snippet.
 
 It is a proof of concept: a FastAPI service, Celery workers running Playwright, PostgreSQL, Redis, and a React dashboard.
 
@@ -120,13 +120,13 @@ Everything else adds up, capped at 1.0. With profiles compared, the job's score 
 
 A result counts as a redirect chain only if at least one real redirect was observed (HTTP 3xx, meta refresh or JS location). Redirect code that did not fire, obfuscation and base64 findings are reported but don't make a chain on their own. Phishing pages usually don't redirect, so the brand, hosting and TLD rules work from the hostname and from the page itself (title, password inputs). Two findings are reported without a weight: navigation to an unreachable host, and a landing document that is not HTML. Brand tokens of six or more letters match inside a hostname label (`googleplay`); shorter ones only as a whole label (`pineapple.com` is not Apple). Base64 inside `data:` URIs is not reported as a payload. The brand, throwaway-hosting and TLD lists are module constants in `src/intelligence/scorer.py`. The weights are hand-tuned heuristics, not a trained model.
 
-## Site check
+## Site survey
 
-The URL probe above follows one URL. The site check is for an owner who thinks their site has been hacked: they type a domain, wait about a minute, and get a report that says where the compromise is (the page or script URL, and the code around the match). When something is found, the report links to a cleanup service (`CLEANUP_URL`, below). The dashboard's form has a **Site check** tab (the default) and a **URL probe** tab.
+The URL probe above follows one URL. The site survey is for an owner who thinks their site has been hacked: they type a domain, wait about a minute, and get a report that says where the compromise is (the page or script URL, and the code around the match). When something is found, the report links to a cleanup service (`CLEANUP_URL`, below). The dashboard's form has a **Site survey** tab (the default) and a **URL probe** tab.
 
 Every page is loaded in a real browser, in a fresh context (no cookies or storage carry over), as several kinds of visitor. Malware that only shows itself to some visitors, or only after its JavaScript runs, is caught by rendering rather than by fetching raw HTML once. The single-URL probe is unchanged.
 
-### How a site check works
+### How a site survey works
 
 1. `POST /site-scan` normalises the input to `https://<host>[:port]/` (any path, query and fragment are dropped), rejects a non-public host, creates a job of kind `site` in `queued`, and puts it on the `site` queue. One Celery task (`pnakotic.site_scan`) does the whole check with one browser and one egress proxy, under the same SSRF guard as the URL probe.
 2. **Homepage.** The homepage is loaded in four profiles at once: `default`, `mobile-ios`, `googlebot` and `search-clicker`. If the `default` load fails with a network-level error (`net::ERR_…`) over https, all four are redone once over http and the report notes "Checked over http".
@@ -216,7 +216,7 @@ The report is stored in the result's `metadata_json` (`site`) with no page or sc
 
 ### Exposure
 
-The site check is for internal use. It has no rate limit and no per-site cap. The `site-worker` service runs one worker at concurrency 1, so one site check runs at a time and the rest wait in the `site` queue; the URL probe's workers (`-Q celery`) do not take that queue. Add a rate limit (per IP and per site) and a cap on concurrent checks before exposing it publicly.
+The site survey is for internal use. It has no rate limit and no per-site cap. The `site-worker` service runs one worker at concurrency 1, so one site survey runs at a time and the rest wait in the `site` queue; the URL probe's workers (`-Q celery`) do not take that queue. Add a rate limit (per IP and per site) and a cap on concurrent checks before exposing it publicly.
 
 ## API
 
@@ -230,7 +230,7 @@ The site check is for internal use. It has no rate limit and no per-site cap. Th
 | `GET /tasks/{id}/artifacts/{path}` | A stored artifact, e.g. `screenshots/landing_20261104_101500.png`. |
 | `GET /health` | Liveness check. |
 
-`/tasks` and `/tasks/{id}/results` return the same `result` object: `final_url`, `malicious_score`, `is_redirect_chain_detected`, `hops`, `artifacts`, `findings`, `decisive`, `variants` (each profile's landing, redirect count and own score, the requested one first), `cloaking` (landing per profile, or `null`), `yara` (rules loaded and what was scanned, or `null` when YARA is off) and `raw_error`. It also has `kind` (`url` or `site`; results stored before the site check existed read as `url`). For a `site` job `final_url` is the homepage's `default` landing, `malicious_score` is the worst score of any load, `hops` is empty, and two more fields appear: `site` (the report: `site`, `entered`, `redirected_from`, `verdict`, `blocks`, `blocks_more`, `findings_more_total`, `external_scripts`, `checked`, `blocked_hosts`, `notes`) and `cleanup_url`.
+`/tasks` and `/tasks/{id}/results` return the same `result` object: `final_url`, `malicious_score`, `is_redirect_chain_detected`, `hops`, `artifacts`, `findings`, `decisive`, `variants` (each profile's landing, redirect count and own score, the requested one first), `cloaking` (landing per profile, or `null`), `yara` (rules loaded and what was scanned, or `null` when YARA is off) and `raw_error`. It also has `kind` (`url` or `site`; results stored before the site survey existed read as `url`). For a `site` job `final_url` is the homepage's `default` landing, `malicious_score` is the worst score of any load, `hops` is empty, and two more fields appear: `site` (the report: `site`, `entered`, `redirected_from`, `verdict`, `blocks`, `blocks_more`, `findings_more_total`, `external_scripts`, `checked`, `blocked_hosts`, `notes`) and `cleanup_url`.
 
 ## Configuration
 
@@ -279,7 +279,7 @@ uvicorn pnakotic.src.api.main:app --reload
 celery -A pnakotic.src.workers.celery_app worker -Q celery,site --loglevel=info
 ```
 
-`-Q celery,site` makes this one worker take both URL probes (the default queue, `celery`) and site checks (routed to `site`). Without `site` in `-Q`, a site check stays queued. To mirror Docker instead, run one worker with `-Q celery` and a second with `-Q site --concurrency 1`.
+`-Q celery,site` makes this one worker take both URL probes (the default queue, `celery`) and site surveys (routed to `site`). Without `site` in `-Q`, a site survey stays queued. To mirror Docker instead, run one worker with `-Q celery` and a second with `-Q site --concurrency 1`.
 
 Both need PostgreSQL and Redis. `docker-compose.yml` doesn't publish their ports to the host, so outside Docker use local instances (or add `ports:` to those services), and point `DATABASE_URL` and `REDIS_URL` at `localhost`.
 
@@ -321,7 +321,7 @@ src/workers/        Celery app, the scan task and the site-scan task
 src/scanner/        Playwright engine, browser profiles, static analysis,
                     page-behavior hooks (behavior.py), YARA (yara_scan.py),
                     egress guard (netguard.py), artifact storage;
-                    site check: site_engine.py (orchestrator), site_identity.py,
+                    site survey: site_engine.py (orchestrator), site_identity.py,
                     page_picker.py, snippets.py, script_trace.py, obfuscation.py,
                     challenge.py, site_findings.py, site_report.py
 src/intelligence/   Scoring
