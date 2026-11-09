@@ -195,6 +195,19 @@ def site_server():
                     pass  # the browser went away
             elif self.path == "/clean.js":
                 self._send(200, "text/javascript", b"var clean = 1;")
+            elif self.path == "/plainobf/":  # a plain loader fetching obfuscator.io output from another site
+                self._send(200, "text/html", ("<html><head><title>PlainObf</title></head><body><h1>PlainObf</h1>"
+                                              f"<script>{loader('obf.js')}</script></body></html>").encode())
+            elif self.path == "/obf.js":
+                self._send(200, "text/javascript", obf.encode())
+            elif self.path == "/flagged/":  # a page whose cross-site script the CDN blocks as malware
+                self._send(200, "text/html", ("<html><head><title>Flagged</title></head><body><h1>Flagged</h1>"
+                                              f"<script src='http://localhost:{port}/blocked.js'></script>"
+                                              "</body></html>").encode())
+            elif self.path == "/blocked.js":  # Cloudflare's "Suspected Malware" interstitial, as r1.fo served it
+                self._send(403, "text/html", b"<!DOCTYPE html><html><head><title>Suspected Malware | Cloudflare</title>"
+                                             b"</head><body><h1>Warning</h1><h2>Suspected Malware</h2><p>This website "
+                                             b"has been reported for potentially distributing malware.</p></body></html>")
             else:
                 self._send(404, "text/html", b"<html><body>Not found</body></html>")
 

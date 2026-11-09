@@ -433,3 +433,20 @@ def test_offsite_homepage_folds_in_its_non_decisive_cloaking():
     [f] = b["findings"]
     assert (f["kind"], f["severity"]) == ("offsite_homepage", "suspicious")
     assert "Cloaking: landing depends on the browser profile (y)" in f["details"]["scoring"]
+
+
+def test_external_scripts_mark_a_script_blocked_as_malware_as_a_finding():
+    from _support import _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+    from pnakotic.src.scanner.site_report import external_scripts
+
+    url = "https://r1.example/donation"
+    rec = {"url": url, "main_frame": True, "frame_url": "https://s.com/p", "initiator": "script",
+           "initiator_url": "https://s.com/p", "line": 0, "column": None}
+    load = _load(0, "https://s.com/p", "default", [], script_requests=[rec])
+    load.result.metadata["flagged_scripts"] = [{"url": url, "status": 403, "reason": "cloudflare_suspected_malware"}]
+    blocks = build_blocks([load], "s.com", None)
+    out = external_scripts([load], "s.com", blocks)
+    [host] = out["hosts"]
+    assert host["host"] == "r1.example"
+    assert host["urls"][0]["finding"] is True and host["urls"][0]["injected_by"] == "inline on https://s.com/p"

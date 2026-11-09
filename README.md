@@ -55,7 +55,7 @@ curl -s -X POST localhost:8000/site-scan -H 'content-type: application/json' -d 
 5. The page is loaded with a bounded settle period, then the HTML is checked for redirect code that did not fire (`meta_refresh_code`, `js_location_code`), `atob` / `String.fromCharCode` obfuscation, long base64 payloads and ClickFix lure text ("press Win+R … Ctrl+V") (input capped at 2 MB). A full-page screenshot is saved. A slow subresource that keeps the page from settling no longer skips the analysis or the screenshot.
 6. While the page runs, hooks record what it tries to do to the visitor (`page_behavior` hops): clipboard writes (flagged when the text is a shell command, the ClickFix pattern), downloads it starts on its own (cancelled, never kept), alert/confirm/prompt dialogs, fullscreen and keyboard-lock requests, `beforeunload` handlers, `pushState` floods and notification-permission prompts. Events after the click probe (next step) carry `trigger: click`; before it, the page acted on its own. Popups are recorded by the browser itself (`popup_open`, above), not by a page hook.
 7. After the landing is captured, the scan clicks once on an empty part of the page (not a link or control) and waits 1.5 s. A popup that opens then is recorded with `trigger: click` (a popunder). If the tab navigates away, that is a `click_hijack` hop. Neither changes the recorded landing.
-8. If YARA rules are configured, the rendered HTML, up to 10 subframe documents and the bodies of up to 60 scripts the page loaded are matched against them (`yara_match` hops; see [YARA rules](#yara-rules)).
+8. If YARA rules are configured, the rendered HTML, up to 10 subframe documents and the bodies of up to 60 scripts the page loaded are matched against them (`yara_match` hops; see [YARA rules](#yara-rules)). With or without rules, scripts loaded from another site are checked for obfuscator.io markers (in the loader and in the loaded body), and a cross-site script whose host answered with Cloudflare's "Suspected Malware" page is recorded; Chromium drops such a response before any event, so that URL is fetched once more through the same egress proxy to read the refusal.
 9. Unless the request turns it off, the URL is also loaded in every other browser profile, each in its own context, in parallel. Where each profile landed is compared (see [Scoring](#scoring)).
 10. The result is scored and stored, and the job becomes `completed`.
 
@@ -98,6 +98,8 @@ Everything else adds up, capped at 1.0. With profiles compared, the job's score 
 | Click hijack: the click probe hit no link, yet the page went to another site, counted once | 0.4 |
 | Download started by the page, on load or after the click probe (not an executable, e.g. an archive) | 0.4 |
 | YARA: exploratory rule of severity 4–5, or production rule of severity 3, once | 0.4 |
+| A script the page loads from another site was refused by its CDN as suspected malware (Cloudflare's interstitial in the script's place), once | 0.4 |
+| The page's own code (inline, or a file on its own domain) loads a script from another site and either the loader or the loaded script is obfuscator.io-style code, once; a third party's loader (a tag manager) does not count | 0.4 |
 | Profiles land on different sites (cloaking), none of them suspicious | 0.35 |
 | Popup or new tab to another site (on load or on the click probe), counted once; same-site popups are not scored | 0.3 |
 | Suspicious TLD (`.xyz`, `.top`, `.icu`, `.gq`, `.tk`, `.ml`, `.sbs`, `.click`, ... see `scorer.py`) | 0.3 |
@@ -169,6 +171,8 @@ A bot-check page is the CDN's, not the site's, so its content is never scanned a
 | Cloaking that is not decisive, when the page's combined score is still 0.4 or more (for example only phones get a 302 to another domain) | Suspicious | The page URL: "Some visitors are sent to a different website", with those visitors and where they land |
 | Homepage lands on another domain | Suspicious (Compromised if decisive cloaking) | `/` |
 | Obfuscated injector: an inline block or same-site script with obfuscator.io markers that adds a script from another site | Suspicious | The page URL, with the injecting snippet and the loaded URL |
+| Obfuscated script from another site, added by an inline block or same-site script that is itself plain (the loaded body carries the obfuscator.io markers) | Suspicious | The page URL, with the loaded URL |
+| A script from another site that its CDN refused as suspected malware (Cloudflare's interstitial in the script's place) | Suspicious | The script URL, with "loaded by" naming the page and the code that added it |
 | A page whose own site-mode score is 0.4 or more, with no compromised finding of its own | Suspicious | The page URL, with the scoring lines under Details |
 
 - **Served HTML and rendered DOM.** The HTML the server sent (`served`) is matched as well as the rendered DOM. A match in the served HTML points at the templates or database; a match only in the rendered DOM was added by a script while the page loaded.

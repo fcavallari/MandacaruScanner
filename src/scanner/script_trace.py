@@ -5,6 +5,14 @@ into small records. ``find_injections`` keeps the script-started requests that g
 another site and, for inline initiators, finds the ``<script>`` block in the served HTML
 (byte offsets, so a YARA match offset can be compared against it).
 
+Each injection also carries ``body_markers``: the obfuscator markers of the script that was
+loaded, when its body was kept. A plain loader (a URL assembled at runtime, say) fetching
+obfuscator.io output shows nothing in the loader and everything in the body.
+
+``blocked_script_reason`` names a script response the CDN refused on the visitor's behalf
+(Cloudflare's "Suspected Malware" interstitial): the script never ran, so there is no body
+to match, but a vendor's malware verdict on a script a page loads is evidence in itself.
+
 All page-supplied input is bounded: capped record and block counts, a bounded open-tag
 regex, and a close-tag search that is a plain ``bytes.find`` moving forward only.
 """
@@ -23,6 +31,15 @@ MAX_OPEN_TAGS = 5000  # open tags examined, whatever they turn out to hold
 MAX_URL_CHARS = 300
 MAX_PARENT_DEPTH = 20
 BLOCK_CONTEXT_BYTES = 600
+INTERSTITIAL_HEAD_BYTES = 65536  # how much of a blocked script's response body is examined
+
+_INTERSTITIALS = (
+    # (reason, the marker the body must carry, the vendor name in the body or the Server header)
+    ("cloudflare_suspected_malware", b"Suspected Malware", b"cloudflare"),
+)
+# The reasons `blocked_script_reason` can return, and the vendor to name for each. The scorer
+# and the site report ignore any other reason.
+FLAGGED_VENDORS: Dict[str, str] = {"cloudflare_suspected_malware": "Cloudflare"}
 
 _OPEN_TAG_RE = re.compile(rb"<script\b[^>]{0,500}>", re.IGNORECASE)
 _CLOSE_TAG = b"</script"
@@ -186,7 +203,9 @@ def find_injections(records: List[Dict[str, Any]], page_url: str, served_html: O
 
     ``initiator_kind`` is ``inline`` when the initiating script is the page itself
     (fragment ignored) and ``script`` when it is a file. For an inline initiator, ``block``
-    is the byte range of its ``<script>`` body in ``served_html``.
+    is the byte range of its ``<script>`` body in ``served_html``. ``markers`` are the
+    obfuscator markers of the initiating code; ``body_markers`` those of the script it
+    loaded, when ``script_bodies`` has that body (an empty list otherwise).
     """
     page_key = urldefrag(page_url or "")[0]
     page_host = _host(page_url or "")
@@ -239,6 +258,23 @@ def find_injections(records: List[Dict[str, Any]], page_url: str, served_html: O
             "initiator_url": initiator_url,
             "block": block,
             "markers": markers,
+            "body_markers": _markers_of(script_bodies[url]) if url in script_bodies else [],
             "context": context,
         })
     return out
+
+
+def blocked_script_reason(status: int, headers: Dict[str, str], body: bytes) -> Optional[str]:
+    """Why a CDN refused a script on the visitor's behalf, or None for a served script or a plain
+    error. Only Cloudflare's "Suspected Malware" page is known; it must name Cloudflare in the
+    first 64 kB of the body or in the Server header. ``body`` is attacker-reachable (it comes
+    from the script's host), so only its head is read and only fixed substrings are looked for.
+    """
+    if status != 403 or not isinstance(body, (bytes, bytearray)):
+        return None
+    head = bytes(body[:INTERSTITIAL_HEAD_BYTES])
+    server = str((headers or {}).get("server") or "").lower().encode("utf-8", "replace")
+    for reason, marker, vendor in _INTERSTITIALS:
+        if marker in head and (vendor in head.lower() or vendor in server):
+            return reason
+    return None

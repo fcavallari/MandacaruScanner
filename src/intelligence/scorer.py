@@ -6,7 +6,8 @@ from urllib.parse import urljoin, urlparse
 
 from ..scanner.behavior import LOCK_BEHAVIORS, behavior_events, evidence_of
 from ..scanner.models import ScanResult, REDIRECT_MECHANISMS
-from ..scanner.site_identity import on_site
+from ..scanner.script_trace import FLAGGED_VENDORS
+from ..scanner.site_identity import on_site, same_domain
 
 _MICROSOFT = (
     "microsoft.com", "live.com", "office.com", "office365.com", "outlook.com",
@@ -167,6 +168,9 @@ class PnakoticScorer:
             # each tier. A production rule of severity 4-5 is decisive instead.
             "yara_strong": 0.4,  # an exploratory rule of severity >= 4, or a production rule of 3
             "yara_weak": 0.15,   # anything else that matched
+            # Scripts the page loaded from another site (script_trace.py / yara_scan.py), each once.
+            "flagged_script": 0.4,         # the CDN refused it as suspected malware (the script never ran)
+            "obfuscated_injection": 0.4,   # the page's own code loads obfuscator.io-style code, or is itself that
         }
 
     def score(self, result: ScanResult, site_host: Optional[str] = None) -> float:
@@ -334,6 +338,7 @@ class PnakoticScorer:
         score += self._behavior_support(events, findings)
         yara_hits = evidence_of(result.hops, "yara_match")
         score += self._yara_support(yara_hits, findings)
+        score += self._script_support(result, host, findings)
 
         # Decisive indicators settle the verdict on their own; they lead the findings.
         decisive = self._decisive(events) + self._yara_decisive(yara_hits)
@@ -461,6 +466,40 @@ class PnakoticScorer:
                 kind = "production" if h.get("production") else "exploratory"
                 findings.append(f"YARA {h.get('rule')} ({kind}, severity {h.get('severity')}) in {h.get('source')}: "
                                 f"{h.get('description', '')[:120]}")
+        return score
+
+    def _script_support(self, result: ScanResult, host: str, findings) -> float:
+        """Cross-site scripts the page loaded (engine metadata, bounded there): one blocked by the
+        CDN as malware, and one that is obfuscated or loaded by obfuscated code of the page's own
+        (inline, or a file on the page's registrable domain; a tag manager's loader is not the
+        page's code). Each applied once."""
+        score = 0.0
+        flagged = [f for f in result.metadata.get("flagged_scripts") or []
+                   if isinstance(f, dict) and isinstance(f.get("url"), str) and f.get("reason") in FLAGGED_VENDORS]
+        if flagged:
+            score += self.WEIGHTS["flagged_script"]
+            for f in flagged:
+                findings.append(f"Script blocked by {FLAGGED_VENDORS[f['reason']]} as suspected malware: {f['url'][:300]}")
+        obfuscated = []
+        for inj in result.metadata.get("injections") or []:
+            if not isinstance(inj, dict) or not isinstance(inj.get("requested_url"), str):
+                continue
+            markers = [m for m in (inj.get("markers") or []) + (inj.get("body_markers") or []) if isinstance(m, str)]
+            if not markers:
+                continue
+            kind, initiator = inj.get("initiator_kind"), inj.get("initiator_url")
+            if kind == "inline":
+                by = "inline code"
+            elif kind == "script" and isinstance(initiator, str) and host \
+                    and same_domain(urlparse(initiator).hostname or "", host):
+                by = initiator[:300]
+            else:
+                continue
+            obfuscated.append(f"Obfuscated cross-site script ({', '.join(dict.fromkeys(markers))}) loaded by {by}: "
+                              f"{inj['requested_url'][:300]}")
+        if obfuscated:
+            score += self.WEIGHTS["obfuscated_injection"]
+            findings.extend(obfuscated)
         return score
 
     @staticmethod

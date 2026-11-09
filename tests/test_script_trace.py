@@ -226,3 +226,41 @@ def test_script_tracer_collects_script_requests_and_caps_at_200():
     for i in range(250):
         handler(ev(i))
     assert len(tracer.records) == 200 and tracer.records[0]["url"] == "https://x.com/0.js"
+
+
+def test_find_injections_reports_markers_of_the_requested_script_body():
+    from pnakotic.src.scanner.script_trace import find_injections
+    # A plain loader fetching obfuscator.io output: the loader has no markers, the body does.
+    rec = _rec(line=None, column=None)
+    [inj] = find_injections([rec], "https://s.com/", LOADER.encode(), {rec["url"]: OBF.encode()})
+    assert inj["markers"] == [] and inj["body_markers"] == ["string_array_rotation"]
+    # body not kept (not fetched, dropped, or a non-2xx response): no body markers
+    [inj2] = find_injections([rec], "https://s.com/", LOADER.encode(), {})
+    assert inj2["body_markers"] == []
+
+
+def test_find_injections_one_line_document_with_a_runtime_built_url_still_sees_the_body():
+    from pnakotic.src.scanner.script_trace import find_injections
+    # The abacashi.com shape: a one-line document, an inline initiator at line 0, and a target
+    # URL assembled at runtime (String.fromCharCode), so neither the URL nor its host is in
+    # the served HTML. The block can't be found, but the loaded script can still be judged.
+    html = ("<html><head></head><body>" + "<script>self.__next_f.push([1,\"x\"])</script>" * 3
+            + "<img src=x onerror=\"var s=document.createElement('script');s.src=String.fromCharCode(104);document.body.appendChild(s)\">"
+            + "</body></html>").encode()
+    rec = _rec(url="https://r1.example/donation", initiator_url="https://s.com/p", line=0, column=None)
+    [inj] = find_injections([rec], "https://s.com/p", html, {"https://r1.example/donation": OBF.encode()})
+    assert inj["initiator_kind"] == "inline" and inj["block"] is None and inj["markers"] == []
+    assert inj["body_markers"] == ["string_array_rotation"]
+
+
+def test_blocked_script_reason_recognises_cloudflares_malware_interstitial():
+    from pnakotic.src.scanner.script_trace import blocked_script_reason
+    page = (b"<!DOCTYPE html><html><head><title>Suspected Malware | Cloudflare</title></head><body>"
+            b"<h1>Warning</h1><h2>Suspected Malware</h2><p>This website has been reported for potentially "
+            b"distributing malware.</p></body></html>")
+    assert blocked_script_reason(403, {"server": "cloudflare"}, page) == "cloudflare_suspected_malware"
+    assert blocked_script_reason(403, {}, page) == "cloudflare_suspected_malware"  # the body names the vendor
+    assert blocked_script_reason(200, {"server": "cloudflare"}, page) is None  # the script was served
+    assert blocked_script_reason(403, {"server": "cloudflare"}, b"<html>Forbidden</html>") is None  # a plain 403
+    assert blocked_script_reason(403, {"server": "nginx"}, b"Suspected Malware") is None  # not Cloudflare's page
+    assert blocked_script_reason(403, {}, b"x" * 70000 + page) is None  # only the head of the body is read

@@ -77,8 +77,13 @@ async def test_probe_load_without_options_has_no_site_metadata(site_server, tmp_
     async with engine.browser_session() as (browser, _):
         r = await engine._scan_in_context(browser, f"{site_server}/", "default", engine.artifacts.create_task_folder("j"),
                                           primary=True)
-    for key in ("main_status", "served_bytes", "links", "script_requests", "injections", "challenge"):
+    for key in ("main_status", "served_bytes", "links", "script_requests", "challenge"):
         assert key not in r.metadata
+    # The probe does keep the cross-site script injections (the scorer reads them); the
+    # homepage's loader is plain and loads a plain script, so there is nothing to score.
+    [inj] = r.metadata["injections"]
+    assert inj["requested_url"].endswith("/payload.js") and inj["block"] is None  # no served HTML in a probe
+    assert r.metadata.get("flagged_scripts") is None
     assert os.path.isdir(tmp_path / "j" / "screenshots")
 
 
@@ -109,3 +114,67 @@ def test_challenge_vendor_names_who_showed_the_check():
     assert challenge_vendor("", '<script src="/_Incapsula_Resource?x=1"></script>') == "incapsula"
     assert challenge_vendor("", "<p>Please complete the CAPTCHA</p>") is None  # a bot check, vendor unknown
     assert challenge_vendor(None, None) is None
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_site_load_records_a_script_blocked_as_malware_by_the_cdn(site_server, tmp_path):
+    from pnakotic.src.scanner.engine import LoadOptions
+
+    engine = _site_engine(tmp_path)
+    async with engine.browser_session() as (browser, _proxy):
+        r = await engine._scan_in_context(browser, f"{site_server}/flagged/", "default",
+                                          engine.artifacts.create_task_folder("j"), primary=True,
+                                          options=LoadOptions(site=True, shot_dir="pages/0/default"))
+    port = site_server.rsplit(":", 1)[1]
+    assert r.metadata["flagged_scripts"] == [
+        {"url": f"http://localhost:{port}/blocked.js", "status": 403, "reason": "cloudflare_suspected_malware"}]
+    assert any(rec["url"].endswith("/blocked.js") for rec in r.metadata["script_requests"])
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_site_survey_of_a_page_with_a_cdn_blocked_script_is_suspicious(site_server, tmp_path):
+    """End to end: the roll-up a site owner reads flips from Clean to Suspicious."""
+    from pnakotic.src.scanner.site_engine import SiteScanner
+
+    outcome = await SiteScanner(_site_engine(tmp_path), budget_s=60).scan(f"{site_server}/flagged/")
+    report = outcome.report
+    assert report["verdict"]["verdict"] == "suspicious" and report["verdict"]["label"] == "Suspicious"
+    port = site_server.rsplit(":", 1)[1]
+    by_kind = {b["location_kind"]: b for b in report["blocks"]}
+    block = by_kind["script"]
+    assert block["location"] == f"http://localhost:{port}/blocked.js"
+    assert block["findings"][0]["kind"] == "flagged_script" and block["findings"][0]["severity"] == "suspicious"
+    # the flagged script also lifts the page's own score to Suspicious (scorer: flagged_script, 0.4)
+    page = by_kind["page"]
+    assert page["location"] == f"{site_server}/flagged/" and page["findings"][0]["kind"] == "page_score"
+    assert any("blocked by Cloudflare" in line for line in page["findings"][0]["details"]["scoring"])
+    [host] = report["external_scripts"]["hosts"]
+    assert host["host"] == "localhost" and host["urls"][0]["finding"] is True
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_url_probe_scores_a_cdn_blocked_script_without_yara(site_server, tmp_path):
+    engine = _site_engine(tmp_path)
+    r = await engine.scan(f"{site_server}/flagged/", "default", compare=False)
+    port = site_server.rsplit(":", 1)[1]
+    assert r.malicious_score == pytest.approx(0.5 + 0.4)  # the probe's IP landing (127.0.0.1) plus the flagged script
+    assert r.metadata["scoring_findings"] == [
+        "IP landing: 127.0.0.1",
+        f"Script blocked by Cloudflare as suspected malware: http://localhost:{port}/blocked.js"]
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_url_probe_scores_a_plain_loader_fetching_an_obfuscated_script(site_server, tmp_path):
+    engine = _site_engine(tmp_path)
+    r = await engine.scan(f"{site_server}/plainobf/", "default", compare=False)
+    port = site_server.rsplit(":", 1)[1]
+    assert r.malicious_score == pytest.approx(0.5 + 0.4)  # the probe's IP landing (127.0.0.1) plus the injection
+    assert r.metadata["scoring_findings"] == [
+        "IP landing: 127.0.0.1",
+        f"Obfuscated cross-site script (string_array_rotation) loaded by inline code: http://localhost:{port}/obf.js"]
+    [inj] = r.metadata["injections"]
+    assert inj["markers"] == [] and inj["body_markers"] == ["string_array_rotation"]
