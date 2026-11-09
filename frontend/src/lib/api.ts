@@ -74,7 +74,7 @@ export interface SiteFindingDetails {
 export interface SiteFinding {
   id: string;
   severity: FindingSeverity;
-  kind: string; // yara | injection | clipboard | download | browser_lock | cloaking | offsite_homepage | page_score
+  kind: string; // yara | injection | flagged_script | clipboard | download | browser_lock | cloaking | offsite_homepage | page_score
   message: string;
   snippet: Snippet | null;
   origin: FindingOrigin | null;

@@ -25,11 +25,16 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from .script_trace import blocked_script_reason
 from .snippets import cut_snippet
 
 YARA_MECHANISM = "yara_match"
 
 MAX_SCRIPTS = 60               # script bodies kept per page
+MAX_FLAGGED = 20               # script responses a CDN blocked as malware, recorded per page
+MAX_PROBES = 20                # ORB-dropped script responses re-fetched per page (see ScriptCollector)
+PROBE_TIMEOUT_MS = 5000        # per re-fetch
+PROBE_MAX_BYTES = 262144       # a re-fetched body larger than this (by Content-Length) is not read
 MAX_FRAMES = 10                # subframe documents kept per page
 MAX_BUFFER_BYTES = 2_000_000   # per buffer (larger ones are truncated)
 MAX_TOTAL_BYTES = 12_000_000   # per page, across buffers
@@ -130,22 +135,48 @@ def _snippet(match) -> str:
 
 
 class ScriptCollector:
-    """Keeps the bodies of the scripts a page loads (bounded), for scan_buffers()."""
+    """Keeps the bodies of the scripts a page loads (bounded), for scan_buffers().
+
+    Also records, in ``flagged``, the script responses a CDN refused as malware (see
+    ``script_trace.blocked_script_reason``): those scripts never ran and have no body to
+    scan, but the refusal itself is evidence. Bounded separately (MAX_FLAGGED) so blocked
+    responses never crowd out the bodies.
+
+    Such a refusal is an HTML page in a script's place. For a cross-origin script Chromium's
+    opaque-response blocking drops it before any response event fires (the request fails
+    with ``net::ERR_BLOCKED_BY_ORB``; neither Playwright nor CDP sees status or body), so
+    those few requests are fetched once more through the browser context's request API:
+    same user agent and cookies, same launch-level egress proxy, which still refuses any
+    non-public host (the URL is attacker-supplied). Bounded by MAX_PROBES per page, a
+    timeout and a body-size cap, so a hostile page can't turn this into a fetch loop.
+    """
 
     def __init__(self):
         self.scripts: List[Tuple[str, bytes]] = []
+        self.flagged: List[dict] = []  # {"url", "status", "reason"}, one per URL
         self.total = 0
         self.dropped = 0
+        self.probes = 0  # ORB-dropped script responses re-fetched (attempts)
         self._tasks: set = set()
+        self._flag_tasks: set = set()
 
     def watch(self, page) -> None:
         page.on("response", self._on_response)
+        page.on("requestfailed", lambda request: self._on_failed(request, page.context))
 
     def _on_response(self, response) -> None:
         try:
-            if response.request.resource_type != "script" or not (200 <= response.status < 300):
+            if response.request.resource_type != "script":
                 return
+            status = response.status
         except Exception:
+            return
+        if not (200 <= status < 300):
+            # Only a 403 can be an interstitial; anything else is an ordinary failed load.
+            if status == 403 and len(self.flagged) + len(self._flag_tasks) < MAX_FLAGGED:
+                task = asyncio.ensure_future(self._flag(response))
+                self._flag_tasks.add(task)
+                task.add_done_callback(self._flag_tasks.discard)
             return
         if len(self.scripts) + len(self._tasks) >= MAX_SCRIPTS:
             self.dropped += 1
@@ -153,6 +184,63 @@ class ScriptCollector:
         task = asyncio.ensure_future(self._keep(response))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    async def _flag(self, response) -> None:
+        try:
+            body = await response.body()
+        except Exception:
+            return  # page or context already closed, or a body Playwright can't give us
+        try:
+            headers = dict(response.headers or {})
+        except Exception:
+            headers = {}
+        self._record(response.url, response.status, headers, body)
+
+    def _record(self, url: str, status: int, headers: dict, body: bytes) -> None:
+        reason = blocked_script_reason(status, headers, body)
+        url = _text(url)
+        if reason is None or any(f["url"] == url for f in self.flagged) or len(self.flagged) >= MAX_FLAGGED:
+            return
+        self.flagged.append({"url": url, "status": status, "reason": reason})
+
+    def _on_failed(self, request, context) -> None:
+        try:
+            if request.resource_type != "script" or "ERR_BLOCKED_BY_ORB" not in str(request.failure or ""):
+                return
+            url = request.url
+        except Exception:
+            return
+        if not url.startswith(("http://", "https://")) or self.probes >= MAX_PROBES:
+            return
+        if len(self.flagged) + len(self._flag_tasks) >= MAX_FLAGGED:
+            return
+        self.probes += 1
+        task = asyncio.ensure_future(self._probe(context, url))
+        self._flag_tasks.add(task)
+        task.add_done_callback(self._flag_tasks.discard)
+
+    async def _probe(self, context, url: str) -> None:
+        """Fetch an ORB-dropped script URL once more to see the page that stood in for it."""
+        try:
+            response = await context.request.get(url, max_redirects=0, timeout=PROBE_TIMEOUT_MS,
+                                                 fail_on_status_code=False)
+        except Exception:
+            return  # refused by the egress proxy, timed out, or the context is gone
+        try:
+            headers = {k.lower(): v for k, v in (response.headers or {}).items()}
+            try:
+                length = int(headers.get("content-length") or 0)
+            except ValueError:
+                length = 0
+            body = b"" if length > PROBE_MAX_BYTES else await response.body()
+        except Exception:
+            return
+        finally:
+            try:
+                await response.dispose()
+            except Exception:
+                pass
+        self._record(url, response.status, headers, body[:PROBE_MAX_BYTES])
 
     async def _keep(self, response) -> None:
         try:
@@ -175,8 +263,9 @@ class ScriptCollector:
 
     async def drain(self, timeout: float = 5.0) -> None:
         """Wait (bounded) for body fetches still in flight."""
-        if self._tasks:
-            await asyncio.wait(list(self._tasks), timeout=timeout)
+        pending = list(self._tasks) + list(self._flag_tasks)
+        if pending:
+            await asyncio.wait(pending, timeout=timeout)
 
 
 def _first_instance(match):

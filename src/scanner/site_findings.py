@@ -17,7 +17,7 @@ from ..intelligence.scorer import PnakoticScorer
 from .behavior import LOCK_BEHAVIORS, behavior_events, evidence_of
 from .models import ScanResult
 from .profiles import PROFILES
-from .script_trace import MAX_URL_CHARS  # 300, the external-scripts rule
+from .script_trace import FLAGGED_VENDORS, MAX_URL_CHARS  # 300, the external-scripts rule
 from .site_identity import on_site, same_domain
 from .yara_scan import YARA_MECHANISM
 
@@ -40,6 +40,8 @@ MESSAGES: Dict[str, str] = {
     "cloaking": "Some visitors are sent to a different website",
     "offsite_homepage": "Your homepage sends desktop visitors to {domain}",
     "injection": "Hidden code loads a script from another website into your page",
+    "injection_obfuscated": "Code on this page loads an obfuscated script from another website",
+    "flagged_script": "A script this page loads is blocked by {vendor} as suspected malware",
     "page_score": "This page does things malicious pages do",
 }
 MOVED_SITE = "If you moved your site, check the new domain"
@@ -154,6 +156,18 @@ def _injections(result: ScanResult) -> List[dict]:
             if isinstance(i, dict) and isinstance(i.get("requested_url"), str)]
 
 
+def _flagged_scripts(result: ScanResult) -> List[Tuple[str, str]]:
+    """``(url, vendor)`` for each script the CDN blocked as malware, known reasons only."""
+    out = []  # type: List[Tuple[str, str]]
+    for entry in result.metadata.get("flagged_scripts") or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("url"), str):
+            continue
+        vendor = FLAGGED_VENDORS.get(str(entry.get("reason") or ""))
+        if vendor:
+            out.append((_url(entry["url"]), vendor))
+    return out
+
+
 def _snippet(value: Any) -> Optional[dict]:
     return value if isinstance(value, dict) else None
 
@@ -252,12 +266,32 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
                         tied.add(i)
                         _append(finding.loaded, _url(inj["requested_url"]))
 
+    # A script the CDN refused as malware never ran, so no rule could match it; the refusal
+    # is the finding, at the script URL like a YARA script hit, naming the code that loaded it.
+    for url, vendor in _flagged_scripts(result):
+        common = dict(severity="suspicious", kind="flagged_script",
+                      message=MESSAGES["flagged_script"].format(vendor=vendor), snippet=None,
+                      mechanism="flagged_script")
+        if offsite:
+            c.add(load, ("flagged", vendor, url, "offsite"), origin="script", location=url, location_kind="script",
+                  offsite=True, **common)
+            continue
+        finding = c.add(load, ("flagged", vendor, url), origin="script", location=url, location_kind="script", **common)
+        _append(finding.loaded_by, load.page_url)
+        for i, inj in enumerate(injections):
+            if _url(inj["requested_url"]) == url:
+                tied.add(i)
+                _append(finding.loaded_by, "inline on {}".format(load.page_url)
+                        if inj.get("initiator_kind") == "inline" else _url(inj.get("initiator_url")))
+
     if offsite:
         return  # another site's injectors are not the owner's page code
-    # An obfuscated inline or on-site injector of a cross-site script (find_injections only
-    # keeps cross-site requests) is suspicious on its own.
+    # An inline or on-site injector of a cross-site script (find_injections only keeps
+    # cross-site requests) is suspicious on its own when the injecting code is obfuscated,
+    # or when what it loaded is (a plain loader whose URL is built at runtime fetching
+    # obfuscator.io output shows nothing in the loader and everything in the body).
     for i, inj in enumerate(injections):
-        if i in tied or not inj.get("markers"):
+        if i in tied or not (inj.get("markers") or inj.get("body_markers")):
             continue
         kind = inj.get("initiator_kind")
         if kind == "script" and not on_site(_hostname(inj.get("initiator_url")), site_host):
@@ -266,12 +300,18 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
             continue
         snippet = _snippet(inj.get("context"))
         initiator = _url(inj.get("initiator_url")) if kind == "script" else None
-        key = ("injection", kind, initiator or "", snippet.get("text", "") if snippet else "")
-        finding = c.add(load, key, severity="suspicious", kind="injection", message=MESSAGES["injection"],
+        requested = _url(inj["requested_url"])
+        if inj.get("markers"):
+            message = MESSAGES["injection"]
+            key = ("injection", kind, initiator or "", snippet.get("text", "") if snippet else "")
+        else:  # only the loaded body is obfuscated: the finding is about that script
+            message = MESSAGES["injection_obfuscated"]
+            key = ("injection_body", kind, initiator or "", requested)
+        finding = c.add(load, key, severity="suspicious", kind="injection", message=message,
                         snippet=snippet, origin="served" if kind == "inline" else "script",
                         location=load.page_url, location_kind="page", mechanism="script_injection",
                         initiator=initiator)
-        _append(finding.loaded, _url(inj["requested_url"]))
+        _append(finding.loaded, requested)
 
 
 def _behaviour(c: _Collector, load: Load) -> None:

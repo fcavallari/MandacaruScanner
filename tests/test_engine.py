@@ -1355,3 +1355,149 @@ def test_notification_prompt_after_the_click_probe_is_not_weighted():
     assert score("load")[0] == pytest.approx(0.2)
     total, findings = score("click")
     assert total == 0.0 and any("not weighted" in f for f in findings)
+
+
+@pytest.mark.asyncio
+async def test_script_collector_records_scripts_blocked_as_malware_by_the_cdn():
+    from pnakotic.src.scanner.yara_scan import MAX_FLAGGED, ScriptCollector
+
+    class Req:
+        resource_type = "script"
+
+    class Resp:
+        def __init__(self, url, status, body, headers=None):
+            self.url, self.status, self._body = url, status, body
+            self.headers = headers or {}
+            self.request = Req()
+
+        async def body(self):
+            return self._body
+
+    interstitial = (b"<html><head><title>Suspected Malware | Cloudflare</title></head><body>"
+                    b"This website has been reported for potentially distributing malware.</body></html>")
+    c = ScriptCollector()
+    c._on_response(Resp("https://r1.example/donation", 403, interstitial, {"server": "cloudflare"}))
+    c._on_response(Resp("https://r1.example/donation", 403, interstitial, {"server": "cloudflare"}))  # repeat
+    c._on_response(Resp("https://cdn.example/ok.js", 200, b"var ok=1;"))
+    c._on_response(Resp("https://cdn.example/missing.js", 404, b"not found"))
+    c._on_response(Resp("https://cdn.example/denied.js", 403, b"<html>Forbidden</html>"))
+    await c.drain()
+    assert c.flagged == [{"url": "https://r1.example/donation", "status": 403, "reason": "cloudflare_suspected_malware"}]
+    # the cap counts recorded and in-flight responses together (bounded work on a hostile page)
+    for i in range(MAX_FLAGGED + 5):
+        c._on_response(Resp(f"https://r{i}.example/x.js", 403, interstitial, {"server": "cloudflare"}))
+    await c.drain()
+    assert len(c.flagged) == MAX_FLAGGED and len({f["url"] for f in c.flagged}) == MAX_FLAGGED
+    assert [u for u, _ in c.scripts] == ["https://cdn.example/ok.js"]  # blocked responses are not script bodies
+
+
+@pytest.mark.asyncio
+async def test_script_collector_refetches_orb_dropped_scripts_through_the_context():
+    from pnakotic.src.scanner.yara_scan import MAX_PROBES, PROBE_MAX_BYTES, ScriptCollector
+
+    interstitial = (b"<html><head><title>Suspected Malware | Cloudflare</title></head><body>"
+                    b"This website has been reported for potentially distributing malware.</body></html>")
+    calls = []
+
+    class ApiResponse:
+        def __init__(self, status, headers, body):
+            self.status, self.headers, self._body = status, headers, body
+            self.disposed = False
+
+        async def body(self):
+            return self._body
+
+        async def dispose(self):
+            self.disposed = True
+
+    responses = {}
+
+    class Api:
+        async def get(self, url, **kw):
+            calls.append((url, kw))
+            if url not in responses:
+                raise RuntimeError("Socks5 proxy rejected connection - NotAllowed")
+            return responses[url]
+
+    class Ctx:
+        request = Api()
+
+    class Req:
+        def __init__(self, url, failure="net::ERR_BLOCKED_BY_ORB", rt="script"):
+            self.url, self.failure, self.resource_type = url, failure, rt
+
+    responses["https://r1.example/donation"] = ApiResponse(403, {"Server": "cloudflare", "Content-Type": "text/html"}, interstitial)
+    responses["https://cdn.example/dead.js"] = ApiResponse(404, {"content-type": "text/html"}, b"<html>not found</html>")
+    responses["https://big.example/x.js"] = ApiResponse(403, {"content-length": str(PROBE_MAX_BYTES + 1)}, interstitial)
+    c = ScriptCollector()
+    ctx = Ctx()
+    c._on_failed(Req("https://r1.example/donation"), ctx)
+    c._on_failed(Req("https://cdn.example/dead.js"), ctx)              # an ordinary dead URL: nothing
+    c._on_failed(Req("https://big.example/x.js"), ctx)                 # too large to read: nothing
+    c._on_failed(Req("https://private.example/x.js"), ctx)             # the egress proxy refuses it: nothing
+    c._on_failed(Req("https://r1.example/img.png", rt="image"), ctx)   # not a script
+    c._on_failed(Req("https://r1.example/other.js", failure="net::ERR_FAILED"), ctx)  # not an ORB drop
+    c._on_failed(Req("data:text/javascript,1"), ctx)
+    await c.drain()
+    assert c.flagged == [{"url": "https://r1.example/donation", "status": 403, "reason": "cloudflare_suspected_malware"}]
+    assert [u for u, _ in calls] == ["https://r1.example/donation", "https://cdn.example/dead.js",
+                                     "https://big.example/x.js", "https://private.example/x.js"]
+    assert all(kw["max_redirects"] == 0 and kw["fail_on_status_code"] is False for _, kw in calls)
+    assert all(r.disposed for r in responses.values())
+    assert c.probes == 4
+    # the probe budget is per page
+    for i in range(MAX_PROBES + 5):
+        c._on_failed(Req(f"https://h{i}.example/x.js"), ctx)
+    await c.drain()
+    assert c.probes == MAX_PROBES
+
+
+def test_scoring_flagged_script_once_and_known_reasons_only():
+    flagged = [{"url": "https://r1.example/donation", "status": 403, "reason": "cloudflare_suspected_malware"},
+               {"url": "https://r2.example/x.js", "status": 403, "reason": "cloudflare_suspected_malware"}]
+    score, findings = _scored("https://s.com/", "https://s.com/", signals=_NO_SIGNALS, flagged_scripts=flagged)
+    assert score == pytest.approx(0.4)  # once, however many
+    assert findings == ["Script blocked by Cloudflare as suspected malware: https://r1.example/donation",
+                        "Script blocked by Cloudflare as suspected malware: https://r2.example/x.js"]
+    score, findings = _scored("https://s.com/", "https://s.com/", signals=_NO_SIGNALS,
+                              flagged_scripts=[{"url": "https://r1.example/x", "status": 403, "reason": "other"}, "junk"])
+    assert score == 0.0 and findings == []
+
+
+def test_scoring_obfuscated_injection_from_the_pages_own_code():
+    def inj(kind, initiator, markers=(), body_markers=()):
+        return {"requested_url": "https://r1.example/donation", "initiator_kind": kind, "initiator_url": initiator,
+                "block": None, "markers": list(markers), "body_markers": list(body_markers), "context": None}
+
+    # a plain inline loader fetching obfuscator.io output (the abacashi.com shape)
+    score, findings = _scored("https://s.com/p", "https://s.com/p", signals=_NO_SIGNALS,
+                              injections=[inj("inline", "https://s.com/p", body_markers=["hex_identifier_density"])])
+    assert score == pytest.approx(0.4)
+    assert findings == ["Obfuscated cross-site script (hex_identifier_density) loaded by inline code: https://r1.example/donation"]
+    # an obfuscated loader in a file on the page's own domain
+    score, findings = _scored("https://s.com/p", "https://s.com/p", signals=_NO_SIGNALS,
+                              injections=[inj("script", "https://cdn.s.com/app.js", markers=["string_array_rotation"])])
+    assert score == pytest.approx(0.4)
+    assert findings == ["Obfuscated cross-site script (string_array_rotation) loaded by https://cdn.s.com/app.js: https://r1.example/donation"]
+    # once, however many
+    score, _ = _scored("https://s.com/p", "https://s.com/p", signals=_NO_SIGNALS,
+                       injections=[inj("inline", "https://s.com/p", markers=["string_array_rotation"]),
+                                   inj("script", "https://s.com/a.js", body_markers=["hex_identifier_density"])])
+    assert score == pytest.approx(0.4)
+    # a third party's loader (a tag manager) is not the page's own code; a plain script is nothing
+    for item in (inj("script", "https://www.googletagmanager.com/gtm.js", body_markers=["hex_identifier_density"]),
+                 inj("inline", "https://s.com/p"), {"requested_url": 1}, "junk"):
+        assert _scored("https://s.com/p", "https://s.com/p", signals=_NO_SIGNALS, injections=[item]) == (0.0, [])
+
+
+def test_scoring_flagged_and_injection_also_count_in_site_mode():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import ScanResult
+
+    r = ScanResult(target_url="https://s.com/p", final_url="https://www.s.com/p")
+    r.metadata = {"page_signals": _NO_SIGNALS,
+                  "flagged_scripts": [{"url": "https://r1.example/donation", "status": 403, "reason": "cloudflare_suspected_malware"}],
+                  "injections": [{"requested_url": "https://r1.example/donation", "initiator_kind": "inline",
+                                  "initiator_url": "https://www.s.com/p", "block": None, "markers": [],
+                                  "body_markers": ["hex_identifier_density"], "context": None}]}
+    assert PnakoticScorer().score(r, site_host="www.s.com") == pytest.approx(0.8)

@@ -320,9 +320,11 @@ class PnakoticEngine:
 
         The requested profile's screenshot goes to screenshots/ (the dashboard's landing
         shot); comparison profiles write to profiles/<name>/; options.shot_dir overrides
-        both. With options.site, metadata also gets main_status, served_bytes, links,
-        script_requests, injections and challenge, and YARA keeps one finding per buffer
-        (the served HTML first, as source "served").
+        both. Every load collects script bodies and traces script initiators: metadata gets
+        "injections" (find_injections) and, when any, "flagged_scripts" (the script responses
+        the CDN refused as malware, yara_scan.ScriptCollector.flagged). With options.site,
+        metadata also gets main_status, served_bytes, links, script_requests and challenge,
+        and YARA keeps one finding per buffer (the served HTML first, as source "served").
         """
         profile = PROFILES[profile_name]
         result = ScanResult(target_url=target_url)
@@ -357,8 +359,9 @@ class PnakoticEngine:
         guard: Optional[EgressGuard] = None
         behavior = BehaviorRecorder()
         rules = getattr(self, "yara_rules", None)
-        # Site mode keeps script bodies for the injection evidence even with YARA off.
-        scripts = ScriptCollector() if (rules or site) else None
+        # Script bodies are kept in every mode (bounded, yara_scan.py): YARA matches them, and the
+        # scorer reads the injection evidence (body_markers) and the CDN-blocked scripts.
+        scripts: Optional[ScriptCollector] = ScriptCollector()
         documents: List[tuple] = []  # (source, url, html) for YARA: the landing page and its frames
         try:
             await behavior.attach(ctx)  # before new_page: hooks must precede every page script
@@ -440,9 +443,8 @@ class PnakoticEngine:
             await cdp.send("Page.enable")
             tree = await cdp.send("Page.getFrameTree")
             main_frame_id = tree["frameTree"]["frame"]["id"]
-            if site:
-                tracer = ScriptTracer()
-                await tracer.attach(cdp, main_frame_id)
+            tracer = ScriptTracer()  # who started each script request; the scorer and site report read it
+            await tracer.attach(cdp, main_frame_id)
             current_url = target_url
 
             def on_frame_navigated(event: dict) -> None:
@@ -643,6 +645,13 @@ class PnakoticEngine:
                 result.metadata["guard_blocked_hosts"] = list(guard.blocked_hosts)
 
         served_url = str(served_resp.url) if served_resp is not None else final_url
+        if scripts and scripts.flagged:
+            # Scripts the CDN refused as malware on the visitor's behalf (no body to scan).
+            result.metadata["flagged_scripts"] = list(scripts.flagged)
+        # Cross-site scripts started by script, with the obfuscation of the loader and of what it
+        # loaded. The URL probe has no served HTML, so its inline injections carry no block.
+        result.metadata["injections"] = find_injections(tracer.records if tracer else [], served_url, served,
+                                                        dict(scripts.scripts) if scripts else {})
         if site:
             served_text = served.decode("utf-8", "replace") if served is not None else content
             result.metadata.update({
@@ -650,8 +659,6 @@ class PnakoticEngine:
                 "served_bytes": len(served) if served is not None else 0,
                 "links": links,
                 "script_requests": list(tracer.records) if tracer else [],
-                "injections": find_injections(tracer.records if tracer else [], served_url, served,
-                                              dict(scripts.scripts)),
                 "challenge": looks_like_challenge(main_status, signals["title"], served_text),
             })
             if result.metadata["challenge"]:

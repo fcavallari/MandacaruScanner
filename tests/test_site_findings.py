@@ -414,3 +414,57 @@ def test_public_helpers_usable_load_and_own_score():
     challenged.result.metadata["challenge"] = True
     assert not usable_load(challenged)
     assert own_score(_load(0, "https://s.com/", "default", score=0.5).result)[0] == 0.5
+
+
+def test_untied_injection_of_an_obfuscated_script_is_suspicious_even_with_a_plain_loader():
+    from _support import _load
+    from pnakotic.src.scanner.site_findings import MESSAGES, build_blocks
+
+    # The abacashi.com shape: a plain inline loader (URL built at runtime, block not found)
+    # fetching obfuscator.io output from another site.
+    inj = {"requested_url": "https://r1.example/donation", "initiator_kind": "inline", "initiator_url": "https://s.com/p",
+           "block": None, "markers": [], "body_markers": ["string_array_rotation", "hex_identifier_density"], "context": None}
+    [b] = build_blocks([_load(0, "https://s.com/p", "default", [], injections=[inj])], "s.com", None)
+    assert b["location"] == "https://s.com/p" and b["location_kind"] == "page"
+    f = b["findings"][0]
+    assert f["kind"] == "injection" and f["severity"] == "suspicious"
+    assert f["message"] == MESSAGES["injection_obfuscated"]
+    assert f["loaded"] == ["https://r1.example/donation"] and f["snippet"] is None
+    assert f["details"]["mechanism"] == "script_injection"
+    # the same obfuscated script loaded on two pages by the same kind of loader is one finding
+    loads = [_load(0, "https://s.com/p", "default", [], injections=[inj]),
+             _load(1, "https://s.com/q", "default", [], injections=[inj])]
+    [b] = build_blocks(loads, "s.com", None)
+    assert b["findings"][0]["pages"] == ["https://s.com/p", "https://s.com/q"]
+    # an injecting file on another site still adds nothing: that code is not the owner's
+    gtm = {**inj, "initiator_kind": "script", "initiator_url": "https://www.googletagmanager.com/gtm.js"}
+    assert build_blocks([_load(0, "https://s.com/p", "default", [], injections=[gtm])], "s.com", None) == []
+    # and a plain loader fetching a plain script is still nothing
+    plain = {**inj, "body_markers": []}
+    assert build_blocks([_load(0, "https://s.com/p", "default", [], injections=[plain])], "s.com", None) == []
+
+
+def test_script_blocked_as_malware_by_the_cdn_is_a_suspicious_script_block():
+    from _support import _load
+    from pnakotic.src.scanner.site_findings import MESSAGES, build_blocks
+
+    url = "https://r1.example/donation"
+    inj = {"requested_url": url, "initiator_kind": "inline", "initiator_url": "https://s.com/p",
+           "block": None, "markers": [], "body_markers": [], "context": None}
+    load = _load(0, "https://s.com/p", "default", [], injections=[inj])
+    load.result.metadata["flagged_scripts"] = [{"url": url, "status": 403, "reason": "cloudflare_suspected_malware"}]
+    [b] = build_blocks([load], "s.com", None)
+    assert b["location_kind"] == "script" and b["location"] == url
+    [f] = b["findings"]
+    assert f["kind"] == "flagged_script" and f["severity"] == "suspicious" and f["origin"] == "script"
+    assert f["message"] == MESSAGES["flagged_script"].format(vendor="Cloudflare")
+    assert f["loaded_by"] == ["https://s.com/p", "inline on https://s.com/p"]  # the loader is named, not repeated
+    assert f["details"]["mechanism"] == "flagged_script" and f["pages"] == ["https://s.com/p"]
+    # an unknown reason is ignored; a load that ended on another site places it there as that site's
+    other = _load(0, "https://s.com/p", "default", [], injections=[inj])
+    other.result.metadata["flagged_scripts"] = [{"url": url, "status": 403, "reason": "something_else"}]
+    assert build_blocks([other], "s.com", None) == []
+    away = _load(0, "https://s.com/p", "default", [], injections=[inj], final_url="https://evil.net/land")
+    away.result.metadata["flagged_scripts"] = [{"url": url, "status": 403, "reason": "cloudflare_suspected_malware"}]
+    [b] = build_blocks([away], "s.com", None)
+    assert b["findings"][0]["details"]["offsite"] is True and b["findings"][0]["loaded_by"] == []
