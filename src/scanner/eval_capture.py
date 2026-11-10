@@ -88,11 +88,17 @@ class Stage:
     length: int = 0  # characters, for an oversized stage
 
 
-def _top_frame(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _top_frame(event: Dict[str, Any], harness_ids: Set[str]) -> Optional[Dict[str, Any]]:
+    """The top frame of the stack that built the script, passing over frames of the harness's
+    own scripts (the card hooks wrap appendChild, so an inserted inline script compiles inside
+    our wrapper). Chromium 148 gives scriptParsed only the top frame, so such a stage then has
+    no caller rather than our hook's line."""
     stack = event.get("stackTrace")
     frames = stack.get("callFrames") if isinstance(stack, dict) else None
-    if isinstance(frames, list) and frames and isinstance(frames[0], dict):
-        return frames[0]
+    if isinstance(frames, list):
+        for frame in frames[:50]:
+            if isinstance(frame, dict) and frame.get("scriptId") not in harness_ids:
+                return frame
     return None
 
 
@@ -183,7 +189,7 @@ class EvalCapture:
                     return
                 if len(self._seen) < MAX_TRACKED_HASHES:
                     self._seen.add(digest)
-            frame = _top_frame(event)
+            frame = _top_frame(event, self.harness_script_ids)
             caller, line = "", None  # type: str, Optional[int]
             if frame is not None and isinstance(frame.get("url"), str):
                 caller = frame["url"][:MAX_CALLER_CHARS]

@@ -436,6 +436,9 @@ async def test_an_inline_script_inserted_at_runtime_is_not_the_served_block(site
     assert [(e["via"], e["owner"]) for e in ci["inserted"]] == [("appendChild", "unknown"), ("appendChild", "unknown")]
     assert ci["inserted"][0]["frames"] == ["", f"{site_server}/js/inline-ins.js"]
     assert ci["inserted"][1]["frames"] == [""]
+    # The inserted script is a runtime stage. CDP gives scriptParsed only the top frame, which is our
+    # appendChild hook's: it is passed over, so the stage has no caller rather than the hook's line.
+    assert [(s["caller"], s["caller_line"]) for s in r.metadata["eval_stages"]] == [("", None)]
 
 
 @requires_browser

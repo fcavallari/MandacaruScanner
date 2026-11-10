@@ -99,6 +99,28 @@ CARD_HTML_PATTERN = (
 )
 CARD_HTML_RE = re.compile(CARD_HTML_PATTERN, re.IGNORECASE)
 
+# The served-HTML check reads a whole body (up to 2 MB) in the worker, where CARD_HTML_RE's
+# per-tag window can backtrack for seconds on hostile markup: there, tags and attributes are
+# read with two linear regexes and the values tested as CARD_SELECTOR tests them.
+_TAG_RE = re.compile(r"<(?:input|select)\b[^<>]{0,1000}", re.IGNORECASE)
+_ATTR_RE = re.compile(r"\b(autocomplete|name|id)\s{0,3}=\s{0,3}"
+                      r"(?:\"([^\"]{0,200})\"|'([^']{0,200})'|([^\s\"'<>]{1,200}))", re.IGNORECASE)
+_CARD_TOKENS = set(CARD_AUTOCOMPLETE)
+
+
+def html_has_card_input(text: str) -> bool:
+    """Whether ``text`` (HTML, any length) has an ``<input>`` / ``<select>`` tag that
+    ``CARD_SELECTOR`` would match. Linear time."""
+    for tag in _TAG_RE.finditer(text or ""):
+        for attr in _ATTR_RE.finditer(tag.group()):
+            value = (attr.group(2) or attr.group(3) or attr.group(4) or "").lower()
+            if attr.group(1).lower() == "autocomplete":
+                if _CARD_TOKENS.intersection(value.split()):
+                    return True
+            elif any(part in value for part in CARD_NAME_PARTS):
+                return True
+    return False
+
 # __NAME__, __SELECTOR__, __HTML_RE__ and the limits are substituted by _init_script (no
 # %-formatting: the script is full of regex text).
 _INIT_SCRIPT = r"""
@@ -365,7 +387,7 @@ class CardWatcher:
 
 
 def summarize(events: List[Dict[str, Any]], present: int, site_host: str, landing_url: str,
-              served: Optional[bytes], dropped: int = 0) -> Dict[str, Any]:
+              served: Optional[bytes], *, dropped: int = 0) -> Dict[str, Any]:
     """``metadata["card_inputs"]``: how many card inputs the page has (``present``), each
     recorded insertion with its owner (``code_origin.stack_owner``) and up to 10 frame URLs (an
     unreadable frame is ``""``), and how many insertions were not kept (``dropped``).
@@ -394,6 +416,6 @@ def summarize(events: List[Dict[str, Any]], present: int, site_host: str, landin
         })
     if present > 0 and not events:
         text = served.decode("utf-8", "replace") if served else ""
-        if not CARD_HTML_RE.search(text):
+        if not html_has_card_input(text):
             inserted.append({"via": "unseen", "owner": "unknown", "vendors": [], "frames": [], "cut": False})
     return {"present": present, "inserted": inserted, "dropped": dropped}

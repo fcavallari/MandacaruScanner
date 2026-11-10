@@ -49,6 +49,32 @@ def test_card_html_re_is_fast_on_hostile_markup():
         assert time.monotonic() - started < 1.0
 
 
+def test_served_html_check_agrees_and_is_linear_on_a_whole_body():
+    import time
+
+    from pnakotic.src.scanner.card_watch import html_has_card_input
+    from pnakotic.src.scanner.yara_scan import MAX_BUFFER_BYTES
+
+    for html in CARD_FIELDS:
+        assert html_has_card_input(f"<p>x</p>{html}<p>y</p>"), html
+    assert html_has_card_input("<input type=text name=cardnumber>")
+    assert html_has_card_input("<INPUT AUTOCOMPLETE='shipping cc-number'>")
+    for html in OTHER_FIELDS:
+        assert not html_has_card_input(html), html
+    hostile = [  # the served body is read whole (up to MAX_BUFFER_BYTES) in the worker
+        ("<input " + "name=id=" * 130 + " ") * 4000,
+        ("<input autocomplete=" + "a " * 500) * 4000,
+        ("<select name='" + "c" * 59) * 40000,
+        "<input " * 400000,
+        ("<input id='" + "cc_" * 19 + "' ") * 40000,
+    ]
+    for text in hostile:
+        text = text[:MAX_BUFFER_BYTES]
+        started = time.monotonic()
+        assert not html_has_card_input(text)
+        assert time.monotonic() - started < 1.0
+
+
 def test_summarize_owner_of_each_insertion():
     from pnakotic.src.scanner.card_watch import summarize
 
