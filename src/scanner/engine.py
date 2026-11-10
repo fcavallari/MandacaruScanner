@@ -470,6 +470,10 @@ class PnakoticEngine:
                         await page.evaluate(expression)
                     except BROWSER_ERRORS:
                         pass
+                try:
+                    await behavior.warm_up(page)  # a binding round trip: Playwright's delivery script
+                except BROWSER_ERRORS:
+                    pass
             await evals.attach(cdp, warm_up=warm_up)
             current_url = target_url
 

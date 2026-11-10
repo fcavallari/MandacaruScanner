@@ -185,7 +185,8 @@ def site_server():
                 self.send_header("Content-Length", "0")
                 self.end_headers()
             elif self.path in ("/eval-stage", "/eval-sourceurl", "/eval-template", "/eval-flood", "/eval-debugger",
-                           "/eval-stackless", "/eval-string-hook", "/eval-dataurl", "/eval-crowd"):
+                           "/eval-stackless", "/eval-string-hook", "/eval-dataurl", "/eval-crowd",
+                           "/hooks-only"):
                 scripts = {  # code the page builds at runtime (Task 2: eval_capture)
                     "/eval-stage": 'new Function("/*PNAKOTIC_TEST_EVAL*/ return 1")(); eval(' + json.dumps(obf) + ');',
                     "/eval-sourceurl": 'eval("/*PNAKOTIC_TEST_EVAL*/\\n//# sourceURL=https://example.com/jquery.js");',
@@ -194,6 +195,9 @@ def site_server():
                     # built from a timer or a promise: no JS frame on the stack, so no caller
                     "/eval-stackless": 'setTimeout("/*PNAKOTIC_TEST_EVAL*/ 1", 0); setTimeout(eval, 0, "2 + 2"); '
                                        'Promise.resolve("3 + 3").then(eval);',
+                    # a page that only trips the behavior hooks (each report is a binding call into Playwright)
+                    "/hooks-only": 'document.execCommand("copy"); '
+                                   'document.body.requestFullscreen && document.body.requestFullscreen();',
                     # a page that points String at eval and lets the behavior hooks call it (execCommand)
                     "/eval-string-hook": 'String = eval; document.execCommand("/*PNAKOTIC_TEST_EVAL*/ 1 + 1");',
                     # scripts made from a data: and a blob: URL: a URL, no sourceURL, no stack

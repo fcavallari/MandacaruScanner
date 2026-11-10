@@ -14,6 +14,7 @@ downloads are observed from Playwright. Everything that crosses the binding is
 attacker-controlled: only known event ids are kept, strings are truncated and the number
 of events is capped. A page forging events can only raise its own score.
 """
+import asyncio
 import json
 import re
 import secrets
@@ -184,6 +185,26 @@ class BehaviorRecorder:
             "max_text": MAX_TEXT,
             "history_flood": HISTORY_FLOOD_CALLS,
         })
+
+    async def warm_up(self, page, wait_s: float = 2.0) -> None:
+        """Fire one hook on the blank page and forget the event it records.
+
+        A binding call makes Playwright run its delivery script in the page's main world
+        (`arg => ...deliverBindingResult(arg)`), a script no other call parses. Running it once
+        before the page's own code lets EvalCapture know it by content (the script does not
+        depend on the binding's name, so this covers any recorder's binding).
+        """
+        before, per_id = len(self.events), dict(self._per_id)
+        try:
+            await page.evaluate("document.execCommand('copy')")
+            waited = 0.0
+            while len(self.events) == before and waited < wait_s:
+                await asyncio.sleep(0.02)
+                waited += 0.02
+            await asyncio.sleep(0.05)  # the delivery script runs just after the handler returns
+        finally:
+            del self.events[before:]
+            self._per_id = per_id
 
     def watch(self, page) -> None:
         page.on("dialog", self._on_dialog)

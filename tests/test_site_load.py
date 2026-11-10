@@ -338,3 +338,17 @@ async def test_a_marked_stage_is_kept_after_the_slots_are_full_of_junk(site_serv
     # 26 distinct stages ("return 0".."return 24", "return 99") and 9 repeats of the last one
     assert r.metadata["eval_stages_repeated"] == 9
     assert r.metadata["eval_stages_dropped"] == 7  # 6 distinct that found no slot, 1 replaced by the marked stage
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_behavior_hooks_firing_leave_no_stages(site_server, tmp_path):
+    """Every hook report is a binding call, after which Playwright runs a delivery script in the page's
+    main world. It is the harness's: the capture knows it by content (the warm-up makes one call), and
+    the warm-up's own event is not recorded as the page's behavior."""
+    engine = _site_engine(tmp_path)
+    r = await _site_load(engine, f"{site_server}/hooks-only")
+    assert any(h.mechanism == "page_behavior" for h in r.hops)  # the binding did fire
+    assert r.metadata["eval_stages"] == []
+    plain = await _site_load(engine, f"{site_server}/", shot="pages/1/default")
+    assert not any(h.mechanism == "page_behavior" for h in plain.hops)
