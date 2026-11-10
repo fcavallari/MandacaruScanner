@@ -21,7 +21,6 @@ from .static_analyzer import StaticAnalyst, SIGNATURE_MECHANISMS, MAX_CONTENT_CH
 from .artifacts import ArtifactManager
 from .behavior import BehaviorRecorder
 from .eval_capture import EvalCapture
-from .obfuscation import obfuscator_markers
 from .snippets import cut_snippet
 from .yara_scan import YARA_MECHANISM, ScriptCollector, load_rules, scan_buffers, MAX_BUFFER_BYTES, MAX_FRAMES
 from .egress_proxy import EgressProxy
@@ -207,9 +206,10 @@ def _eval_stage_entry(stage) -> dict:
     return {
         "caller": stage.caller_url[:300],
         "caller_line": stage.caller_line,
-        "length": len(stage.source),
-        "markers": obfuscator_markers(stage.source.decode("utf-8", "replace")),
+        "length": stage.length if stage.oversized else len(stage.source),
+        "markers": list(stage.markers),
         "context": cut_snippet(stage.source, 0, 0),
+        "oversized": stage.oversized,
         "yara_matched": False,  # site mode fills it in from the per-buffer YARA matches
     }
 
@@ -463,7 +463,14 @@ class PnakoticEngine:
             await tracer.attach(cdp, main_frame_id)
             # Code the page builds at runtime (eval, new Function), before goto. The warm-up makes Playwright
             # parse its own main-world scripts now, so they are known and not mistaken for the page's.
-            await evals.attach(cdp, warm_up=lambda: page.evaluate("'pnakotic' + '-warm-up'"))
+            # Every main-world evaluate the engine makes later is run once here, so its payload is known by content.
+            async def warm_up() -> None:
+                for expression in ("'pnakotic' + '-warm-up'", NEUTRAL_POINT_JS):
+                    try:
+                        await page.evaluate(expression)
+                    except BROWSER_ERRORS:
+                        pass
+            await evals.attach(cdp, warm_up=warm_up)
             current_url = target_url
 
             def on_frame_navigated(event: dict) -> None:
@@ -688,13 +695,19 @@ class PnakoticEngine:
         result.metadata["eval_stages"] = eval_stages
         if evals.dropped:
             result.metadata["eval_stages_dropped"] = evals.dropped
+        if evals.repeated:
+            result.metadata["eval_stages_repeated"] = evals.repeated
 
         if rules:
             buffers = [("served", served_url, served)] if site and served is not None else []
             buffers += [(src, url, html.encode("utf-8", "replace")) for src, url, html in documents]
             # Runtime-built code goes before the script bodies: when the scan budget runs out, those are cut first.
-            eval_base = len(buffers)
-            buffers += [("eval", stage.caller_url or served_url, stage.source) for stage in evals.stages]
+            # (a stage too long to have been read has no source and no buffer)
+            eval_index = {}  # eval_stages position -> buffer index
+            for i, stage in enumerate(evals.stages):
+                if not stage.oversized:
+                    eval_index[i] = len(buffers)
+                    buffers.append(("eval", stage.caller_url or served_url, stage.source))
             buffers += [("script", url, body) for url, body in scripts.scripts]
             matches, stats = await scan_buffers(rules, buffers, per_buffer=site)
             stats["scripts_dropped"] = scripts.dropped
@@ -704,7 +717,7 @@ class PnakoticEngine:
             if site:
                 hit = {m.get("buffer_index") for m in matches}
                 for i, entry in enumerate(eval_stages):
-                    entry["yara_matched"] = eval_base + i in hit
+                    entry["yara_matched"] = eval_index.get(i) in hit
 
         # What the page tried to do to the visitor, after the context is gone (no late events).
         result.hops = intercepted + behavior.hops()

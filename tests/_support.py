@@ -103,6 +103,9 @@ def _site_engine(tmp_path):
     return engine
 
 
+DYNAMIC_PAGES = {}  # path -> HTML for pages a test builds itself (served by site_server)
+
+
 @pytest.fixture(scope="module")
 def site_server():
     """127.0.0.1 server for site-mode loads. Yields its base URL."""
@@ -182,7 +185,7 @@ def site_server():
                 self.send_header("Content-Length", "0")
                 self.end_headers()
             elif self.path in ("/eval-stage", "/eval-sourceurl", "/eval-template", "/eval-flood", "/eval-debugger",
-                           "/eval-stackless"):
+                           "/eval-stackless", "/eval-string-hook", "/eval-dataurl", "/eval-crowd"):
                 scripts = {  # code the page builds at runtime (Task 2: eval_capture)
                     "/eval-stage": 'new Function("/*PNAKOTIC_TEST_EVAL*/ return 1")(); eval(' + json.dumps(obf) + ');',
                     "/eval-sourceurl": 'eval("/*PNAKOTIC_TEST_EVAL*/\\n//# sourceURL=https://example.com/jquery.js");',
@@ -191,11 +194,26 @@ def site_server():
                     # built from a timer or a promise: no JS frame on the stack, so no caller
                     "/eval-stackless": 'setTimeout("/*PNAKOTIC_TEST_EVAL*/ 1", 0); setTimeout(eval, 0, "2 + 2"); '
                                        'Promise.resolve("3 + 3").then(eval);',
+                    # a page that points String at eval and lets the behavior hooks call it (execCommand)
+                    "/eval-string-hook": 'String = eval; document.execCommand("/*PNAKOTIC_TEST_EVAL*/ 1 + 1");',
+                    # scripts made from a data: and a blob: URL: a URL, no sourceURL, no stack
+                    "/eval-dataurl": ('var s = document.createElement("script"); '
+                                      's.src = "data:text/javascript,/*PNAKOTIC_TEST_EVAL_DATA*/ var a = 1;"; '
+                                      'document.head.appendChild(s); '
+                                      'var u = URL.createObjectURL(new Blob(["/*PNAKOTIC_TEST_EVAL_BLOB*/ var b = 2;"], '
+                                      '{type: "text/javascript"})); var t = document.createElement("script"); '
+                                      't.src = u; document.head.appendChild(t);'),
+                    # 25 distinct throwaway stages, a 26th repeated ten times, then the one that matters
+                    "/eval-crowd": ('for (var i = 0; i < 25; i++) { new Function("return " + i); } '
+                                    'for (var j = 0; j < 10; j++) { new Function("return 99"); } '
+                                    'eval("/*PNAKOTIC_TEST_EVAL*/" + ' + json.dumps(obf) + ');'),
                     "/eval-debugger": 'setInterval(function () { debugger; }, 10); '
                                       'new Function("/*PNAKOTIC_TEST_EVAL*/")();',
                 }
                 self._send(200, "text/html", (f"<html><head><title>Eval</title></head><body><h1>Eval</h1><iframe srcdoc='<p>hi</p>'></iframe>"
                                               f"<script>{scripts[self.path]}</script></body></html>").encode())
+            elif self.path in DYNAMIC_PAGES:
+                self._send(200, "text/html", DYNAMIC_PAGES[self.path].encode())
             elif self.path == "/payload.js":
                 self._send(200, "text/javascript", b"var PNAKOTIC_TEST_SKIMMER = 1;")
             elif self.path == "/challenge":

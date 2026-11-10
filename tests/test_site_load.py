@@ -201,7 +201,7 @@ async def test_runtime_code_is_captured_matched_and_marked(site_server, tmp_path
     assert any("string_array_rotation" in s["markers"] for s in stages)
     # Chromium gives eval and new Function a stack: the caller is the page that built them
     assert all(s["caller"].startswith(site_server) and s["caller_line"] == 1 for s in stages)
-    assert all(set(s) == {"caller", "caller_line", "length", "markers", "context", "yara_matched"} for s in stages)
+    assert all(set(s) == {"caller", "caller_line", "length", "markers", "context", "yara_matched", "oversized"} for s in stages)
     assert all(s["context"]["text"] and s["length"] > 0 for s in stages)
     hits = [json.loads(h.evidence) for h in r.hops if h.mechanism == "yara_match"]
     assert any(h["source"] == "eval" and h["rule"] == "js_runtime_test_001" for h in hits)
@@ -222,7 +222,9 @@ async def test_runtime_templates_are_captured_but_quiet(site_server, tmp_path):
     from pnakotic.src.intelligence.scorer import PnakoticScorer
 
     r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-template")
-    assert len(r.metadata["eval_stages"]) == 3 and not any(s["markers"] for s in r.metadata["eval_stages"])
+    # three identical templates are one stage: the repeats take no slot, they are counted
+    assert len(r.metadata["eval_stages"]) == 1 and r.metadata["eval_stages_repeated"] == 2
+    assert not any(s["markers"] for s in r.metadata["eval_stages"])
     PnakoticScorer().score(r, site_host="127.0.0.1")
     assert not any("built at runtime" in f for f in r.metadata["scoring_findings"])
 
@@ -268,3 +270,71 @@ async def test_runtime_code_built_from_a_timer_or_a_promise_is_a_stage_without_a
     stages = r.metadata["eval_stages"]
     assert len(stages) == 3 and all(s["caller"] == "" and s["caller_line"] is None for s in stages)
     assert sum(s["yara_matched"] for s in stages) == 1
+
+
+@requires_browser
+@requires_yara
+@pytest.mark.asyncio
+async def test_a_copy_of_the_harness_utility_script_does_not_hide_what_it_runs(site_server, tmp_path, yara_rules_dir):
+    """Bypass A: the page copies Playwright's main-world UtilityScript and calls it. The copy is the
+    harness's own content and is skipped; what it evaluates is the page's code and is a stage."""
+    import _support
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        ctx = await browser.new_context()
+        page = await ctx.new_page()
+        cdp = await ctx.new_cdp_session(page)
+        parsed = []
+        cdp.on("Debugger.scriptParsed", lambda event: parsed.append(event))
+        await cdp.send("Debugger.enable")
+        await page.evaluate("1 + 1")
+        await cdp.send("Debugger.enable")  # replays the scripts parsed so far
+        utility = None
+        for event in parsed:
+            if event.get("url") == "" and (event.get("executionContextAuxData") or {}).get("isDefault") is not False:
+                source = (await cdp.send("Debugger.getScriptSource", {"scriptId": event["scriptId"]}))["scriptSource"]
+                if "UtilityScript" in source and "this.global.eval(expression)" in source:
+                    utility = source
+                    break
+        await browser.close()
+    assert utility is not None, "this Playwright version keeps its utility script elsewhere: update the test"
+    _support.DYNAMIC_PAGES["/eval-launder"] = (
+        "<html><body><script>var src = " + json.dumps(utility) + "; var u = eval(src); "
+        "u.evaluate(false, true, '/*PNAKOTIC_TEST_EVAL*/ 1');</script></body></html>")
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-launder")
+    assert any(s["yara_matched"] for s in r.metadata["eval_stages"])
+
+
+@requires_browser
+@requires_yara
+@pytest.mark.asyncio
+async def test_eval_run_through_a_hooked_global_is_still_a_stage(site_server, tmp_path, yara_rules_dir):
+    """Bypass B: String = eval, then a call that makes the behavior hooks run String(): eval runs
+    from a harness frame, and what it builds is still the page's."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-string-hook")
+    assert any(s["yara_matched"] for s in r.metadata["eval_stages"])
+
+
+@requires_browser
+@requires_yara
+@pytest.mark.asyncio
+async def test_scripts_from_data_and_blob_urls_are_stages(site_server, tmp_path, yara_rules_dir):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-dataurl")
+    stages = r.metadata["eval_stages"]
+    assert len(stages) == 2 and all(s["yara_matched"] and s["caller"] == "" for s in stages)
+
+
+@requires_browser
+@requires_yara
+@pytest.mark.asyncio
+async def test_a_marked_stage_is_kept_after_the_slots_are_full_of_junk(site_server, tmp_path, yara_rules_dir):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-crowd")
+    stages = r.metadata["eval_stages"]
+    assert len(stages) == 20
+    marked = [s for s in stages if "string_array_rotation" in s["markers"]]
+    assert len(marked) == 1 and marked[0]["yara_matched"]
+    # 26 distinct stages ("return 0".."return 24", "return 99") and 9 repeats of the last one
+    assert r.metadata["eval_stages_repeated"] == 9
+    assert r.metadata["eval_stages_dropped"] == 7  # 6 distinct that found no slot, 1 replaced by the marked stage

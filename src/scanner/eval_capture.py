@@ -28,20 +28,25 @@ an ``eval`` inside a timer string  ``""``                top frame has an empty 
 
 So ``url == ""`` or ``hasSourceURL`` selects every runtime-built script, with or without a
 stack (a stage built from a timer or a promise has none, so ``caller`` is ``""`` for it, and
-requiring a stack would give a loader a one-line bypass). The same selection also catches
-everything Playwright injects into the page: its init scripts (ours included), its utility
-script and wrapper, and every ``page.evaluate`` payload, in the main world and in an isolated
-one. Those are told apart, not by a stack, but by what they are:
+requiring a stack would give a loader a one-line bypass). ``data:`` and ``blob:`` URLs are
+selected too: such a script has a URL, no sourceURL and no stack, and the page made it up.
+
+The same selection also catches everything Playwright injects into the page: its init scripts
+(ours included), its utility script and wrapper, and every ``page.evaluate`` payload, in the
+main world and in an isolated one. Those are told apart by content alone:
 
 * a script in an isolated world (``executionContextAuxData.isDefault`` false) is Playwright's
   or a browser extension's: a page cannot create one;
-* everything parsed *before* the capture is sealed is the harness. ``attach`` enables the
-  debugger (which replays the init scripts of the blank page), runs a warm-up call so the
-  utility script and the wrapper are parsed too, and records the ``hash`` of all of it. Later
-  scripts with such a hash (the same init scripts in the real document and its frames, the
-  wrapper at every call) are the harness, and so is any script whose top stack frame is one of
-  them (a ``page.evaluate`` payload runs from the utility script). The page cannot get its code
-  ignored this way without making it identical to the harness's own.
+* the harness set is the CDP ``hash`` of everything parsed before the capture is sealed.
+  ``attach`` enables the debugger (which replays the init scripts of the blank page), runs a
+  warm-up that the caller builds from every main-world ``evaluate`` the engine will make (so the
+  utility script, the wrapper and those payloads are parsed once) and records the hashes. A later
+  script is skipped only when its own hash is in that set.
+
+Nothing else excuses a script: not the stack it was built from, not being built by a harness
+script. A page can copy Playwright's utility script and call it, or point ``String`` at ``eval``
+and let a hook call it; what such code builds is still a stage. The only code a page can get
+ignored is code byte-identical to one of the harness's own scripts.
 
 An inserted inline ``<script>`` (``s.text = ...; document.head.appendChild(s)``) is a stage: no
 URL, and the stack of the code that built it. It is runtime-built code, so it is captured.
@@ -51,24 +56,36 @@ is never waited on; ``drain`` waits, bounded, for the calls still in flight.
 
 Everything is page-supplied and bounded: ``MAX_STAGES`` stages, ``MAX_STAGE_CHARS`` characters
 each (a longer one is cut, not dropped), ``MAX_STAGE_BYTES_TOTAL`` bytes in all; whatever does
-not fit, or could not be read, is counted in ``dropped``. A ``debugger;`` loop cannot stall the
+not fit, or could not be read, is counted in ``dropped``. A stage that repeats one already seen
+(same ``hash``) takes no slot and is counted in ``repeated``. At most ``MAX_STAGE_FETCHES`` sources
+are read per load, and none above ``MAX_STAGE_FETCH_CHARS`` characters (that stage is recorded
+without source, ``oversized``). Once the slots are full, a stage with obfuscator markers replaces
+a kept one that has none, so junk cannot crowd the payload out. A ``debugger;`` loop cannot stall the
 page: breakpoints are deactivated and any pause is resumed at once.
 """
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+
+from .obfuscation import obfuscator_markers
 
 MAX_STAGES = 20
 MAX_STAGE_CHARS = 200_000
 MAX_STAGE_BYTES_TOTAL = 2_000_000
 MAX_CALLER_CHARS = 300
+MAX_STAGE_FETCHES = 100  # sources read per load
+MAX_STAGE_FETCH_CHARS = 2_000_000  # a longer script is not read at all
+MAX_TRACKED_HASHES = 10_000  # distinct stage hashes remembered for the repeat count
 
 
 @dataclass
 class Stage:
-    source: bytes
+    source: bytes  # b"" for an oversized stage
     caller_url: str  # the top frame of the stack that built it, or ""
     caller_line: Optional[int]  # 1-based
+    markers: List[str] = field(default_factory=list)  # obfuscator markers of the source
+    oversized: bool = False  # longer than MAX_STAGE_FETCH_CHARS: never read
+    length: int = 0  # characters, for an oversized stage
 
 
 def _top_frame(event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -85,17 +102,19 @@ class EvalCapture:
     def __init__(self) -> None:
         self.stages: List[Stage] = []
         self.dropped = 0
-        self._accepted = 0  # stages kept or being fetched: the count budget
+        self.repeated = 0
+        self._fetches = 0
         self._bytes = 0
         self._sealed = False
         self._harness_hashes: Set[str] = set()  # what was parsed before attach() finished: not the page's
-        self._harness_ids: Set[str] = set()
+        self._seen: Set[str] = set()  # hashes of stages already met
         self._tasks: Set["asyncio.Future[None]"] = set()
         self._cdp: Any = None
 
     async def attach(self, cdp: Any, warm_up: Optional[Callable[[], Awaitable[Any]]] = None) -> None:
-        """Start listening. ``warm_up`` (optional) makes the harness parse the scripts it injects
-        on first use (Playwright: any ``page.evaluate``), so they are known before the page runs."""
+        """Start listening. ``warm_up`` (optional) makes the harness parse everything it will inject
+        or evaluate later (Playwright: the utility script and each main-world ``evaluate`` payload),
+        so those are known by content before the page runs."""
         self._cdp = cdp
         cdp.on("Debugger.scriptParsed", self._on_parsed)
         cdp.on("Debugger.paused", self._on_paused)
@@ -138,28 +157,36 @@ class EvalCapture:
             if not self._sealed:  # before the page: the harness's own scripts
                 if isinstance(digest, str):
                     self._harness_hashes.add(digest)
-                self._harness_ids.add(script_id)
                 return
             aux = event.get("executionContextAuxData")
             if isinstance(aux, dict) and aux.get("isDefault") is False:
                 return  # an isolated world: Playwright's, never the page's
-            if event.get("url") != "" and event.get("hasSourceURL") is not True:
+            url = event.get("url")
+            if not (url == "" or event.get("hasSourceURL") is True
+                    or (isinstance(url, str) and url.startswith(("data:", "blob:")))):
                 return  # a network script or the document's own inline script
-            if isinstance(digest, str) and digest in self._harness_hashes:
-                self._harness_ids.add(script_id)
-                return  # the same script as one parsed before the page ran
+            if isinstance(digest, str):
+                if digest in self._harness_hashes:
+                    return  # the same script as one parsed before the page ran
+                if digest in self._seen:
+                    self.repeated += 1  # the same code again: no slot, no fetch
+                    return
+                if len(self._seen) < MAX_TRACKED_HASHES:
+                    self._seen.add(digest)
             frame = _top_frame(event)
-            if frame is not None and frame.get("scriptId") in self._harness_ids:
-                return  # built by the harness (a page.evaluate payload)
             caller, line = "", None  # type: str, Optional[int]
             if frame is not None and isinstance(frame.get("url"), str):
                 caller = frame["url"][:MAX_CALLER_CHARS]
                 number = frame.get("lineNumber")
                 line = number + 1 if isinstance(number, int) and not isinstance(number, bool) and number >= 0 else None
-            if self._accepted >= MAX_STAGES:
+            length = event.get("length")
+            if isinstance(length, int) and not isinstance(length, bool) and length > MAX_STAGE_FETCH_CHARS:
+                self._keep(Stage(source=b"", caller_url=caller, caller_line=line, oversized=True, length=length))
+                return
+            if self._fetches >= MAX_STAGE_FETCHES:
                 self.dropped += 1
                 return
-            self._accepted += 1
+            self._fetches += 1
             task = asyncio.ensure_future(self._fetch(script_id, caller, line))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
@@ -178,12 +205,26 @@ class EvalCapture:
         if not isinstance(text, str):
             self.dropped += 1
             return
-        source = text[:MAX_STAGE_CHARS].encode("utf-8", "replace")
-        if self._bytes + len(source) > MAX_STAGE_BYTES_TOTAL:
-            self.dropped += 1
+        text = text[:MAX_STAGE_CHARS]
+        self._keep(Stage(source=text.encode("utf-8", "replace"), caller_url=caller, caller_line=line,
+                         markers=obfuscator_markers(text)))
+
+    def _keep(self, stage: Stage) -> None:
+        """Take a slot for ``stage``, or, when the slots are gone, let a stage with obfuscator
+        markers replace one without (the replaced one is counted as dropped)."""
+        size = len(stage.source)
+        if len(self.stages) < MAX_STAGES and self._bytes + size <= MAX_STAGE_BYTES_TOTAL:
+            self.stages.append(stage)
+            self._bytes += size
             return
-        self._bytes += len(source)
-        self.stages.append(Stage(source=source, caller_url=caller, caller_line=line))
+        if stage.markers:
+            for i, kept in enumerate(self.stages):
+                if not kept.markers and self._bytes - len(kept.source) + size <= MAX_STAGE_BYTES_TOTAL:
+                    self._bytes += size - len(kept.source)
+                    self.stages[i] = stage
+                    self.dropped += 1
+                    return
+        self.dropped += 1
 
     async def drain(self, timeout: float = 5.0) -> None:
         """Wait (bounded) for source fetches still in flight; call before the context closes."""
