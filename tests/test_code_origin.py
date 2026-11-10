@@ -89,3 +89,28 @@ def test_inline_line_ranges_are_one_based_line_spans_of_script_blocks():
     assert inline_line_ranges(html) == [(2, 4), (8, 8)]
     assert inline_line_ranges(None) == []
     assert inline_line_ranges(b"") == []
+
+
+def test_stack_was_cut_reports_frame_and_character_overflow():
+    from pnakotic.src.scanner.code_origin import stack_was_cut
+    line = "    at https://a.com/x.js:1:1\n"
+    assert stack_was_cut("Error\n" + line * 31) is True
+    assert stack_was_cut("Error\n" + line * 30) is False
+    assert stack_was_cut("Error\n" + "x" * 4000) is True
+    assert stack_was_cut("") is False
+
+
+def test_cdn_path_hosts_match_whole_package_names_only():
+    from pnakotic.src.scanner.code_origin import Frame, frame_owner
+    own = lambda u: frame_owner(Frame(u, 1, False), "shop.com", "https://shop.com/checkout/", [])
+    assert own("https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js") == "store"
+    assert own("https://cdn.jsdelivr.net/npm/jquery-ui@1.13.2/dist/jquery-ui.min.js") == "store"
+    assert own("https://cdn.jsdelivr.net/npm/jquery-migrate@3.4.1/dist/m.js") == "store"
+    assert own("https://cdn.jsdelivr.net/npm/jquery-evil@1/x.js") == "unknown"
+    assert own("https://cdn.jsdelivr.net/npm/jquery") == "store"
+    assert own("https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js") == "store"
+    assert own("https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js") == "store"
+    assert own("https://cdnjs.cloudflare.com/ajax/libs/jquery-evil/1/x.js") == "unknown"
+    assert own("https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js") == "store"
+    assert own("https://ajax.googleapis.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js") == "store"
+    assert own("https://ajax.googleapis.com/ajax/libs/jqueryx/1/x.js") == "unknown"

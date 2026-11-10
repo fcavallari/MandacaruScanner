@@ -20,11 +20,14 @@ MAX_STACK_CHARS = 4000
 MAX_FRAMES = 30
 
 STORE_CDN_HOSTS = {"c0.wp.com", "s0.wp.com", "code.jquery.com"}
+# Hosts that serve anyone's files, so only the jQuery family counts as the store's own. Each
+# prefix must be followed by the end of the path, "/", "@" or "." (see ``_path_has_prefix``):
+# ``/npm/jquery@3.7.1/x.js`` matches, ``/npm/jquery-evil@1/x.js`` does not.
 STORE_CDN_PATH_HOSTS = {
-    "cdnjs.cloudflare.com": "/ajax/libs/jquery",
-    "cdn.jsdelivr.net": "/npm/jquery",
-    "ajax.googleapis.com": "/ajax/libs/jquery",
-}  # type: Dict[str, str]
+    "cdnjs.cloudflare.com": ("/ajax/libs/jquery", "/ajax/libs/jqueryui", "/ajax/libs/jquery-migrate"),
+    "cdn.jsdelivr.net": ("/npm/jquery", "/npm/jquery-ui", "/npm/jquery-ui-dist", "/npm/jquery-migrate"),
+    "ajax.googleapis.com": ("/ajax/libs/jquery", "/ajax/libs/jqueryui"),
+}  # type: Dict[str, Tuple[str, ...]]
 PAYMENT_PROVIDERS = {
     "stripe.com", "stripe.network", "paypal.com", "paypalobjects.com",
     "braintreegateway.com", "braintree-api.com", "squareup.com", "squarecdn.com",
@@ -65,6 +68,15 @@ def parse_stack(stack: str) -> List[Frame]:
     return frames
 
 
+def stack_was_cut(stack: str) -> bool:
+    """True when ``parse_stack`` leaves part of ``stack`` out: the text is over 4 000
+    characters, or the kept part holds more than 30 frame lines."""
+    stack = stack or ""
+    if len(stack) > MAX_STACK_CHARS:
+        return True
+    return sum(1 for text in stack.split("\n") if _FRAME_START_RE.match(text)) > MAX_FRAMES
+
+
 def inline_line_ranges(served_html: Optional[bytes]) -> List[Tuple[int, int]]:
     """1-based ``(first_line, last_line)`` of every inline ``<script>`` block in the served
     HTML (the same blocks ``find_injections`` sees)."""
@@ -85,6 +97,12 @@ def _parts(url: str) -> Tuple[str, str]:
         return (parts.hostname or "").lower(), parts.path
     except ValueError:
         return "", ""
+
+
+def _path_has_prefix(path: str, prefix: str) -> bool:
+    """``path`` starts with ``prefix`` and the prefix ends a path segment or package name
+    (end of path, ``/``, ``@`` or ``.``)."""
+    return path.startswith(prefix) and (len(path) == len(prefix) or path[len(prefix)] in "/@.")
 
 
 def _owner_key(host: str) -> str:
@@ -114,8 +132,7 @@ def frame_owner(frame: Frame, site_host: str, page_url: str,
         return "store"
     if host in STORE_CDN_HOSTS:
         return "store"
-    prefix = STORE_CDN_PATH_HOSTS.get(host)
-    if prefix is not None and path.startswith(prefix):
+    if any(_path_has_prefix(path, prefix) for prefix in STORE_CDN_PATH_HOSTS.get(host, ())):
         return "store"
     if key in PAYMENT_PROVIDERS:
         return "provider"
