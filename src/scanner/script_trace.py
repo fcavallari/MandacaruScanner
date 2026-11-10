@@ -121,7 +121,7 @@ class ScriptTracer:
             self.records.append(record)
 
 
-def _inline_blocks(data: bytes, lowered: bytes) -> List[Tuple[int, int]]:
+def inline_blocks(data: bytes, lowered: bytes) -> List[Tuple[int, int]]:
     """``(start, end)`` byte offsets of the first 500 non-empty inline ``<script>`` bodies.
     ``lowered`` is ``data.lower()`` (ASCII-only on bytes, so the offsets line up)."""
     blocks = []  # type: List[Tuple[int, int]]
@@ -142,7 +142,7 @@ def _inline_blocks(data: bytes, lowered: bytes) -> List[Tuple[int, int]]:
     return blocks
 
 
-def _line_starts(data: bytes, upto: int) -> List[int]:
+def line_starts(data: bytes, upto: int) -> List[int]:
     """Byte offsets where lines 0..``upto`` start (fewer if ``data`` has fewer lines).
     One forward pass, built once per document and shared by every record."""
     starts = [0]
@@ -157,7 +157,7 @@ def _line_starts(data: bytes, upto: int) -> List[int]:
 def _offset_of(data: bytes, starts: List[int], line: Optional[int],
                column: Optional[int]) -> Optional[int]:
     """Byte offset of the 0-based CDP ``(line, column)`` in ``data``; ``starts`` is
-    ``_line_starts(data, ...)`` covering ``line``."""
+    ``line_starts(data, ...)`` covering ``line``."""
     if line is None or line >= len(starts):
         return None
     line_start = starts[line]
@@ -236,8 +236,8 @@ def find_injections(records: List[Dict[str, Any]], page_url: str, served_html: O
             if served_html is not None:
                 if blocks is None:
                     lowered = served_html.lower()
-                    blocks = _inline_blocks(served_html, lowered)
-                    html_starts = _line_starts(served_html, max_line)
+                    blocks = inline_blocks(served_html, lowered)
+                    html_starts = line_starts(served_html, max_line)
                 picked = _pick_block(blocks, lowered, _offset_of(served_html, html_starts, line, column), url)
                 if picked is not None:
                     block = {"start": picked[0], "end": picked[1]}
@@ -248,7 +248,7 @@ def find_injections(records: List[Dict[str, Any]], page_url: str, served_html: O
             body = script_bodies[initiator_url]
             markers = _markers_of(body)
             if initiator_url not in body_starts:
-                body_starts[initiator_url] = _line_starts(body, max_line)
+                body_starts[initiator_url] = line_starts(body, max_line)
             offset = _offset_of(body, body_starts[initiator_url], line, column)
             if offset is not None:
                 context = cut_snippet(body, offset, offset + 1)
