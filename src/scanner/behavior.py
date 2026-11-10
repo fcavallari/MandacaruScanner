@@ -68,37 +68,59 @@ CLIPBOARD_COMMAND = re.compile(
     re.IGNORECASE,
 )
 
+# The stealth prelude every hook script shares (behavior.py and card_watch.py). It runs inside
+# the hook script's own function scope, right after the binding is taken and deleted, and defines:
+#   nativeText   WeakMap: replacement function -> the native source text its toString() shows
+#   fnToString   Function.prototype.toString as it was when the script ran
+#   wrap(owner, key, before, nest)
+#                replaces owner[key] with a function that calls before(...) (errors swallowed),
+#                then the original; toString() and name stay native. Returns the wrapper (or
+#                undefined), so a hook can cut its own frames off a stack with captureStackTrace.
+#                With `nest` (an object), nest.depth counts the wrappers running the original
+#                right now: page code the original runs (an inserted script, a custom element's
+#                callback) has that many of our frames under it.
+# Function.prototype.toString is patched to read nativeText. Each hook script installs its own
+# prelude, so with two scripts the second patch delegates to the first and both stay native.
+# Calls go through Reflect.apply saved here, so a page that redefines Function.prototype.apply
+# neither sees nor breaks them. No "%" in here: _INIT_TEMPLATE is %-formatted.
+HOOK_PRELUDE = r"""
+  const nativeText = new WeakMap();
+  const fnToString = Function.prototype.toString;
+  const rApply = Reflect.apply;
+  const patchedToString = function toString() {
+    return nativeText.has(this) ? nativeText.get(this) : rApply(fnToString, this, []);
+  };
+  nativeText.set(patchedToString, rApply(fnToString, fnToString, []));
+  Function.prototype.toString = patchedToString;
+
+  const wrap = (owner, key, before, nest) => {
+    if (!owner) return undefined;
+    const orig = owner[key];
+    if (typeof orig !== 'function') return undefined;
+    const wrapped = function () {
+      try { rApply(before, this, arguments); } catch (e) {}
+      if (!nest) return rApply(orig, this, arguments);
+      nest.depth += 1;
+      try { return rApply(orig, this, arguments); } finally { nest.depth -= 1; }
+    };
+    nativeText.set(wrapped, rApply(fnToString, orig, []));
+    try { Object.defineProperty(wrapped, 'name', { value: orig.name }); } catch (e) {}
+    try { owner[key] = wrapped; } catch (e) {}
+    return wrapped;
+  };
+"""
+
 # The binding name is substituted in at runtime; the script must never run twice per document.
 _INIT_TEMPLATE = r"""
 (() => {
   const send = window[%(name)s];
   if (typeof send !== 'function') return;
   try { delete window[%(name)s]; } catch (e) {}
-
-  const nativeText = new WeakMap();
-  const fnToString = Function.prototype.toString;
-  const patchedToString = function toString() {
-    return nativeText.has(this) ? nativeText.get(this) : fnToString.call(this);
-  };
-  nativeText.set(patchedToString, fnToString.call(fnToString));
-  Function.prototype.toString = patchedToString;
-
+""" + HOOK_PRELUDE + r"""
   const report = (id, detail) => {
     try { send(Object.assign({ id: id }, detail || {})); } catch (e) {}
   };
   const str = (v) => { try { return String(v).slice(0, %(max_text)d); } catch (e) { return ''; } };
-  const wrap = (owner, key, before) => {
-    if (!owner) return;
-    const orig = owner[key];
-    if (typeof orig !== 'function') return;
-    const wrapped = function () {
-      try { before.apply(this, arguments); } catch (e) {}
-      return orig.apply(this, arguments);
-    };
-    nativeText.set(wrapped, fnToString.call(orig));
-    try { Object.defineProperty(wrapped, 'name', { value: orig.name }); } catch (e) {}
-    try { owner[key] = wrapped; } catch (e) {}
-  };
 
   // Clipboard: record the attempt before delegating (writes without a user gesture fail).
   if (window.Clipboard) {
@@ -135,7 +157,7 @@ _INIT_TEMPLATE = r"""
       if (typeof v === 'function') report('beforeunload_trap', { via: 'onbeforeunload' });
       return setter.call(this, v);
     };
-    nativeText.set(patched, fnToString.call(setter));
+    nativeText.set(patched, rApply(fnToString, setter, []));
     try { Object.defineProperty(window, 'onbeforeunload', { get: obu.get, set: patched, configurable: true }); } catch (e) {}
   }
 

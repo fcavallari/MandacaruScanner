@@ -264,3 +264,22 @@ def test_blocked_script_reason_recognises_cloudflares_malware_interstitial():
     assert blocked_script_reason(403, {"server": "cloudflare"}, b"<html>Forbidden</html>") is None  # a plain 403
     assert blocked_script_reason(403, {"server": "nginx"}, b"Suspected Malware") is None  # not Cloudflare's page
     assert blocked_script_reason(403, {}, b"x" * 70000 + page) is None  # only the head of the body is read
+
+
+def test_record_passes_over_frames_of_the_harness_scripts():
+    """Our card hooks wrap appendChild / insertBefore, so a loader's call has our frame on top."""
+    from pnakotic.src.scanner.script_trace import record_from_event
+
+    event = {"type": "Script", "request": {"url": "https://evil.example/x.js"}, "frameId": "F",
+             "initiator": {"type": "script", "stack": {"callFrames": [
+                 {"scriptId": "7", "url": "", "lineNumber": 30, "columnNumber": 5},
+                 {"scriptId": "12", "url": "https://shop.example/", "lineNumber": 4, "columnNumber": 9}]}}}
+    plain = record_from_event(event, "F")
+    assert plain["initiator_url"] is None  # without the harness ids, our frame hides the loader
+    rec = record_from_event(event, "F", {"7"})
+    assert rec["initiator_url"] == "https://shop.example/" and (rec["line"], rec["column"]) == (4, 9)
+    only_ours = dict(event, initiator={"type": "script", "stack": {
+        "callFrames": [{"scriptId": "7", "url": "", "lineNumber": 1, "columnNumber": 1}],
+        "parent": {"callFrames": [{"scriptId": "13", "url": "https://shop.example/a.js", "lineNumber": 0,
+                                   "columnNumber": 0}]}}})
+    assert record_from_event(only_ours, "F", {"7"})["initiator_url"] == "https://shop.example/a.js"

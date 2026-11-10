@@ -352,3 +352,164 @@ async def test_behavior_hooks_firing_leave_no_stages(site_server, tmp_path):
     assert r.metadata["eval_stages"] == []
     plain = await _site_load(engine, f"{site_server}/", shot="pages/1/default")
     assert not any(h.mechanism == "page_behavior" for h in plain.hops)
+
+
+# ---------- card inputs inserted into the page, and by whose code (card_watch.py) ----------
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_card_form_built_by_the_store_is_the_stores(site_server, tmp_path):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-store")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] >= 1 and [e["owner"] for e in ci["inserted"]] == ["store"]
+    [e] = ci["inserted"]
+    assert e["via"] == "appendChild" and e["frames"] == [f"{site_server}/js/form.js"] and e["cut"] is False
+    assert ci["dropped"] == 0
+    assert r.metadata["eval_stages"] == []  # the watch's own scripts are not runtime-built code
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_card_form_written_by_a_cross_site_script_is_unknown(site_server, tmp_path):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-skim")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] == 3
+    assert any(e["owner"] == "unknown" and any("localhost" in f for f in e["frames"]) for e in ci["inserted"])
+    assert [e["via"] for e in ci["inserted"]] == ["innerHTML"]
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_card_inputs_served_with_the_page_are_not_insertions(site_server, tmp_path):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-served")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] >= 1 and ci["inserted"] == []
+
+
+@requires_browser
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/card-hidden-stack", "/card-forged-stack", "/card-short-stack"])
+async def test_a_hidden_or_forged_stack_is_unknown(site_server, tmp_path, path):
+    """prepareStackTrace returning "" and stackTraceLimit 0 are overridden for the one capture;
+    a read-only forged prepareStackTrace, or a read-only stackTraceLimit of 1 that would show only
+    the store helper the skimmer calls, gives an empty stack: unknown code."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}{path}")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] == 3
+    assert ci["inserted"] and all(e["owner"] == "unknown" for e in ci["inserted"])
+    if path == "/card-hidden-stack":
+        assert any("localhost" in f for f in ci["inserted"][0]["frames"])
+    else:
+        assert ci["inserted"][0]["frames"] == []
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_a_huge_innerhtml_write_does_not_slow_the_load(site_server, tmp_path):
+    import time
+
+    started = time.monotonic()
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-big-html")
+    assert time.monotonic() - started < 30
+    ci = r.metadata["card_inputs"]
+    assert [(e["via"], e["owner"]) for e in ci["inserted"]] == [("innerHTML", "store")]
+    assert ci["present"] == 1
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_an_input_renamed_after_insertion_fails_closed(site_server, tmp_path):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-renamed")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] >= 1 and [e["via"] for e in ci["inserted"]] == ["unseen"]
+    assert ci["inserted"][0]["owner"] == "unknown"
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_an_inline_script_inserted_at_runtime_is_not_the_served_block(site_server, tmp_path):
+    """V8 gives a runtime-inserted inline script no URL (`<anonymous>:line:col`), so its frames
+    can't be mistaken for a served inline block's lines, from its first run or from a timer."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-inline-runtime")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] == 2
+    assert [(e["via"], e["owner"]) for e in ci["inserted"]] == [("appendChild", "unknown"), ("appendChild", "unknown")]
+    assert ci["inserted"][0]["frames"] == ["", f"{site_server}/js/inline-ins.js"]
+    assert ci["inserted"][1]["frames"] == [""]
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_a_stack_deeper_than_is_read_is_marked_cut(site_server, tmp_path):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-deep")
+    [e] = r.metadata["card_inputs"]["inserted"]
+    assert e["cut"] is True and e["owner"] == "store" and len(e["frames"]) == 10
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_a_source_url_naming_a_store_file_does_not_make_it_the_stores(site_server, tmp_path):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-sourceurl")
+    port = site_server.rsplit(":", 1)[1]
+    [e] = r.metadata["card_inputs"]["inserted"]
+    assert e["owner"] == "unknown" and e["frames"] == [f"http://localhost:{port}/renamed-source.js"]
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_store_code_run_inside_a_hooked_call_is_still_the_stores(site_server, tmp_path):
+    """A custom element's connectedCallback runs inside appendChild / the innerHTML setter, so our
+    wrapper's own frame is under the store's: it is left out, and the insertion is the store's."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-custom-element")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] == 2
+    assert [(e["via"], e["owner"]) for e in ci["inserted"]] == [("appendChild", "store"), ("appendChild", "store")]
+    assert all(set(e["frames"]) == {f"{site_server}/js/element.js"} for e in ci["inserted"])
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_url_probe_has_no_card_inputs(site_server, tmp_path):
+    engine = _site_engine(tmp_path)
+    async with engine.browser_session() as (browser, _):
+        r = await engine._scan_in_context(browser, f"{site_server}/card-skim", "default",
+                                          engine.artifacts.create_task_folder("j"), primary=True)
+    assert "card_inputs" not in r.metadata
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_hooks_stay_invisible_with_both_init_scripts(site_server):
+    from playwright.async_api import async_playwright
+
+    from pnakotic.src.scanner.behavior import BehaviorRecorder
+    from pnakotic.src.scanner.card_watch import CardWatcher
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        ctx = await browser.new_context()
+        behavior, cards = BehaviorRecorder(), CardWatcher()
+        await behavior.attach(ctx)
+        await cards.attach(ctx)
+        page = await ctx.new_page()
+        await page.goto(f"{site_server}/card-store")
+        assert len(cards.events) == 1  # the hooks are installed and fired
+        for fn in ("Element.prototype.appendChild", "Element.prototype.insertAdjacentHTML", "Function.prototype.toString",
+                   "Clipboard.prototype.writeText", "Element.prototype.append", "Node.prototype.insertBefore",
+                   "Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML').set",
+                   "Object.getOwnPropertyDescriptor(Element.prototype, 'outerHTML').set",
+                   "Function.prototype.toString.call(Element.prototype.appendChild)"):
+            assert (await page.evaluate(f"({fn}).toString()")).endswith("{ [native code] }"), fn
+        assert await page.evaluate("Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML').set.name") \
+            == "set innerHTML"
+        assert await page.evaluate("[Node.prototype.appendChild.name, Node.prototype.appendChild.length, "
+                                   "Element.prototype.insertAdjacentHTML.length]") == ["appendChild", 1, 2]
+        ours = await page.evaluate("Object.keys(window).filter(k => k.startsWith('__') "
+                                   "&& !k.startsWith('__playwright') && !k.startsWith('__pw'))")
+        assert ours == []
+        for name in (behavior.binding, cards.binding):
+            assert await page.evaluate(f"{name!r} in window") is False
+            assert await page.evaluate(f"Object.getOwnPropertyNames(window).includes({name!r})") is False
+        # the stack capture leaves Error as it found it
+        assert await page.evaluate("['prepareStackTrace' in Error, Error.stackTraceLimit]") == [False, 10]
+        await browser.close()

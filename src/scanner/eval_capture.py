@@ -107,6 +107,10 @@ class EvalCapture:
         self._bytes = 0
         self._sealed = False
         self._harness_hashes: Set[str] = set()  # what was parsed before attach() finished: not the page's
+        # CDP script ids of the harness's scripts in every document (our hook scripts are parsed again
+        # in each one): ScriptTracer passes over their frames, so a loader's appendChild going
+        # through our hooks is still the loader's
+        self.harness_script_ids: Set[str] = set()
         self._seen: Set[str] = set()  # hashes of stages already met
         self._tasks: Set["asyncio.Future[None]"] = set()
         self._cdp: Any = None
@@ -136,6 +140,10 @@ class EvalCapture:
             print(f"[eval-capture] warm-up failed: {str(exc)[:200]}")
         self._sealed = True
 
+    def _note_harness(self, script_id: str) -> None:
+        if len(self.harness_script_ids) < MAX_TRACKED_HASHES:
+            self.harness_script_ids.add(script_id)
+
     def _on_paused(self, _event: Dict[str, Any]) -> None:
         task = asyncio.ensure_future(self._resume())
         self._tasks.add(task)
@@ -157,6 +165,7 @@ class EvalCapture:
             if not self._sealed:  # before the page: the harness's own scripts
                 if isinstance(digest, str):
                     self._harness_hashes.add(digest)
+                self._note_harness(script_id)
                 return
             aux = event.get("executionContextAuxData")
             if isinstance(aux, dict) and aux.get("isDefault") is False:
@@ -167,6 +176,7 @@ class EvalCapture:
                 return  # a network script or the document's own inline script
             if isinstance(digest, str):
                 if digest in self._harness_hashes:
+                    self._note_harness(script_id)
                     return  # the same script as one parsed before the page ran
                 if digest in self._seen:
                     self.repeated += 1  # the same code again: no slot, no fetch

@@ -106,6 +106,117 @@ def _site_engine(tmp_path):
 DYNAMIC_PAGES = {}  # path -> HTML for pages a test builds itself (served by site_server)
 
 
+# ---------- checkout pages for the card-input watch (card_watch.py) ----------
+# "{port}" is the server's port; scripts at http://localhost:{port}/ are on another site than
+# the pages at 127.0.0.1. Adapted from woo-checkout-scanner's fake-stripe-form-skimmer fixture.
+
+def _checkout(script, extra=""):
+    return ("<html><head><title>Checkout</title></head><body><h1>Checkout</h1>"
+            "<form class='checkout woocommerce-checkout' action='#' onsubmit='return false'>"
+            "<label>Email <input id='billing_email' name='billing_email'></label>"
+            "<label>Postcode <input id='billing_postcode' name='billing_postcode'></label>"
+            "<label>Coupon <input id='coupon_code' name='coupon_code'></label>"
+            "<label>Password <input id='account_password' name='account_password' type='password'></label>"
+            "<div class='payment_box payment_method_woocommerce_payments'>"
+            "<div class='wcpay-upe-element'><em>Genuine processor element (placeholder)</em></div></div>"
+            "<button id='place_order' type='submit'>Place order</button></form>"
+            f"{extra}{script}</body></html>")
+
+
+def _load_script(url):  # an inline loader for a script on another site
+    return ("<script>var s = document.createElement('script'); "
+            f"s.src = '{url}'; document.head.appendChild(s);</script>")
+
+
+_CARD_FORM = ("'<label>Card number <input id=\"payment-numberInput\" name=\"number\" autocomplete=\"cc-number\"></label>'"
+              " + '<label>Expiry <input id=\"payment-expiryInput\" name=\"expiry\" autocomplete=\"cc-exp\"></label>'"
+              " + '<label>CVC <input id=\"payment-cvcInput\" name=\"cvc\" autocomplete=\"cc-csc\"></label>'")
+_INLINE_FILLER = "\n".join(f"var storeSetting{i} = {i};" for i in range(38))  # served lines 2-40
+
+CARD_PAGES = {
+    # the store's own script builds a card form (detached, then attached: one insertion)
+    "/card-store": _checkout("<script src='/js/form.js'></script>"),
+    # a cross-site script hides the real field and writes its own card form with innerHTML
+    "/card-skim": _checkout(_load_script("http://localhost:{port}/skim.js")),
+    # card inputs in the served HTML, no script
+    "/card-served": _checkout("", extra="<input name='cardnumber' autocomplete='cc-number'>"),
+    # the cross-site script hides its stack before inserting
+    "/card-hidden-stack": _checkout(_load_script("http://localhost:{port}/hidden.js")),
+    # ... or makes prepareStackTrace read-only and forges a store stack
+    "/card-forged-stack": _checkout(_load_script("http://localhost:{port}/forged.js")),
+    # ... or makes stackTraceLimit read-only 1 and inserts through a store helper
+    "/card-short-stack": _checkout("<script src='/js/helper.js'></script>"
+                                   + _load_script("http://localhost:{port}/short.js")),
+    # a 5 MB innerHTML write without a card input, then a small one with
+    "/card-big-html": _checkout("<script src='/js/big.js'></script>"),
+    # a bare input inserted, then renamed into a card field
+    "/card-renamed": _checkout(_load_script("http://localhost:{port}/renamed.js")),
+    # a served inline block on lines 2-40, then the store's script inserts an inline script that
+    # adds a card form (its own lines count from 1, inside the served block's range)
+    "/card-inline-runtime": ("<html><head><title>Checkout</title><script>\n" + _INLINE_FILLER + "\n</script></head>"
+                             "<body><h1>Checkout</h1><script src='/js/inline-ins.js'></script></body></html>"),
+    # the store's script inserts from 40 frames deep: more than code_origin reads
+    "/card-deep": _checkout("<script src='/js/deep.js'></script>"),
+    # a cross-site script that names itself after a store file with //# sourceURL
+    "/card-sourceurl": _checkout(_load_script("http://localhost:{port}/renamed-source.js")),
+    # the store's custom element builds its card form when it is attached (appendChild, then
+    # innerHTML): the store's code runs inside our hooked call, under our wrapper's frame
+    "/card-custom-element": _checkout("<script src='/js/element.js'></script>"),
+}
+CARD_SCRIPTS = {
+    "/js/form.js": ("var f = document.createElement('form'); var i = document.createElement('input');\n"
+                    "i.name = 'number'; i.setAttribute('autocomplete', 'cc-number'); f.appendChild(i);\n"
+                    "document.body.appendChild(f);\n"),
+    "/skim.js": ("var box = document.querySelector('.payment_box.payment_method_woocommerce_payments');\n"
+                 "var real = box.querySelector('.wcpay-upe-element'); real.style.display = 'none';\n"
+                 "var host = document.createElement('div'); host.id = 'fx-payment-container';\n"
+                 "box.appendChild(host);\n"
+                 f"host.innerHTML = {_CARD_FORM};\n"),
+    "/hidden.js": ("Error.prepareStackTrace = function () { return ''; }; Error.stackTraceLimit = 0;\n"
+                   "var f = document.createElement('form');\n"
+                   f"f.innerHTML = {_CARD_FORM};\n"
+                   "document.body.appendChild(f);\n"),
+    "/forged.js": ("Object.defineProperty(Error, 'prepareStackTrace', {writable: false, configurable: false,\n"
+                   "  value: function () { return 'Error\\n    at http://127.0.0.1:{port}/js/form.js:1:1'; }});\n"
+                   "var f = document.createElement('form');\n"
+                   f"f.innerHTML = {_CARD_FORM};\n"
+                   "document.body.appendChild(f);\n"),
+    "/js/helper.js": "window.storeInsert = function (node) { document.body.appendChild(node); };\n",
+    "/short.js": ("Object.defineProperty(Error, 'stackTraceLimit', {value: 1, writable: false, configurable: false});\n"
+                  "var f = document.createElement('form');\n"
+                  f"f.innerHTML = {_CARD_FORM};\n"
+                  "window.storeInsert(f);\n"),
+    "/js/big.js": ("var a = document.createElement('div'); document.body.appendChild(a);\n"
+                   "a.innerHTML = '<p>' + 'x'.repeat(5 * 1024 * 1024) + '</p>';\n"
+                   "var b = document.createElement('div'); document.body.appendChild(b);\n"
+                   "b.innerHTML = '<input name=\"cardnumber\" autocomplete=\"cc-number\">';\n"),
+    "/renamed.js": ("var i = document.createElement('input'); document.body.appendChild(i);\n"
+                    "i.setAttribute('name', 'cardnumber'); i.setAttribute('autocomplete', 'cc-number');\n"),
+    "/js/inline-ins.js": ("var s = document.createElement('script');\n"
+                          "s.text = 'var f = document.createElement(\"form\");\\n'\n"
+                          "  + 'f.innerHTML = \"<input name=cardnumber>\";\\n'\n"
+                          "  + 'document.body.appendChild(f);\\n'\n"
+                          "  + 'setTimeout(function () { var g = document.createElement(\"form\");\\n'\n"
+                          "  + 'g.innerHTML = \"<input name=cvc>\"; document.body.appendChild(g); }, 0);\\n';\n"
+                          "document.body.appendChild(s);\n"),
+    "/renamed-source.js": ("var f = document.createElement('form');\n"
+                           f"f.innerHTML = {_CARD_FORM};\n"
+                           "document.body.appendChild(f);\n"
+                           "//# sourceURL=http://127.0.0.1:{port}/js/form.js\n"),
+    "/js/element.js": ("class PayForm extends HTMLElement { connectedCallback() {\n"
+                       "  if (this.firstChild) return; var f = document.createElement('form');\n"
+                       "  f.innerHTML = '<input autocomplete=\"cc-number\">'; this.appendChild(f); } }\n"
+                       "customElements.define('pay-form', PayForm);\n"
+                       "document.body.appendChild(document.createElement('pay-form'));\n"
+                       "var holder = document.createElement('div'); document.body.appendChild(holder);\n"
+                       "holder.innerHTML = '<pay-form></pay-form>';\n"),
+    "/js/deep.js": ("function down(n) { if (n > 0) return down(n - 1);\n"
+                    "  var f = document.createElement('form'); f.innerHTML = '<input autocomplete=\"cc-number\">';\n"
+                    "  document.body.appendChild(f); }\n"
+                    "down(40);\n"),
+}
+
+
 @pytest.fixture(scope="module")
 def site_server():
     """127.0.0.1 server for site-mode loads. Yields its base URL."""
@@ -216,6 +327,10 @@ def site_server():
                 }
                 self._send(200, "text/html", (f"<html><head><title>Eval</title></head><body><h1>Eval</h1><iframe srcdoc='<p>hi</p>'></iframe>"
                                               f"<script>{scripts[self.path]}</script></body></html>").encode())
+            elif self.path in CARD_PAGES:  # card inputs inserted into a checkout (Task 4: card_watch)
+                self._send(200, "text/html", CARD_PAGES[self.path].replace("{port}", str(port)).encode())
+            elif self.path in CARD_SCRIPTS:
+                self._send(200, "text/javascript", CARD_SCRIPTS[self.path].replace("{port}", str(port)).encode())
             elif self.path in DYNAMIC_PAGES:
                 self._send(200, "text/html", DYNAMIC_PAGES[self.path].encode())
             elif self.path == "/payload.js":

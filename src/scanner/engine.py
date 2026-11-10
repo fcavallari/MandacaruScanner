@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import AsyncIterator, Dict, List, Optional, Set, Tuple
-from urllib.parse import urldefrag, urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse, urlsplit
 
 from playwright.async_api import async_playwright, Browser, CDPSession, Response
 from playwright.async_api import Error as PlaywrightError
@@ -20,6 +20,7 @@ from .profiles import PROFILES
 from .static_analyzer import StaticAnalyst, SIGNATURE_MECHANISMS, MAX_CONTENT_CHARS
 from .artifacts import ArtifactManager
 from .behavior import BehaviorRecorder
+from .card_watch import CARD_SELECTOR, CardWatcher, summarize as summarize_card_inputs
 from .eval_capture import EvalCapture
 from .snippets import cut_snippet
 from .yara_scan import YARA_MECHANISM, ScriptCollector, load_rules, scan_buffers, MAX_BUFFER_BYTES, MAX_FRAMES
@@ -46,6 +47,8 @@ SETTLE_MS = 3000
 SCREENSHOT_TIMEOUT_MS = 10000
 # Site mode: how long to wait for the served main document's body (as ScriptCollector.drain).
 SERVED_BODY_TIMEOUT_S = 5.0
+# Site mode: how long counting the card inputs on the settled page may take.
+CARD_COUNT_TIMEOUT_S = 5.0
 # After the landing is analysed, one click on an empty spot of the page: popunder scripts
 # open their ad on the visitor's first click, which a load-only scan never sees.
 CLICK_SETTLE_MS = 1500
@@ -338,8 +341,9 @@ class PnakoticEngine:
         both. Every load collects script bodies and traces script initiators: metadata gets
         "injections" (find_injections) and, when any, "flagged_scripts" (the script responses
         the CDN refused as malware, yara_scan.ScriptCollector.flagged). With options.site,
-        metadata also gets main_status, served_bytes, links, script_requests and challenge,
-        and YARA keeps one finding per buffer (the served HTML first, as source "served").
+        metadata also gets main_status, served_bytes, links, script_requests, challenge and
+        card_inputs (card_watch.summarize), and YARA keeps one finding per buffer (the served
+        HTML first, as source "served").
         """
         profile = PROFILES[profile_name]
         result = ScanResult(target_url=target_url)
@@ -379,8 +383,13 @@ class PnakoticEngine:
         scripts: Optional[ScriptCollector] = ScriptCollector()
         documents: List[tuple] = []  # (source, url, html) for YARA: the landing page and its frames
         evals = EvalCapture()  # kept in every mode (bounded, eval_capture.py)
+        cards: Optional[CardWatcher] = CardWatcher() if site else None  # card inputs inserted, and by whom
+        cards_present = 0
         try:
             await behavior.attach(ctx)  # before new_page: hooks must precede every page script
+            if cards is not None:
+                # also before the eval-capture seal: its init script is then known by content
+                await cards.attach(ctx)
             page = await ctx.new_page()
             behavior.watch(page)
             guard = EgressGuard(await ctx.new_cdp_session(page), self.host_allowed)
@@ -459,7 +468,9 @@ class PnakoticEngine:
             await cdp.send("Page.enable")
             tree = await cdp.send("Page.getFrameTree")
             main_frame_id = tree["frameTree"]["frame"]["id"]
-            tracer = ScriptTracer()  # who started each script request; the scorer and site report read it
+            # who started each script request; the scorer and site report read it. Frames of the
+            # harness's own scripts (our hooks wrap appendChild and friends) are passed over.
+            tracer = ScriptTracer(evals.harness_script_ids)
             await tracer.attach(cdp, main_frame_id)
             # Code the page builds at runtime (eval, new Function), before goto. The warm-up makes Playwright
             # parse its own main-world scripts now, so they are known and not mistaken for the page's.
@@ -571,6 +582,13 @@ class PnakoticEngine:
                     result.metadata["settle_timed_out"] = True
                 except PlaywrightError as e:
                     print(f"[engine] settle failed: {str(e)[:200]}")
+            # Card inputs on the settled page, counted in Playwright's utility world (not the page's).
+            if cards is not None and not page.is_closed():
+                try:
+                    cards_present = await asyncio.wait_for(
+                        page.locator("css=" + CARD_SELECTOR).count(), CARD_COUNT_TIMEOUT_S)
+                except BROWSER_ERRORS as e:
+                    print(f"[engine] card input count failed: {str(e)[:200]}")
 
             # 3. Analysis half. Each step stands alone; a closed page (redirect loop) skips them.
             # Only a real http(s) page counts: a refused/failed/download navigation leaves
@@ -694,6 +712,12 @@ class PnakoticEngine:
             })
             if result.metadata["challenge"]:
                 result.metadata["challenge_vendor"] = challenge_vendor(signals["title"], served_text)
+            if cards is not None:
+                # The landing document's own host is the site here: a load does not know the site
+                # survey's site host (the homepage loads run before it is resolved).
+                result.metadata["card_inputs"] = summarize_card_inputs(
+                    cards.events, cards_present, urlsplit(served_url).hostname or "", served_url, served,
+                    dropped=cards.dropped)
 
         eval_stages = [_eval_stage_entry(stage) for stage in evals.stages]
         result.metadata["eval_stages"] = eval_stages
