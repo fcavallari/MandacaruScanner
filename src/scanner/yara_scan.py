@@ -298,8 +298,11 @@ async def scan_buffers(rules: YaraRules, buffers: List[Tuple[str, str, bytes]],
         data = data[:MAX_BUFFER_BYTES]
         total += len(data)
         # Rules may condition on the extension; script URLs often have none (/t/collect).
+        # Runtime-built code is JavaScript whatever it claims to be (a stage can borrow a sourceURL).
         name = os.path.basename(url.split("?", 1)[0].split("#", 1)[0])
-        if "." not in name:
+        if source == "eval":
+            name = "script.js"
+        elif "." not in name:
             name = "script.js" if source == "script" else "page.html"
         matches = await asyncio.to_thread(rules.match, data, name)
         scanned += 1

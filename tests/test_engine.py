@@ -1211,9 +1211,10 @@ def test_yara_rule_selection_and_broken_files(yara_rules_dir):
     from pnakotic.src.scanner.yara_scan import _rule_files, load_rules
 
     names = sorted(pathlib_name(f) for f in _rule_files(str(yara_rules_dir)))
-    assert names == ["html_adframe_test_001.yara", "js_broken_test_001.yara", "js_skimmer_test_001.yara"]
+    assert names == ["html_adframe_test_001.yara", "js_broken_test_001.yara", "js_runtime_test_001.yara",
+                     "js_skimmer_test_001.yara"]
     rules = load_rules()
-    assert rules.count == 2 and len(rules.skipped) == 1 and rules.skipped[0].startswith("js_broken_test_001")
+    assert rules.count == 3 and len(rules.skipped) == 1 and rules.skipped[0].startswith("js_broken_test_001")
     assert load_rules() is rules  # compiled once per process
 
 
@@ -1289,7 +1290,7 @@ async def test_yara_matches_a_loaded_script(local_site, tmp_path, yara_rules_dir
     assert hits[0]["url"].endswith("/evil.js") and hits[0]["production"] is True and hits[0]["severity"] == 5
     assert result.malicious_score == 1.0
     assert result.metadata["decisive_findings"][0].startswith("Decisive: known malicious code, YARA js_skimmer_test_001")
-    assert result.metadata["yara"]["rules"] == 2 and result.metadata["yara"]["buffers"] >= 2
+    assert result.metadata["yara"]["rules"] == 3 and result.metadata["yara"]["buffers"] >= 2
 
 
 @requires_browser
@@ -1501,3 +1502,24 @@ def test_scoring_flagged_and_injection_also_count_in_site_mode():
                                   "initiator_url": "https://www.s.com/p", "block": None, "markers": [],
                                   "body_markers": ["hex_identifier_density"], "context": None}]}
     assert PnakoticScorer().score(r, site_host="www.s.com") == pytest.approx(0.8)
+
+
+def test_runtime_code_with_markers_is_an_unweighted_finding():
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from pnakotic.src.scanner.models import ScanResult
+
+    def scored(stages):
+        result = ScanResult(target_url="https://shop.com/", final_url="https://shop.com/")
+        result.metadata = {"page_signals": {"title": "Shop"}}
+        if stages is not None:
+            result.metadata["eval_stages"] = stages
+        return PnakoticScorer().score(result), result.metadata["scoring_findings"]
+
+    base, base_findings = scored(None)
+    stage = {"caller": "", "caller_line": None, "length": 9, "markers": ["hex_identifier_density"],
+             "context": {}, "yara_matched": False}
+    score, findings = scored([stage])
+    assert score == base and findings == base_findings + ["Code built at runtime with obfuscator markers (not weighted)"]
+    quiet, quiet_findings = scored([dict(stage, markers=[])])
+    assert quiet == base and quiet_findings == base_findings
+    assert scored([{"markers": "nonsense"}, "junk"])[0] == base  # page-shaped garbage is ignored

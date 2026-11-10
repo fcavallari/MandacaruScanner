@@ -70,6 +70,12 @@ def _rules_dir(tmp_path):
          production=False)
     rule(root / "raw" / "php_ignored_test_001.yara", "php_ignored_test_001", "shop", 5)
     rule(root / "php" / "php_backdoor_test_001.yara", "php_backdoor_test_001", "news", 5)
+    # By hand, not through _RULE: it conditions on the extension, so it matches runtime-built code
+    # only when the scanner names those buffers like scripts (page.html would not match).
+    (root / "raw" / "js_runtime_test_001.yara").write_text(
+        'rule js_runtime_test_001 : production {\n  meta:\n    signatureId = 42000100\n    production = true\n'
+        '    severity = 5\n    description = "Synthetic js_runtime_test_001"\n    targetLanguage = "raw"\n'
+        '  strings:\n    $a = "PNAKOTIC_TEST_EVAL"\n  condition:\n    $a and filename matches /\\.js$/\n}\n')
     (root / "raw" / "js_broken_test_001.yara").write_text("rule js_broken_test_001 { condition: nope(")
     return root
 
@@ -100,6 +106,7 @@ def _site_engine(tmp_path):
 @pytest.fixture(scope="module")
 def site_server():
     """127.0.0.1 server for site-mode loads. Yields its base URL."""
+    import json
     import threading
     import time
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -174,6 +181,21 @@ def site_server():
                 self.send_header("Location", f"http://localhost:{port}/about/")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
+            elif self.path in ("/eval-stage", "/eval-sourceurl", "/eval-template", "/eval-flood", "/eval-debugger",
+                           "/eval-stackless"):
+                scripts = {  # code the page builds at runtime (Task 2: eval_capture)
+                    "/eval-stage": 'new Function("/*PNAKOTIC_TEST_EVAL*/ return 1")(); eval(' + json.dumps(obf) + ');',
+                    "/eval-sourceurl": 'eval("/*PNAKOTIC_TEST_EVAL*/\\n//# sourceURL=https://example.com/jquery.js");',
+                    "/eval-template": 'for (var i = 0; i < 3; i++) { new Function("obj", "return obj.a")({a: i}); }',
+                    "/eval-flood": 'for (var i = 0; i < 500; i++) { new Function("return " + i); }',
+                    # built from a timer or a promise: no JS frame on the stack, so no caller
+                    "/eval-stackless": 'setTimeout("/*PNAKOTIC_TEST_EVAL*/ 1", 0); setTimeout(eval, 0, "2 + 2"); '
+                                       'Promise.resolve("3 + 3").then(eval);',
+                    "/eval-debugger": 'setInterval(function () { debugger; }, 10); '
+                                      'new Function("/*PNAKOTIC_TEST_EVAL*/")();',
+                }
+                self._send(200, "text/html", (f"<html><head><title>Eval</title></head><body><h1>Eval</h1><iframe srcdoc='<p>hi</p>'></iframe>"
+                                              f"<script>{scripts[self.path]}</script></body></html>").encode())
             elif self.path == "/payload.js":
                 self._send(200, "text/javascript", b"var PNAKOTIC_TEST_SKIMMER = 1;")
             elif self.path == "/challenge":

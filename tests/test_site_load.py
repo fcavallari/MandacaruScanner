@@ -178,3 +178,93 @@ async def test_url_probe_scores_a_plain_loader_fetching_an_obfuscated_script(sit
         f"Obfuscated cross-site script (string_array_rotation) loaded by inline code: http://localhost:{port}/obf.js"]
     [inj] = r.metadata["injections"]
     assert inj["markers"] == [] and inj["body_markers"] == ["string_array_rotation"]
+
+
+# ---------- code the page builds at runtime (eval_capture.py) ----------
+
+async def _site_load(engine, url, shot="pages/0/default"):
+    from pnakotic.src.scanner.engine import LoadOptions
+
+    async with engine.browser_session() as (browser, _proxy):
+        return await engine._scan_in_context(browser, url, "default", engine.artifacts.create_task_folder("j"),
+                                             primary=True, options=LoadOptions(site=True, shot_dir=shot))
+
+
+@requires_browser
+@requires_yara
+@pytest.mark.asyncio
+async def test_runtime_code_is_captured_matched_and_marked(site_server, tmp_path, yara_rules_dir):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-stage")
+    stages = r.metadata["eval_stages"]
+    assert len(stages) == 2  # the Playwright scripts of the load itself are not stages
+    assert any(s["yara_matched"] for s in stages)
+    assert any("string_array_rotation" in s["markers"] for s in stages)
+    # Chromium gives eval and new Function a stack: the caller is the page that built them
+    assert all(s["caller"].startswith(site_server) and s["caller_line"] == 1 for s in stages)
+    assert all(set(s) == {"caller", "caller_line", "length", "markers", "context", "yara_matched"} for s in stages)
+    assert all(s["context"]["text"] and s["length"] > 0 for s in stages)
+    hits = [json.loads(h.evidence) for h in r.hops if h.mechanism == "yara_match"]
+    assert any(h["source"] == "eval" and h["rule"] == "js_runtime_test_001" for h in hits)
+    assert "eval_stages_dropped" not in r.metadata
+
+
+@requires_browser
+@requires_yara
+@pytest.mark.asyncio
+async def test_runtime_code_disguised_with_a_source_url_is_still_a_stage(site_server, tmp_path, yara_rules_dir):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-sourceurl")
+    assert any(s["yara_matched"] for s in r.metadata["eval_stages"])
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_runtime_templates_are_captured_but_quiet(site_server, tmp_path):
+    from pnakotic.src.intelligence.scorer import PnakoticScorer
+
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-template")
+    assert len(r.metadata["eval_stages"]) == 3 and not any(s["markers"] for s in r.metadata["eval_stages"])
+    PnakoticScorer().score(r, site_host="127.0.0.1")
+    assert not any("built at runtime" in f for f in r.metadata["scoring_findings"])
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_runtime_code_flood_is_capped(site_server, tmp_path):
+    import time
+
+    started = time.monotonic()
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-flood")
+    assert len(r.metadata["eval_stages"]) == 20 and r.metadata["eval_stages_dropped"] >= 480
+    assert time.monotonic() - started < 30
+
+
+@requires_browser
+@requires_yara
+@pytest.mark.asyncio
+async def test_debugger_loop_does_not_stall_the_load(site_server, tmp_path, yara_rules_dir):
+    import asyncio
+
+    r = await asyncio.wait_for(_site_load(_site_engine(tmp_path), f"{site_server}/eval-debugger"), 40)
+    assert any(s["yara_matched"] for s in r.metadata["eval_stages"])
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_playwright_own_scripts_and_the_pages_own_scripts_are_not_stages(site_server, tmp_path):
+    """The document's inline scripts and its network scripts are not stages, and a page that
+    builds nothing at runtime has none (our own init scripts and evaluate calls don't count)."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/")
+    assert r.metadata["eval_stages"] == []
+
+
+@requires_browser
+@requires_yara
+@pytest.mark.asyncio
+async def test_runtime_code_built_from_a_timer_or_a_promise_is_a_stage_without_a_caller(site_server, tmp_path,
+                                                                                         yara_rules_dir):
+    """No JavaScript frame is on the stack when a timer or a promise runs eval, so the stage has no
+    caller; it must still be captured (a stack requirement would be a one-line bypass)."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-stackless")
+    stages = r.metadata["eval_stages"]
+    assert len(stages) == 3 and all(s["caller"] == "" and s["caller_line"] is None for s in stages)
+    assert sum(s["yara_matched"] for s in stages) == 1

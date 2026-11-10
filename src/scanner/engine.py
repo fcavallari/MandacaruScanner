@@ -20,6 +20,9 @@ from .profiles import PROFILES
 from .static_analyzer import StaticAnalyst, SIGNATURE_MECHANISMS, MAX_CONTENT_CHARS
 from .artifacts import ArtifactManager
 from .behavior import BehaviorRecorder
+from .eval_capture import EvalCapture
+from .obfuscation import obfuscator_markers
+from .snippets import cut_snippet
 from .yara_scan import YARA_MECHANISM, ScriptCollector, load_rules, scan_buffers, MAX_BUFFER_BYTES, MAX_FRAMES
 from .egress_proxy import EgressProxy
 from .netguard import HostCheck, host_is_public, url_is_allowed
@@ -199,6 +202,18 @@ class EgressGuard:
             print(f"[egress-guard] could not settle paused request {url[:200]!r}: {exc}")
 
 
+def _eval_stage_entry(stage) -> dict:
+    """The report-sized record of one runtime-built script: snippets and markers, never the body."""
+    return {
+        "caller": stage.caller_url[:300],
+        "caller_line": stage.caller_line,
+        "length": len(stage.source),
+        "markers": obfuscator_markers(stage.source.decode("utf-8", "replace")),
+        "context": cut_snippet(stage.source, 0, 0),
+        "yara_matched": False,  # site mode fills it in from the per-buffer YARA matches
+    }
+
+
 async def _served_body(resp: Response) -> Optional[bytes]:
     """The HTML body of a main-frame navigation response, capped; None when it isn't HTML,
     is too large to pull, or the browser can't give it any more."""
@@ -363,6 +378,7 @@ class PnakoticEngine:
         # scorer reads the injection evidence (body_markers) and the CDN-blocked scripts.
         scripts: Optional[ScriptCollector] = ScriptCollector()
         documents: List[tuple] = []  # (source, url, html) for YARA: the landing page and its frames
+        evals = EvalCapture()  # kept in every mode (bounded, eval_capture.py)
         try:
             await behavior.attach(ctx)  # before new_page: hooks must precede every page script
             page = await ctx.new_page()
@@ -445,6 +461,9 @@ class PnakoticEngine:
             main_frame_id = tree["frameTree"]["frame"]["id"]
             tracer = ScriptTracer()  # who started each script request; the scorer and site report read it
             await tracer.attach(cdp, main_frame_id)
+            # Code the page builds at runtime (eval, new Function), before goto. The warm-up makes Playwright
+            # parse its own main-world scripts now, so they are known and not mistaken for the page's.
+            await evals.attach(cdp, warm_up=lambda: page.evaluate("'pnakotic' + '-warm-up'"))
             current_url = target_url
 
             def on_frame_navigated(event: dict) -> None:
@@ -636,6 +655,7 @@ class PnakoticEngine:
                         print(f"[engine] click probe failed: {str(e)[:200]}")
             if scripts:
                 await scripts.drain()  # bodies can only be read while the context is open
+            await evals.drain()
         finally:
             try:
                 await ctx.close()
@@ -664,15 +684,27 @@ class PnakoticEngine:
             if result.metadata["challenge"]:
                 result.metadata["challenge_vendor"] = challenge_vendor(signals["title"], served_text)
 
+        eval_stages = [_eval_stage_entry(stage) for stage in evals.stages]
+        result.metadata["eval_stages"] = eval_stages
+        if evals.dropped:
+            result.metadata["eval_stages_dropped"] = evals.dropped
+
         if rules:
             buffers = [("served", served_url, served)] if site and served is not None else []
             buffers += [(src, url, html.encode("utf-8", "replace")) for src, url, html in documents]
+            # Runtime-built code goes before the script bodies: when the scan budget runs out, those are cut first.
+            eval_base = len(buffers)
+            buffers += [("eval", stage.caller_url or served_url, stage.source) for stage in evals.stages]
             buffers += [("script", url, body) for url, body in scripts.scripts]
             matches, stats = await scan_buffers(rules, buffers, per_buffer=site)
             stats["scripts_dropped"] = scripts.dropped
             result.metadata["yara"] = stats
             for match in matches:
                 intercepted.append(RedirectHop(url=match["url"], mechanism=YARA_MECHANISM, evidence=json.dumps(match)))
+            if site:
+                hit = {m.get("buffer_index") for m in matches}
+                for i, entry in enumerate(eval_stages):
+                    entry["yara_matched"] = eval_base + i in hit
 
         # What the page tried to do to the visitor, after the context is gone (no late events).
         result.hops = intercepted + behavior.hops()
