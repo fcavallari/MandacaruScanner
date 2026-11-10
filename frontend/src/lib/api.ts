@@ -48,7 +48,7 @@ export type SiteVerdict = 'compromised' | 'suspicious' | 'partly_checked' | 'cle
 export type FindingSeverity = 'compromised' | 'suspicious';
 /** served: the HTML the server sent; rendered: added while the page loaded; frame: in an embedded frame;
  *  script: in a script file; null: unknown (no served HTML) or not a code finding. */
-export type FindingOrigin = 'served' | 'rendered' | 'frame' | 'script';
+export type FindingOrigin = 'served' | 'rendered' | 'frame' | 'script' | 'runtime';
 export type LoadState = 'checked' | 'partial' | 'not_checked';
 export type LoadReason = 'budget' | 'timeout' | 'load_failed' | 'challenge';
 

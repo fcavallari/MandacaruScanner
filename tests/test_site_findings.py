@@ -468,3 +468,120 @@ def test_script_blocked_as_malware_by_the_cdn_is_a_suspicious_script_block():
     away.result.metadata["flagged_scripts"] = [{"url": url, "status": 403, "reason": "cloudflare_suspected_malware"}]
     [b] = build_blocks([away], "s.com", None)
     assert b["findings"][0]["details"]["offsite"] is True and b["findings"][0]["loaded_by"] == []
+
+
+def test_runtime_yara_hit_sits_on_the_page_as_runtime():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    [b] = build_blocks([_load(0, "https://s.com/", "default", [_yara_hop("eval", "https://s.com/", "r1", 5, True, 0, "EVIL")])], "s.com", None)
+    [f] = b["findings"]
+    assert f["origin"] == "runtime" and f["severity"] == "compromised" and b["location"] == "https://s.com/"
+    assert b["location_kind"] == "page" and f["kind"] == "yara" and f["snippet"]["text"] == "EVIL"
+    assert f["details"]["initiator"] is None  # built by code with no URL: the hit's url is the page itself
+
+
+def test_runtime_yara_hit_names_the_code_that_built_it_without_moving_the_finding():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    # The caller is whatever the page's code says it is (a //# sourceURL can forge it): never the location.
+    hop = _yara_hop("eval", "https://example.com/jquery.js", "r1", 2, True, 0, "EVIL")
+    [b] = build_blocks([_load(0, "https://s.com/", "default", [hop])], "s.com", None)
+    [f] = b["findings"]
+    assert b["location"] == "https://s.com/" and b["location_kind"] == "page"
+    assert f["origin"] == "runtime" and f["severity"] == "suspicious"
+    assert f["details"]["initiator"] == "https://example.com/jquery.js"
+
+
+def test_runtime_yara_hit_with_the_landing_url_is_not_an_initiator():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    hop = _yara_hop("eval", "https://s.com/landed", "r1", 5, True, 0, "EVIL")
+    [b] = build_blocks([_load(0, "https://s.com/", "default", [hop], final_url="https://s.com/landed")], "s.com", None)
+    assert b["findings"][0]["details"]["initiator"] is None
+
+
+def test_runtime_yara_hit_stays_apart_from_a_page_hit_with_the_same_text():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    hops = [_yara_hop("served", "https://s.com/", "r1", 5, True, 0, "EVIL"), _yara_hop("eval", "https://s.com/", "r1", 5, True, 0, "EVIL")]
+    [b] = build_blocks([_load(0, "https://s.com/", "default", hops)], "s.com", None)
+    assert sorted(f["origin"] for f in b["findings"]) == ["runtime", "served"]
+
+
+def test_offsite_runtime_yara_hit_sits_at_the_landing_page():
+    from _support import _load, _yara_hop
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    hop = _yara_hop("eval", "https://evil.net/", "r1", 5, True, 0, "EVIL")
+    [b] = build_blocks([_load(0, "https://s.com/", "default", [hop], final_url="https://evil.net/")], "s.com", None)
+    [f] = b["findings"]
+    assert b["location"] == "https://evil.net/" and f["details"]["offsite"] is True and f["pages"] == ["https://s.com/"]
+
+
+def test_obfuscated_runtime_stage_is_suspicious_and_merges_across_pages():
+    from _support import _eval_stage, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    loads = [_load(i, f"https://s.com/p{i}/", "default", eval_stages=[_eval_stage("SCRAMBLED", "https://s.com/a.js")])
+             for i in range(2)]
+    [b] = build_blocks(loads, "s.com", None)
+    [f] = b["findings"]
+    assert f["kind"] == "runtime_code" and f["severity"] == "suspicious" and f["origin"] == "runtime"
+    assert f["message"] == "Code on this page builds and runs hidden, scrambled code"
+    assert f["snippet"]["text"] == "SCRAMBLED" and f["details"]["initiator"] == "https://s.com/a.js"
+    assert f["pages"] == ["https://s.com/p0/", "https://s.com/p1/"] and b["location"] == "https://s.com/p0/"
+    assert b["location_kind"] == "page"
+
+
+def test_obfuscated_runtime_stage_without_a_caller_has_no_initiator():
+    from _support import _eval_stage, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    [b] = build_blocks([_load(0, "https://s.com/", "default", eval_stages=[_eval_stage()])], "s.com", None)
+    assert b["findings"][0]["details"]["initiator"] is None
+
+
+def test_runtime_stage_already_matched_by_yara_is_not_repeated():
+    from _support import _eval_stage, _load, _yara_hop
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    load = _load(0, "https://s.com/", "default", [_yara_hop("eval", "https://s.com/", "r1", 5, True, 0, "EVIL")],
+                 eval_stages=[_eval_stage("EVIL", yara_matched=True)])
+    [b] = build_blocks([load], "s.com", None)
+    assert [f["kind"] for f in b["findings"]] == ["yara"]
+
+
+def test_runtime_stage_without_markers_is_nothing():
+    from _support import _eval_stage, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    assert build_blocks([_load(0, "https://s.com/", "default", eval_stages=[_eval_stage(markers=())])], "s.com", None) == []
+
+
+def test_oversized_runtime_stage_is_nothing():
+    from _support import _eval_stage, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    load = _load(0, "https://s.com/", "default", eval_stages=[_eval_stage(oversized=True)])
+    assert build_blocks([load], "s.com", None) == []
+
+
+def test_runtime_stage_on_an_offsite_landing_is_skipped():
+    from _support import _eval_stage, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    load = _load(0, "https://s.com/", "default", final_url="https://evil.net/", eval_stages=[_eval_stage()])
+    assert build_blocks([load], "s.com", None) == []
+
+
+def test_runtime_stage_with_a_forged_long_caller_is_cut():
+    from _support import _eval_stage, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    caller = "https://example.com/" + "a" * 400
+    [b] = build_blocks([_load(0, "https://s.com/", "default", eval_stages=[_eval_stage(caller=caller)])], "s.com", None)
+    assert len(b["findings"][0]["details"]["initiator"]) == 300

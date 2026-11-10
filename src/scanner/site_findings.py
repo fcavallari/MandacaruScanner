@@ -42,6 +42,7 @@ MESSAGES: Dict[str, str] = {
     "injection": "Hidden code loads a script from another website into your page",
     "injection_obfuscated": "Code on this page loads an obfuscated script from another website",
     "flagged_script": "A script this page loads is blocked by {vendor} as suspected malware",
+    "runtime_obfuscated": "Code on this page builds and runs hidden, scrambled code",
     "page_score": "This page does things malicious pages do",
 }
 MOVED_SITE = "If you moved your site, check the new domain"
@@ -235,6 +236,10 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
                 text = snippet.get("text", "") if snippet else ""
                 c.add(load, ("yara", rule, text, "offsite", landing), origin=None, location=landing,
                       location_kind="page", offsite=True, **common)
+            elif source == "eval":  # code that page built at runtime
+                text = snippet.get("text", "") if snippet else ""
+                c.add(load, ("yara", rule, text, "offsite", landing, "runtime"), origin=None, location=landing,
+                      location_kind="page", offsite=True, **common)
             continue
         if source == "script":
             url = _url(hit.get("url"))
@@ -248,6 +253,15 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
                 if inj.get("initiator_kind") == "script" and _url(inj.get("initiator_url")) == url:
                     tied.add(i)  # this script injected another one
                     _append(finding.loaded, _url(inj["requested_url"]))
+        elif source == "eval":
+            # Code the page built and ran (eval, new Function, an inserted script). The finding is the page's.
+            # The hit's url is the code that built it, as that code names itself (a //# sourceURL can forge
+            # it), so it is only ever shown as that, never as where the finding lives.
+            caller = _url(hit.get("url"))
+            text = snippet.get("text", "") if snippet else ""
+            builder = None if caller in (load.page_url, landing) else caller
+            c.add(load, ("yara", rule, text, "runtime"), origin="runtime", location=load.page_url,
+                  location_kind="page", initiator=builder, **common)
         elif source in _HTML_ORIGINS:
             if source == "page" and rule in served_rules:
                 continue  # already reported from the HTML the server sent
@@ -312,6 +326,24 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
                         location=load.page_url, location_kind="page", mechanism="script_injection",
                         initiator=initiator)
         _append(finding.loaded, requested)
+
+
+def _runtime_code(c: _Collector, load: Load, site_host: str) -> None:
+    """Code the page built and ran that carries obfuscator markers and that no rule matched (the
+    ones a rule matched are reported from the YARA hit). The finding is at the page; the caller is
+    only what the building code calls itself, shown as the code that built it. Stages too long to
+    read, and the counts of stages left out, are not findings."""
+    if ended_off_site(load.result, site_host):
+        return  # another site's runtime code is not the owner's page code
+    for stage in load.result.metadata.get("eval_stages") or []:
+        if (not isinstance(stage, dict) or stage.get("oversized") or stage.get("yara_matched")
+                or not stage.get("markers")):
+            continue
+        snippet = _snippet(stage.get("context"))
+        caller = _url(stage.get("caller"))
+        c.add(load, ("runtime", caller, snippet.get("text", "") if snippet else ""), severity="suspicious",
+              kind="runtime_code", message=MESSAGES["runtime_obfuscated"], snippet=snippet, origin="runtime",
+              location=load.page_url, location_kind="page", mechanism="runtime_code", initiator=caller or None)
 
 
 def _behaviour(c: _Collector, load: Load) -> None:
@@ -466,6 +498,7 @@ def build_blocks_and_overflow(loads: List[Load], site_host: str,
     c = _Collector()
     for load in usable:
         _yara_and_injections(c, load, site_host)
+        _runtime_code(c, load, site_host)
         _behaviour(c, load)
         _cloaking(c, load, site_host, landed[load.page_url], bool(offsite_domain))
     if offsite_domain:

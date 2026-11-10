@@ -173,6 +173,8 @@ A bot-check page is the CDN's, not the site's, so its content is never scanned a
 | Obfuscated injector: an inline block or same-site script with obfuscator.io markers that adds a script from another site | Suspicious | The page URL, with the injecting snippet and the loaded URL |
 | Obfuscated script from another site, added by an inline block or same-site script that is itself plain (the loaded body carries the obfuscator.io markers) | Suspicious | The page URL, with the loaded URL |
 | A script from another site that its CDN refused as suspected malware (Cloudflare's interstitial in the script's place) | Suspicious | The script URL, with "loaded by" naming the page and the code that added it |
+| Code the page builds and runs at runtime (`eval`, `new Function`, an inserted inline script) that matches a YARA rule | Compromised or Suspicious, as for any YARA match | The page URL, "Built and run by code on this page while it loaded", naming the code that built it |
+| Code the page builds and runs at runtime that carries obfuscator.io markers and matches no rule | Suspicious | The page URL: "Code on this page builds and runs hidden, scrambled code", with the snippet |
 | A page whose own site-mode score is 0.4 or more, with no compromised finding of its own | Suspicious | The page URL, with the scoring lines under Details |
 
 - **Served HTML and rendered DOM.** The HTML the server sent (`served`) is matched as well as the rendered DOM. A match in the served HTML points at the templates or database; a match only in the rendered DOM was added by a script while the page loaded.

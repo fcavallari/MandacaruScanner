@@ -60,6 +60,7 @@ const ORIGINS: Record<string, string> = {
   rendered: 'Added by a script while the page loaded',
   frame: 'Inside a frame embedded in the page',
   script: 'In this script file',
+  runtime: 'Built and run by code on this page while it loaded',
 };
 
 /** The 404 probe (/pnakotic-<hex>/) is shown by what it is, with its URL under it. */
@@ -130,7 +131,7 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-function FindingDetails({ taskId, finding }: { taskId: string; finding: SiteFinding }) {
+function FindingDetails({ taskId, finding, block }: { taskId: string; finding: SiteFinding; block: SiteBlock }) {
   const d = finding.details;
   const profiles = d?.profiles ?? [];
   const screenshots = d?.screenshots ?? [];
@@ -159,7 +160,19 @@ function FindingDetails({ taskId, finding }: { taskId: string; finding: SiteFind
             <span className="font-mono text-[12px] text-ink">{profiles.join(', ')}</span>
           </DetailRow>
         ) : null}
-        {d?.initiator ? (
+        {finding.origin === 'runtime' ? (
+          // The builder's URL is what the page's own code calls itself, so it is named as the code that built
+          // this, never as where the finding is: the finding is on the page.
+          <DetailRow label="Built by">
+            {d?.initiator ? (
+              <span className="font-mono text-[12px] text-muted break-all">{d.initiator}</span>
+            ) : (
+              <span className="text-[12px] text-muted break-all">
+                Built at runtime on <span className="font-mono">{block.location}</span>
+              </span>
+            )}
+          </DetailRow>
+        ) : d?.initiator ? (
           <DetailRow label="Added by">
             <span className="font-mono text-[12px] text-muted break-all">{d.initiator}</span>
           </DetailRow>
@@ -240,7 +253,7 @@ function FindingView({ taskId, finding, block }: { taskId: string; finding: Site
           <UrlList urls={pages} more={finding.pages_more} noun="page" />
         </div>
       ) : null}
-      <FindingDetails taskId={taskId} finding={finding} />
+      <FindingDetails taskId={taskId} finding={finding} block={block} />
     </li>
   );
 }

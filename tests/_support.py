@@ -278,8 +278,15 @@ def _yara_hop(source, url, rule, sev, production, offset, text):
     }))
 
 
+def _eval_stage(text="OBFUSCATED", caller="", markers=("string_array_rotation",), yara_matched=False, oversized=False):
+    """One `metadata["eval_stages"]` entry as the engine records it."""
+    return {"caller": caller, "caller_line": None, "length": len(text), "markers": list(markers),
+            "context": {"text": text, "match_start": 0, "match_end": len(text), "line": 1},
+            "yara_matched": yara_matched, "oversized": oversized}
+
+
 def _load(page_index, page_url, profile, hops=(), injections=(), state="checked", reason=None, final_url=None,
-          script_requests=(), score=0.0):
+          script_requests=(), score=0.0, eval_stages=()):
     """A site-check Load around a hand-built ScanResult."""
     from pnakotic.src.scanner.models import ScanResult
     from pnakotic.src.scanner.site_findings import Load
@@ -288,6 +295,7 @@ def _load(page_index, page_url, profile, hops=(), injections=(), state="checked"
     result.metadata = {
         "injections": list(injections), "script_requests": list(script_requests),
         "scoring_findings": [], "decisive_findings": [], "cloaking": None,
+        "eval_stages": list(eval_stages),
     }
     return Load(page_index=page_index, page_url=page_url, profile=profile, state=state, reason=reason,
                 result=result, shot=None)
