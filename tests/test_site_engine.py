@@ -111,3 +111,62 @@ async def test_site_scan_falls_back_to_http_and_drops_the_https_set(site_server,
     listed = {a["rel_path"] for a in out.artifact_manifest["artifacts"]}
     shots = {l["screenshot"] for p in r["checked"]["pages"] for l in p["loads"] if l["screenshot"]}
     assert listed == shots  # the failed https loads' screenshots are gone
+
+
+def _checkout_pages(report):
+    return [p for p in report["checked"]["pages"] if p.get("checkout")]
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_site_scan_loads_an_unpicked_woocommerce_checkout_once_before_the_probe(site_server, tmp_path):
+    from pnakotic.src.scanner.site_engine import SiteScanner
+
+    report = (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/woo/")).report
+    checkout = _checkout_pages(report)
+    assert len(checkout) == 1 and checkout[0]["url"] == f"{site_server}/checkout/"
+    assert [l["profile"] for l in checkout[0]["loads"]] == ["default"]
+    assert checkout[0]["loads"][0]["state"] == "checked"
+    assert report["checked"]["pages"][-1]["probe"] is True
+    assert [p["index"] for p in report["checked"]["pages"]] == [0, 1, 2] and checkout[0]["index"] == 1
+    assert report["verdict"]["verdict"] == "suspicious"
+    assert [f["kind"] for b in report["blocks"] for f in b["findings"]] == ["card_inputs"]
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_site_scan_a_picked_checkout_keeps_its_three_profiles(site_server, tmp_path):
+    from pnakotic.src.scanner.site_engine import SiteScanner
+
+    woo = (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/woo-linked/")).report
+    [checkout] = _checkout_pages(woo)
+    assert checkout["url"] == f"{site_server}/woo-linked/checkout/"
+    assert [l["profile"] for l in checkout["loads"]] == ["default", "mobile-ios", "googlebot"]
+    # No extra page: the same survey of the same site without the marker has as many pages.
+    plain = (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/nowoo-linked/")).report
+    assert len(woo["checked"]["pages"]) == len(plain["checked"]["pages"]) == 3
+    assert _checkout_pages(plain) == []
+    assert woo["verdict"]["verdict"] == plain["verdict"]["verdict"] == "clean"
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_site_scan_without_the_marker_a_checkout_link_is_nothing_special(site_server, tmp_path):
+    from pnakotic.src.scanner.site_engine import SiteScanner
+
+    report = (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/plainshop/")).report
+    assert _checkout_pages(report) == []
+    assert [p["probe"] for p in report["checked"]["pages"]] == [False, False, True]
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_site_scan_a_checkout_that_redirects_to_the_cart_is_still_the_checkout_page(site_server, tmp_path):
+    from pnakotic.src.scanner.site_engine import SiteScanner
+
+    report = (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/woo-redirect/")).report
+    [checkout] = _checkout_pages(report)
+    assert checkout["url"] == f"{site_server}/woo-redirect/checkout/"
+    default = checkout["loads"][0]
+    assert default["profile"] == "default" and default["state"] == "checked"
+    assert default["landing"].endswith("/woo-redirect/cart/")

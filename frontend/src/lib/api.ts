@@ -130,6 +130,7 @@ export interface SiteCheckedPage {
   index: number; // 0 = the homepage
   url: string;
   probe?: boolean; // the 404 probe (/pnakotic-<hex>/): the site's "page not found" page
+  checkout?: boolean; // a WooCommerce store's checkout page (picked, or added), wherever it landed
   // src/scanner/site_report.py _card_fields; none of these is a finding
   card_fields?: boolean; // the page has card inputs of its own (served, or added by the store's or a known vendor's code)
   card_fields_unchecked?: boolean; // whose code added its card inputs couldn't be checked on some load

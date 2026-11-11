@@ -607,3 +607,11 @@ async def test_hooks_stay_invisible_with_both_init_scripts(site_server):
         # the stack capture leaves Error as it found it
         assert await page.evaluate("['prepareStackTrace' in Error, Error.stackTraceLimit]") == [False, 10]
         await browser.close()
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_site_load_marks_a_woocommerce_page(site_server, tmp_path):
+    engine = _site_engine(tmp_path)
+    assert (await _site_load(engine, f"{site_server}/woo/")).metadata["woocommerce"] is True
+    assert (await _site_load(engine, f"{site_server}/plainshop/")).metadata["woocommerce"] is False

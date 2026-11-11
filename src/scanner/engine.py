@@ -29,6 +29,7 @@ from .netguard import HostCheck, host_is_public, url_is_allowed
 from .script_trace import ScriptTracer, find_injections
 from .page_picker import extract_links
 from .challenge import challenge_vendor, looks_like_challenge
+from .woo import looks_like_woocommerce
 
 # --block-new-web-contents: window.open / popups would load in a new target that the
 # page's CDP session does not intercept, so forbid them outright. Chrome still reports each
@@ -729,6 +730,9 @@ class PnakoticEngine:
                 "links": links,
                 "script_requests": list(tracer.records) if tracer else [],
                 "challenge": looks_like_challenge(main_status, signals["title"], served_text),
+                # The served text and the rendered DOM: a store's scripts add some markers (the
+                # ``woocommerce-js`` body class) only after load.
+                "woocommerce": looks_like_woocommerce(served_text) or looks_like_woocommerce(content),
             })
             if result.metadata["challenge"]:
                 result.metadata["challenge_vendor"] = challenge_vendor(signals["title"], served_text)

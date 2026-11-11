@@ -283,7 +283,8 @@ def _card_fields(loads: List[Load], site_host: str) -> dict:
     return {"card_fields": fields, "card_fields_unchecked": unchecked, "card_fields_vendors": vendors}
 
 
-def _checked(loads: List[Load], rules_count: int, probe: Optional[int], site_host: str) -> dict:
+def _checked(loads: List[Load], rules_count: int, probe: Optional[int], site_host: str,
+             checkout: Optional[int] = None) -> dict:
     by_page = {}  # type: Dict[int, List[Load]]
     for load in loads:
         by_page.setdefault(load.page_index, []).append(load)
@@ -294,6 +295,7 @@ def _checked(loads: List[Load], rules_count: int, probe: Optional[int], site_hos
             "index": index,
             "url": _url(page_loads[0].page_url),
             "probe": index == probe,
+            "checkout": index == checkout,  # a WooCommerce store's checkout page, wherever it landed
             **_card_fields(page_loads, site_host),
             "loads": [{
                 "profile": l.profile,
@@ -344,7 +346,8 @@ def challenge_summary(loads: List[Load]) -> Optional[dict]:
 
 
 def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str], loads: List[Load],
-                 rules_count: int, blocked_hosts: List[str], notes: List[str]) -> dict:
+                 rules_count: int, blocked_hosts: List[str], notes: List[str],
+                 checkout_index: Optional[int] = None) -> dict:
     """The site report stored in the result's metadata_json."""
     blocks, blocks_more = build_blocks_and_overflow(loads, site_host, offsite_domain)
     blocks, emptied, findings_more_total = cap_findings(blocks)
@@ -355,7 +358,7 @@ def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str
     probe_url = next((_url(l.page_url) for l in loads if l.page_index == probe), None) if probe is not None else None
     for block in blocks:
         block["probe"] = block["location_kind"] == "page" and block["location"] == probe_url
-    checked = _checked(loads, rules_count, probe, site_host)
+    checked = _checked(loads, rules_count, probe, site_host, checkout_index)
     cards_unchecked = any(p["card_fields_unchecked"] for p in checked["pages"])
     return {
         "site": site_host,

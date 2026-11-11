@@ -105,6 +105,17 @@ def _site_engine(tmp_path):
     return engine
 
 
+# Task 6: homepages that may or may not look like WooCommerce, and the clean pages they link to.
+# path -> (body class, the checkout link or None). /nowoo-linked/ is /woo-linked/ without the marker.
+WOO_HOMES = {
+    "/woo/": ("woocommerce-js", None),
+    "/woo-linked/": ("woocommerce-js", "/woo-linked/checkout/"),
+    "/nowoo-linked/": ("blog", "/nowoo-linked/checkout/"),
+    "/woo-redirect/": ("woocommerce-js", "/woo-redirect/checkout/"),
+    "/plainshop/": ("blog", "/plainshop/checkout/"),
+}
+WOO_CLEAN_PAGES = ("/woo-linked/checkout/", "/nowoo-linked/checkout/", "/woo-redirect/cart/", "/plainshop/checkout/")
+
 DYNAMIC_PAGES = {}  # path -> HTML for pages a test builds itself (served by site_server)
 
 
@@ -371,6 +382,21 @@ def site_server():
             elif self.path == "/plain/":  # a plain GA-shaped loader
                 self._send(200, "text/html", ("<html><head><title>Plain</title></head><body><h1>Plain</h1>"
                                               f"<script>{loader('clean.js')}</script></body></html>").encode())
+            elif self.path in WOO_HOMES:  # a WooCommerce store's homepage (Task 6: the checkout page)
+                marker, link = WOO_HOMES[self.path]
+                body = ("<html><head><title>Store</title></head><body class='home " + marker + "'><h1>Store</h1>"
+                        + (f"<a href='{link}'>Checkout</a>" if link else "") + "</body></html>")
+                self._send(200, "text/html", body.encode())
+            elif self.path == "/checkout/":  # the cross-host card skimmer of /card-skim, on the root checkout
+                self._send(200, "text/html", CARD_PAGES["/card-skim"].replace("{port}", str(port)).encode())
+            elif self.path in WOO_CLEAN_PAGES:
+                self._send(200, "text/html", (f"<html><head><title>Page</title></head><body><h1>{self.path}</h1>"
+                                              "</body></html>").encode())
+            elif self.path == "/woo-redirect/checkout/":  # a store whose checkout goes to the cart
+                self.send_response(302)
+                self.send_header("Location", "/woo-redirect/cart/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
             elif self.path == "/obf/":  # obfuscator.io code injecting a script from another site
                 self._send(200, "text/html", (
                     "<html><head><title>Obf</title></head><body><h1>Obf</h1>"

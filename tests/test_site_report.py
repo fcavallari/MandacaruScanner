@@ -315,6 +315,17 @@ def test_external_scripts_skip_loads_that_ended_off_site():
     assert [(h["host"], h["urls"][0]["profiles"]) for h in hosts] == [("ads.net", ["default"])]
 
 
+def test_the_checkout_page_is_flagged_by_index():
+    from _support import _load
+    from pnakotic.src.scanner.site_report import build_report
+
+    loads = [_load(0, "https://s.com/", "default"), _load(1, "https://s.com/kassa/checkout/", "default"),
+             _load(2, "https://s.com/pnakotic-0123456789ab/", "default")]
+    r = build_report("s.com", "s.com", None, loads, 1, [], [], checkout_index=1)
+    assert [p["checkout"] for p in r["checked"]["pages"]] == [False, True, False]
+    assert [p["checkout"] for p in build_report("s.com", "s.com", None, loads, 1, [], [])["checked"]["pages"]] == [False] * 3
+
+
 def test_the_404_probe_is_flagged_on_its_page_and_its_blocks():
     from _support import _load, _yara_hop
     from pnakotic.src.scanner.site_report import build_report

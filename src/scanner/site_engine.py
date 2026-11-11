@@ -22,9 +22,12 @@ from .page_picker import pick_pages, probe_url
 from .site_findings import Load
 from .site_identity import on_site, resolve_site_host
 from .site_report import build_report, classify_load
+from .woo import checkout_url
 
 HOMEPAGE_PROFILES = ("default", "mobile-ios", "googlebot", "search-clicker")
 PAGE_PROFILES = ("default", "mobile-ios", "googlebot")
+# A WooCommerce checkout that wasn't picked is loaded as one visitor only.
+CHECKOUT_PROFILES = ("default",)
 
 NOTE_HTTP = "Checked over http"
 NOTE_OFFSITE = "No pages could be picked because the homepage left the site"
@@ -72,6 +75,16 @@ def _root(base_url: str, fallback_url: str, site_host: str) -> str:
         parts = urlsplit(fallback_url)
         port = parts.port
     return urlunsplit((parts.scheme, _netloc(site_host, port), "/", "", ""))
+
+
+def _page_key(url: str):
+    """What makes two page URLs the same page: scheme, host, port and path, ignoring a trailing
+    slash, the query and the fragment. None for a URL that doesn't parse."""
+    try:
+        parts = urlsplit(url)
+        return (parts.scheme.lower(), (parts.hostname or "").lower(), parts.port, parts.path.rstrip("/"))
+    except ValueError:
+        return None
 
 
 def _error(e: BaseException) -> str:
@@ -216,10 +229,28 @@ class SiteScanner:
                 for url in pick_pages(links, site_host, root, limit=self.page_limit):
                     if await engine.host_allowed(_host(url)):
                         picked.append(url)
-            urls = picked + [probe_url(root, secrets.token_hex(6))]
 
-            # Stage 2: every picked page and the 404 probe, in every page profile.
-            page_jobs = [(i, url, p) for i, url in enumerate(urls, start=1) for p in PAGE_PROFILES]
+            # A WooCommerce store's checkout page is where a card skimmer lives: it is one of the
+            # loads. Picked already, it keeps its three profiles; otherwise it is added after the
+            # picked pages, before the probe, and loaded as the default visitor only.
+            checkout_index = None  # type: Optional[int]
+            extra_checkout = None  # type: Optional[str]
+            if any(isinstance(result, ScanResult) and state != "not_checked"
+                   and result.metadata.get("woocommerce") is True and on_site(_host(result.final_url), site_host)
+                   for (result, _, _), (state, _) in zip(home, states)):
+                checkout = checkout_url(links or [], site_host, root)
+                key = _page_key(checkout)
+                same = [i for i, url in enumerate(picked, start=1) if _page_key(url) == key]
+                if same:
+                    checkout_index = same[0]
+                elif await engine.host_allowed(_host(checkout)):
+                    extra_checkout = checkout
+                    checkout_index = len(picked) + 1
+            urls = picked + ([extra_checkout] if extra_checkout else []) + [probe_url(root, secrets.token_hex(6))]
+
+            # Stage 2: every picked page and the 404 probe in every page profile; an unpicked checkout in one.
+            page_jobs = [(i, url, p) for i, url in enumerate(urls, start=1)
+                         for p in (CHECKOUT_PROFILES if i == checkout_index and extra_checkout else PAGE_PROFILES)]
             pages = await self._run(browser, task_folder, page_jobs, sem, deadline)
             blocked += proxy.blocked_hosts
 
@@ -252,7 +283,7 @@ class SiteScanner:
 
         rules = engine.yara_rules
         report = build_report(entered_host, site_host, offsite_domain, loads,
-                              rules.count if rules else 0, blocked, notes)
+                              rules.count if rules else 0, blocked, notes, checkout_index=checkout_index)
         default_error = home[0][1]
         if default is not None:
             raw_error = default.metadata.get("raw_error")

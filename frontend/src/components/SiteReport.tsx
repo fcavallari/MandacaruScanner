@@ -65,6 +65,8 @@ const ORIGINS: Record<string, string> = {
 
 /** The 404 probe (/pnakotic-<hex>/) is shown by what it is, with its URL under it. */
 const PROBE_LABEL = "Your 'page not found' page";
+/** A WooCommerce store's checkout page, shown the same way. */
+const CHECKOUT_LABEL = 'Your checkout page';
 
 function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? '' : 's'}`;
@@ -408,9 +410,9 @@ function CardFieldsNote({ page, skimmed }: { page: SiteCheckedPage; skimmed: boo
 function PageView({ taskId, page, skimmed }: { taskId: string; page: SiteCheckedPage; skimmed: boolean }) {
   return (
     <li className="px-4 py-2.5 border-b border-rule last:border-b-0">
-      {page.probe ? (
+      {page.probe || page.checkout ? (
         <div className="mb-1">
-          <p className="text-[13px] text-ink m-0">{PROBE_LABEL}</p>
+          <p className="text-[13px] text-ink m-0">{page.probe ? PROBE_LABEL : CHECKOUT_LABEL}</p>
           <p className="font-mono text-[12px] text-faint m-0 break-all">{page.url}</p>
         </div>
       ) : (
