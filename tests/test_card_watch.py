@@ -83,10 +83,13 @@ def test_summarize_owner_of_each_insertion():
     out = summarize(events, 3, "shop.example", PAGE, None)
     assert out["present"] == 3 and out["dropped"] == 0
     skim, empty, store = out["inserted"]
-    assert skim == {"via": "innerHTML", "owner": "unknown", "vendors": [], "cut": False,
+    assert skim == {"via": "innerHTML", "owner": "unknown", "vendors": [], "cut": False, "verified": True,
+                    "first_unknown": "https://evil.example/s.js",
                     "frames": ["https://evil.example/s.js", "https://shop.example/wp-includes/js/jquery/jquery.min.js"]}
-    assert empty["owner"] == "unknown" and empty["frames"] == []
+    assert empty["owner"] == "unknown" and empty["frames"] == [] and empty["verified"] is True
+    assert empty["first_unknown"] == ""
     assert store["owner"] == "store" and store["frames"] == ["https://shop.example/wp-content/plugins/pay/form.js"]
+    assert store["verified"] is True and store["first_unknown"] == ""
 
 
 def test_summarize_reads_the_page_frame_against_the_served_inline_block_hashes():
@@ -127,7 +130,8 @@ def test_summarize_bounds_frames_and_marks_a_cut_stack():
 def test_summarize_fails_closed_when_inputs_appeared_unseen():
     from pnakotic.src.scanner.card_watch import summarize
 
-    unseen = {"via": "unseen", "owner": "unknown", "vendors": [], "frames": [], "cut": False}
+    unseen = {"via": "unseen", "owner": "unknown", "vendors": [], "frames": [], "cut": False, "verified": True,
+              "first_unknown": ""}
     assert summarize([], 1, "shop.example", PAGE, b"<html><body></body></html>")["inserted"] == [unseen]
     assert summarize([], 1, "shop.example", PAGE, None)["inserted"] == [unseen]
     served = b"<form><input name='cardnumber' autocomplete='cc-number'></form>"
@@ -135,6 +139,81 @@ def test_summarize_fails_closed_when_inputs_appeared_unseen():
     assert summarize([], 0, "shop.example", PAGE, None)["inserted"] == []  # no card inputs at all
     seen = summarize([{"via": "append", "stack": STORE_STACK}], 2, "shop.example", PAGE, None)["inserted"]
     assert [e["via"] for e in seen] == ["append"]
+
+
+HANDLER_ONLY = {"via": "appendChild", "stack": f"Error\n    at {PAGE}:1:9 sha256={'0' * 64}"}
+CROSS_SITE = {"via": "innerHTML", "stack": SKIMMER}
+
+
+def _hash(text):
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_summarize_marks_page_url_frames_it_could_not_check():
+    """`verified` is false only when every frame that made the owner unknown is at the page URL and
+    page-URL frames couldn't be checked on that load: no parse record (the debugger domain failed or
+    the record overflowed), no served HTML, or no script hash in this browser."""
+    from pnakotic.src.scanner.card_watch import summarize
+
+    served = b"<html><head><script>var a = 1;</script></head><body></body></html>"
+    # a runtime handler at the page URL on a load that could check page frames: unknown, and verified
+    checked = summarize([HANDLER_ONLY], 1, "shop.example", PAGE, served, parsed={_hash("var a = 1;"): {(0, 20)}})
+    assert checked["unverifiable"] is None
+    assert [(e["owner"], e["verified"], e["first_unknown"]) for e in checked["inserted"]] == [("unknown", True, PAGE)]
+    # no parse record: the same insertion can't be checked, but another site's frame, an empty
+    # stack and an eval frame on that load still can
+    events = [HANDLER_ONLY, CROSS_SITE, {"via": "append", "stack": ""},
+              {"via": "append", "stack": f"Error\n    at eval (eval at <anonymous>)\n    at {PAGE}:1:9"},
+              {"via": "append", "stack": f"Error\n    at {PAGE}:1:9\n    at https://evil.example/s.js:1:1"},
+              {"via": "append", "stack": STORE_STACK}]
+    out = summarize(events, 1, "shop.example", PAGE, served, parsed=None)
+    assert out["unverifiable"] == "parse_record"
+    assert [(e["owner"], e["verified"]) for e in out["inserted"]] == [
+        ("unknown", False), ("unknown", True), ("unknown", True), ("unknown", True), ("unknown", True), ("store", True)]
+    assert [e["first_unknown"] for e in out["inserted"][3:5]] == ["", PAGE]  # the first unknown frame, as it is
+    # no served HTML to hash the inline blocks of
+    none = summarize([HANDLER_ONLY], 1, "shop.example", PAGE, None, parsed={})
+    assert none["unverifiable"] == "served_html" and none["inserted"][0]["verified"] is False
+    # a browser without CallSite.getScriptHash: the hook says so on each event
+    no_hash = dict(HANDLER_ONLY, stack=f"Error\n    at {PAGE}:1:9", no_hash=True)
+    out = summarize([no_hash, dict(CROSS_SITE, no_hash=True)], 1, "shop.example", PAGE, served, parsed={})
+    assert out["unverifiable"] == "script_hash"
+    assert [e["verified"] for e in out["inserted"]] == [False, True]
+
+
+def test_summarize_cannot_check_page_frames_in_a_charset_it_does_not_read():
+    from pnakotic.src.scanner.card_watch import summarize
+
+    page_frame = dict(HANDLER_ONLY)
+    ascii_page = b"<html><head><script>var a = 1;</script></head><body></body></html>"
+    sjis_page = "<html><head><script>var a = '\u30c6\u30b9\u30c8';</script></head><body></body></html>".encode("shift_jis")
+    after = b"<html><head><script>var a = 1;</script></head><body>\x82\xa0</body></html>"  # only after the last block
+    # what Playwright's Response.body() gives for that page: the browser's decoded text as UTF-8
+    decoded = sjis_page.decode("shift_jis").encode("utf-8")
+    cases = [
+        (sjis_page, "Shift_JIS", False),  # raw Shift_JIS bytes: not what we hash
+        (sjis_page, None, False),  # the browser's charset couldn't be read
+        (decoded, "Shift_JIS", True), (decoded, None, True),
+        (sjis_page, "UTF-8", True), (sjis_page, "windows-1252", True), (sjis_page, "utf-8", True),
+        (ascii_page, "Shift_JIS", True),  # plain ASCII reads the same in it
+        (after, "Shift_JIS", True),  # nothing before or in a block is read differently
+        (ascii_page.replace(b"var", b"\x1b$Bvar"), "ISO-2022-JP", False),  # escapes are control bytes
+    ]
+    for served, charset, verified in cases:
+        out = summarize([page_frame], 1, "shop.example", PAGE, served, parsed={}, charset=charset)
+        assert out["inserted"][0]["verified"] is verified, (served, charset)
+        assert out["unverifiable"] == (None if verified else "charset")
+
+
+def test_watcher_records_a_browser_without_script_hashes():
+    from pnakotic.src.scanner.card_watch import CardWatcher
+
+    w = CardWatcher()
+    w._on_page_event(_source(), {"via": "append", "stack": STORE_STACK, "no_hash": 1})
+    w._on_page_event(_source(), {"via": "append", "stack": STORE_STACK, "no_hash": "yes"})
+    assert [e["no_hash"] for e in w.events] == [True, False]
 
 
 class _Frame:
@@ -153,12 +232,12 @@ def test_watcher_keeps_bounded_events_from_the_main_frame_only():
     w = CardWatcher()
     assert w.binding.startswith("__") and len(w.binding) == 18
     w._on_page_event(_source(), {"via": "innerHTML", "stack": "Error\n" + "x" * 5000})
-    assert w.events == [{"via": "innerHTML", "stack": "Error", "cut": True}]  # the cut line is dropped
+    assert w.events == [{"via": "innerHTML", "stack": "Error", "cut": True, "no_hash": False}]  # the cut line is dropped
     w._on_page_event(_source(), {"via": "eval", "stack": ""})  # not a hook's name
     w._on_page_event(_source(), "appendChild")
     w._on_page_event(_source(main=False), {"via": "appendChild", "stack": ""})  # a subframe's own document
     w._on_page_event(_source(), {"via": "appendChild", "stack": 42})
-    assert len(w.events) == 2 and w.events[1] == {"via": "appendChild", "stack": "", "cut": False}
+    assert len(w.events) == 2 and w.events[1] == {"via": "appendChild", "stack": "", "cut": False, "no_hash": False}
     for _ in range(MAX_EVENTS + 3):
         w._on_page_event(_source(), {"via": "append", "stack": STORE_STACK})
     assert len(w.events) == MAX_EVENTS and w.dropped == 5

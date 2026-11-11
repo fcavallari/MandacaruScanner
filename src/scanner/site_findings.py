@@ -29,6 +29,7 @@ MAX_PAGES = 20         # pages listed per finding; the rest are counted in pages
 MAX_URLS = 20          # URLs in loaded_by / loaded; the rest in loaded_by_more / loaded_more
 MAX_DETAIL_ITEMS = 20  # screenshots and scoring strings kept in a finding's details
 MAX_DETAIL_TEXT = 300  # characters kept from a scoring string
+MAX_CARD_FRAMES = 10   # frame URLs kept in a card_inputs finding's details (card_watch keeps 10 too)
 
 SUSPICIOUS_SCORE = 0.4
 
@@ -43,6 +44,7 @@ MESSAGES: Dict[str, str] = {
     "injection_obfuscated": "Code on this page loads an obfuscated script from another website",
     "flagged_script": "A script this page loads is blocked by {vendor} as suspected malware",
     "runtime_obfuscated": "Code on this page builds and runs hidden, scrambled code",
+    "card_inputs": "Code from outside your site adds card payment fields to this page",
     "page_score": "This page does things malicious pages do",
 }
 MOVED_SITE = "If you moved your site, check the new domain"
@@ -83,6 +85,7 @@ class _Finding:
         self.signature_id = signature_id
         self.initiator = initiator
         self.offsite = offsite  # code on the page a visitor was sent to on another site
+        self.frames: Optional[List[str]] = None  # card_inputs: the inserting call's frame URLs
         self.visitors: List[str] = []
         self.pages: List[str] = []
         self.loaded_by: List[str] = []
@@ -119,6 +122,7 @@ class _Finding:
                 "scoring": self.scoring[:MAX_DETAIL_ITEMS],
                 "initiator": self.initiator,
                 "offsite": self.offsite,
+                **({"frames": self.frames} if self.frames is not None else {}),
             },
         }
 
@@ -346,6 +350,38 @@ def _runtime_code(c: _Collector, load: Load, site_host: str) -> None:
               location=load.page_url, location_kind="page", mechanism="runtime_code", initiator=caller or None)
 
 
+def card_insertions(result: ScanResult) -> List[dict]:
+    """``metadata["card_inputs"]["inserted"]`` entries that are dicts (page-supplied: the rest is
+    checked where it is read)."""
+    cards = result.metadata.get("card_inputs")
+    inserted = cards.get("inserted") if isinstance(cards, dict) else None
+    return [e for e in inserted if isinstance(e, dict)] if isinstance(inserted, list) else []
+
+
+def _card_inputs(c: _Collector, load: Load, site_host: str) -> None:
+    """Card inputs that unknown code put into the page (card_watch.summarize): one finding per
+    load, from its first such insertion, keyed by the page and the first unknown frame's URL so
+    the same skimmer seen by several visitors merges. An insertion is outside code only when it
+    is ``verified``: one that is unknown solely through page-URL frames the load couldn't check
+    is the scanner's failure and is noted on the page instead (site_report). A missing flag
+    counts as verified. The store's, a payment provider's and known vendors' insertions are not
+    findings either; the page's details list them."""
+    if ended_off_site(load.result, site_host):
+        return  # another site's checkout is not the owner's page
+    for event in card_insertions(load.result):
+        if event.get("owner") != "unknown" or event.get("verified") is False:
+            continue
+        frames = event.get("frames")
+        frames = [_url(f) for f in frames if isinstance(f, str)][:MAX_CARD_FRAMES] if isinstance(frames, list) else []
+        first = _url(event.get("first_unknown"))
+        finding = c.add(load, ("card_inputs", load.page_url, first), severity="suspicious", kind="card_inputs",
+                        message=MESSAGES["card_inputs"], snippet=None, origin="rendered", location=load.page_url,
+                        location_kind="page", mechanism="card_inputs")
+        if finding.frames is None:
+            finding.frames = frames
+        return
+
+
 def _behaviour(c: _Collector, load: Load) -> None:
     events = behavior_events(load.result.hops)
     groups = {
@@ -499,6 +535,7 @@ def build_blocks_and_overflow(loads: List[Load], site_host: str,
     for load in usable:
         _yara_and_injections(c, load, site_host)
         _runtime_code(c, load, site_host)
+        _card_inputs(c, load, site_host)
         _behaviour(c, load)
         _cloaking(c, load, site_host, landed[load.page_url], bool(offsite_domain))
     if offsite_domain:

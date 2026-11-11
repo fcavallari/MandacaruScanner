@@ -124,6 +124,7 @@ class EvalCapture:
         self._positions: Dict[Tuple[str, str], Set[Tuple[int, int]]] = {}
         self._position_count = 0
         self.positions_dropped = 0
+        self.debugger_on = False  # Debugger.enable succeeded: without it there is no parse record
         self._seen: Set[str] = set()  # hashes of stages already met
         self._tasks: Set["asyncio.Future[None]"] = set()
         self._cdp: Any = None
@@ -137,6 +138,7 @@ class EvalCapture:
         cdp.on("Debugger.paused", self._on_paused)
         try:
             await cdp.send("Debugger.enable")
+            self.debugger_on = True
             # A page can loop on `debugger;`: never stop for it, the load would wait for a resume.
             # Observed (Chromium 148): setSkipAllPauses alone does not stop a `debugger;` statement
             # from pausing the page, deactivating breakpoints does, and the paused handler is the
@@ -172,8 +174,10 @@ class EvalCapture:
 
     def positions_at(self, url: str) -> Optional[Dict[str, Set[Tuple[int, int]]]]:
         """``{hash: {(startLine, startColumn)}}`` of the page-world scripts parsed at ``url``
-        (fragment ignored), or None when the record overflowed (then nothing can be trusted)."""
-        if self.positions_dropped:
+        (fragment ignored), or None when there is no complete record: the record overflowed, or
+        ``Debugger.enable`` failed (then nothing can be trusted, and ``card_watch.summarize``
+        says page-URL frames couldn't be checked)."""
+        if self.positions_dropped or not self.debugger_on:
             return None
         page = urldefrag(url or "")[0][:2048]
         return {digest: set(where) for (at, digest), where in self._positions.items() if at == page}

@@ -136,3 +136,30 @@ async def test_a_stage_that_cannot_be_read_is_counted():
     cdp.parsed("gone", "hg", length=10)  # no source known: the fake raises KeyError like "No script for id"
     await capture.drain()
     assert capture.stages == [] and capture.dropped == 1
+
+
+@pytest.mark.asyncio
+async def test_parse_positions_are_none_when_they_cannot_be_trusted():
+    """positions_at: the start of every page-world script with a URL, by hash; None when the
+    record overflowed or the debugger domain never came on (then no page-URL frame can be checked)."""
+    from pnakotic.src.scanner.eval_capture import MAX_POSITIONS, EvalCapture
+
+    cdp = FakeCdp({})
+    capture = await _capture(cdp)
+    cdp.parsed("1", "h1", "x", url="https://s.com/p#a", startLine=3, startColumn=8)
+    cdp.parsed("2", "h2", "x", url="https://s.com/other.js", startLine=0, startColumn=0)
+    assert capture.positions_at("https://s.com/p") == {"h1": {(3, 8)}}
+    for i in range(MAX_POSITIONS):
+        cdp.parsed(str(10 + i), "h", "x", url="https://s.com/p", startLine=i, startColumn=0)
+    assert capture.positions_at("https://s.com/p") is None
+
+    class FailingCdp(FakeCdp):
+        async def send(self, method, params=None):
+            if method == "Debugger.enable":
+                raise RuntimeError("no debugger")
+            return await super().send(method, params)
+
+    failing = FailingCdp({})
+    capture = EvalCapture()
+    await capture.attach(failing)
+    assert capture.positions_at("https://s.com/p") is None

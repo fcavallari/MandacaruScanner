@@ -481,6 +481,8 @@ async def test_an_event_handler_set_at_runtime_is_not_a_served_block(site_server
     [e] = r.metadata["card_inputs"]["inserted"]
     assert e["frames"] == [f"{site_server}{path}"]  # the handler's own frame, at the page URL
     assert e["owner"] == "unknown"
+    # the load could check page-URL frames: this is outside code, not the scanner's failure
+    assert e["verified"] is True and r.metadata["card_inputs"]["unverifiable"] is None
 
 
 @requires_browser
@@ -492,6 +494,19 @@ async def test_a_served_inline_script_is_the_stores(site_server, tmp_path, path)
     r = await _site_load(_site_engine(tmp_path), f"{site_server}{path}")
     [e] = r.metadata["card_inputs"]["inserted"]
     assert (e["via"], e["owner"], e["frames"]) == ("appendChild", "store", [f"{site_server}{path}"])
+    assert e["verified"] is True and r.metadata["card_inputs"]["unverifiable"] is None
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_a_served_inline_script_on_a_shift_jis_page_is_still_the_stores(site_server, tmp_path):
+    """Declared Shift_JIS, the block's non-ASCII text reads differently in the browser. The served
+    body Playwright hands over is the browser's decoded text as UTF-8 (CDP getResponseBody), so the
+    block's hash still matches, and the load can check page-URL frames."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-served-inline-sjis")
+    ci = r.metadata["card_inputs"]
+    [e] = ci["inserted"]
+    assert (e["owner"], e["verified"], ci["unverifiable"]) == ("store", True, None)
 
 
 @requires_browser
@@ -506,7 +521,7 @@ async def test_an_event_handler_copying_a_served_block_is_not_the_stores(site_se
     assert ci["present"] == 1
     [e] = ci["inserted"]
     assert e["via"] == "insertBefore" and set(e["frames"]) == {f"{site_server}{path}"}  # the IIFE and the handler
-    assert e["owner"] == "unknown"
+    assert e["owner"] == "unknown" and e["verified"] is True
 
 
 @requires_browser

@@ -450,3 +450,49 @@ def test_external_scripts_mark_a_script_blocked_as_malware_as_a_finding():
     [host] = out["hosts"]
     assert host["host"] == "r1.example"
     assert host["urls"][0]["finding"] is True and host["urls"][0]["injected_by"] == "inline on https://s.com/p"
+
+
+def test_checked_pages_note_their_own_card_fields():
+    """card_fields: a checked, on-site load of the page has card inputs (served, or inserted by
+    the store's or a known vendor's code); card_fields_unchecked: whose code added them couldn't be
+    checked on some load; card_fields_vendors: the known vendors whose code inserted them."""
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_report import build_report
+
+    page = "https://s.com/checkout/"
+    loads = [
+        _load(0, "https://s.com/", "default"),  # no card_inputs at all (an older result)
+        _load(1, page, "default", card_inputs=_cards(_card("store", ["https://s.com/form.js"]))),
+        _load(1, page, "mobile-ios", card_inputs=_cards(_card("vendor", ["https://static.hotjar.com/c.js"],
+                                                              vendors=["Hotjar", "Not A Vendor"]))),
+        _load(2, "https://s.com/served/", "default", card_inputs=_cards(present=1)),  # served with the page
+        _load(3, "https://s.com/unchecked/", "default",
+              card_inputs=_cards(_card(frames=["https://s.com/unchecked/"], verified=False))),
+        _load(4, "https://s.com/none/", "default", card_inputs=_cards()),
+    ]
+    report = build_report("s.com", "s.com", None, loads, 1, [], [])
+    assert report["blocks"] == []  # none of these is a finding
+    pages = {p["url"]: p for p in report["checked"]["pages"]}
+    flags = lambda p: (p["card_fields"], p["card_fields_unchecked"], p["card_fields_vendors"])
+    assert flags(pages["https://s.com/"]) == (False, False, [])
+    assert flags(pages[page]) == (True, False, ["Hotjar"])  # only names from the known-vendor list
+    assert flags(pages["https://s.com/served/"]) == (True, False, [])
+    assert flags(pages["https://s.com/unchecked/"]) == (True, True, [])
+    assert flags(pages["https://s.com/none/"]) == (False, False, [])
+
+
+def test_card_fields_skip_unusable_and_offsite_loads():
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_report import build_report
+
+    page = "https://s.com/checkout/"
+    loads = [
+        _load(0, "https://s.com/", "default"),
+        _load(1, page, "default", final_url="https://evil.net/",
+              card_inputs=_cards(_card("store", ["https://evil.net/f.js"]))),
+        _load(1, page, "googlebot", state="not_checked", reason="challenge",
+              card_inputs=_cards(_card(frames=[page], verified=False))),
+    ]
+    loads[2].result.metadata["challenge"] = True
+    pages = {p["url"]: p for p in build_report("s.com", "s.com", None, loads, 1, [], [])["checked"]["pages"]}
+    assert (pages[page]["card_fields"], pages[page]["card_fields_unchecked"]) == (False, False)

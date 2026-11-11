@@ -14,7 +14,9 @@ from .models import ScanResult
 from .challenge import VENDORS
 from .profiles import PROFILES
 from .script_trace import MAX_URL_CHARS  # 300, the external-scripts rule
-from .site_findings import Load, build_blocks_and_overflow, cap_findings, ended_off_site, own_score, usable_load
+from .code_origin import KNOWN_VENDORS
+from .site_findings import (Load, build_blocks_and_overflow, cap_findings, card_insertions, ended_off_site, own_score,
+                            usable_load)
 from .site_identity import on_site, same_domain
 
 # External scripts per site (global constraints): hosts, and URLs over all listed hosts.
@@ -241,7 +243,38 @@ def _probe_index(loads: List[Load]) -> Optional[int]:
     return None
 
 
-def _checked(loads: List[Load], rules_count: int, probe: Optional[int]) -> dict:
+_VENDOR_NAMES = set(KNOWN_VENDORS.values())
+
+
+def _card_fields(loads: List[Load], site_host: str) -> dict:
+    """What the page's checked, on-site loads say about its own card fields (none of it is a
+    finding): ``card_fields`` when a load counted card inputs on the page or saw the store's, a
+    payment provider's or a known vendor's code insert them; ``card_fields_unchecked`` when whose
+    code inserted them couldn't be checked on some load (``verified`` false); the known vendors
+    whose code inserted them (names from the vendor list only)."""
+    fields = unchecked = False
+    vendors = []  # type: List[str]
+    for load in loads:
+        if not usable_load(load) or ended_off_site(load.result, site_host):
+            continue
+        cards = load.result.metadata.get("card_inputs")
+        present = cards.get("present") if isinstance(cards, dict) else None
+        if isinstance(present, int) and not isinstance(present, bool) and present > 0:
+            fields = True
+        for event in card_insertions(load.result):
+            owner = event.get("owner")
+            if owner in ("store", "provider", "vendor"):
+                fields = True
+            if owner == "unknown" and event.get("verified") is False:
+                fields = unchecked = True
+            if owner == "vendor" and isinstance(event.get("vendors"), list):
+                for name in event["vendors"]:
+                    if name in _VENDOR_NAMES and name not in vendors:
+                        vendors.append(name)
+    return {"card_fields": fields, "card_fields_unchecked": unchecked, "card_fields_vendors": vendors}
+
+
+def _checked(loads: List[Load], rules_count: int, probe: Optional[int], site_host: str) -> dict:
     by_page = {}  # type: Dict[int, List[Load]]
     for load in loads:
         by_page.setdefault(load.page_index, []).append(load)
@@ -252,6 +285,7 @@ def _checked(loads: List[Load], rules_count: int, probe: Optional[int]) -> dict:
             "index": index,
             "url": _url(page_loads[0].page_url),
             "probe": index == probe,
+            **_card_fields(page_loads, site_host),
             "loads": [{
                 "profile": l.profile,
                 "state": l.state,
@@ -321,7 +355,7 @@ def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str
         "blocks_more": blocks_more,  # blocks past MAX_BLOCKS, plus blocks the findings cap left empty
         "findings_more_total": findings_more_total,  # findings dropped by the report-wide MAX_FINDINGS cap
         "external_scripts": external_scripts(loads, site_host, blocks),
-        "checked": _checked(loads, rules_count, probe),
+        "checked": _checked(loads, rules_count, probe, site_host),
         "blocked_hosts": list(dict.fromkeys(h[:253] for h in blocked_hosts if isinstance(h, str)))[:MAX_BLOCKED_HOSTS],
         "notes": list(notes),
         "challenge": challenge_summary(loads),  # a CDN bot check kept some loads out

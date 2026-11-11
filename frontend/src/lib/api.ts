@@ -69,12 +69,13 @@ export interface SiteFindingDetails {
   scoring: string[];
   initiator: string | null;
   offsite?: boolean; // code on the page a visitor was sent to on another site; `pages` are the owner's pages that sent them
+  frames?: string[]; // card_inputs: the URLs of the code that inserted the card fields ("" = code with no file), at most 10
 }
 
 export interface SiteFinding {
   id: string;
   severity: FindingSeverity;
-  kind: string; // yara | injection | flagged_script | clipboard | download | browser_lock | cloaking | offsite_homepage | page_score
+  kind: string; // yara | injection | flagged_script | runtime_code | card_inputs | clipboard | download | browser_lock | cloaking | offsite_homepage | page_score
   message: string;
   snippet: Snippet | null;
   origin: FindingOrigin | null;
@@ -128,6 +129,10 @@ export interface SiteCheckedPage {
   index: number; // 0 = the homepage
   url: string;
   probe?: boolean; // the 404 probe (/pnakotic-<hex>/): the site's "page not found" page
+  // src/scanner/site_report.py _card_fields; none of these is a finding
+  card_fields?: boolean; // the page has card inputs of its own (served, or added by the store's or a known vendor's code)
+  card_fields_unchecked?: boolean; // whose code added its card inputs couldn't be checked on some load
+  card_fields_vendors?: string[]; // known vendors (Hotjar, ...) whose code added card inputs
   loads: SiteLoad[];
 }
 

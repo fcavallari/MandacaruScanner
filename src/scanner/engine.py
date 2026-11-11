@@ -7,7 +7,7 @@ import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import AsyncIterator, Dict, List, Optional, Set, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 from urllib.parse import urldefrag, urljoin, urlparse, urlsplit
 
 from playwright.async_api import async_playwright, Browser, CDPSession, Response
@@ -217,6 +217,20 @@ def _eval_stage_entry(stage) -> dict:
     }
 
 
+async def _document_charset(cdp: Any, frame_id: str) -> Optional[str]:
+    """``document.characterSet`` of the main frame, read in a fresh isolated world, where the
+    page's own scripts can't redefine the getter: how the browser decoded the served HTML.
+    None when it can't be read."""
+    world = await cdp.send("Page.createIsolatedWorld", {"frameId": frame_id, "worldName": "pnakotic-charset"})
+    context = world.get("executionContextId") if isinstance(world, dict) else None
+    if not isinstance(context, int):
+        return None
+    out = await cdp.send("Runtime.evaluate", {"expression": "document.characterSet", "contextId": context,
+                                              "returnByValue": True})
+    value = out.get("result", {}).get("value") if isinstance(out, dict) else None
+    return value[:40] if isinstance(value, str) else None
+
+
 async def _served_body(resp: Response) -> Optional[bytes]:
     """The HTML body of a main-frame navigation response, capped; None when it isn't HTML,
     is too large to pull, or the browser can't give it any more."""
@@ -385,6 +399,7 @@ class PnakoticEngine:
         evals = EvalCapture()  # kept in every mode (bounded, eval_capture.py)
         cards: Optional[CardWatcher] = CardWatcher() if site else None  # card inputs inserted, and by whom
         cards_present = 0
+        cards_charset: Optional[str] = None  # how the browser decoded the document (card_watch.summarize)
         try:
             await behavior.attach(ctx)  # before new_page: hooks must precede every page script
             if cards is not None:
@@ -589,6 +604,11 @@ class PnakoticEngine:
                         page.locator("css=" + CARD_SELECTOR).count(), CARD_COUNT_TIMEOUT_S)
                 except BROWSER_ERRORS as e:
                     print(f"[engine] card input count failed: {str(e)[:200]}")
+                try:
+                    cards_charset = await asyncio.wait_for(
+                        _document_charset(guard.cdp, main_frame_id), CARD_COUNT_TIMEOUT_S)
+                except BROWSER_ERRORS as e:
+                    print(f"[engine] document charset unavailable: {str(e)[:200]}")
 
             # 3. Analysis half. Each step stands alone; a closed page (redirect loop) skips them.
             # Only a real http(s) page counts: a refused/failed/download navigation leaves
@@ -717,7 +737,7 @@ class PnakoticEngine:
                 # survey's site host (the homepage loads run before it is resolved).
                 result.metadata["card_inputs"] = summarize_card_inputs(
                     cards.events, cards_present, urlsplit(served_url).hostname or "", served_url, served,
-                    dropped=cards.dropped, parsed=evals.positions_at(served_url))
+                    dropped=cards.dropped, parsed=evals.positions_at(served_url), charset=cards_charset)
 
         eval_stages = [_eval_stage_entry(stage) for stage in evals.stages]
         result.metadata["eval_stages"] = eval_stages

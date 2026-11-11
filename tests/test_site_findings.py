@@ -585,3 +585,97 @@ def test_runtime_stage_with_a_forged_long_caller_is_cut():
     caller = "https://example.com/" + "a" * 400
     [b] = build_blocks([_load(0, "https://s.com/", "default", eval_stages=[_eval_stage(caller=caller)])], "s.com", None)
     assert len(b["findings"][0]["details"]["initiator"]) == 300
+
+
+# ---------- card inputs inserted into the page (metadata["card_inputs"], card_watch.summarize) ----------
+
+SKIM = ["https://evil.example/s.js", "https://s.com/wp-includes/js/jquery/jquery.min.js"]
+
+
+def test_card_inputs_inserted_by_unknown_code_are_one_suspicious_finding_at_the_page():
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_findings import MESSAGES, build_blocks
+    from pnakotic.src.scanner.site_report import site_verdict
+
+    load = _load(0, "https://s.com/checkout/", "default",
+                 card_inputs=_cards(_card(frames=SKIM, via="innerHTML"), _card(frames=["https://evil.example/t.js"])))
+    blocks = build_blocks([load], "s.com", None)
+    [b] = blocks
+    assert (b["location"], b["location_kind"]) == ("https://s.com/checkout/", "page")
+    [f] = b["findings"]
+    assert MESSAGES["card_inputs"] == "Code from outside your site adds card payment fields to this page"
+    assert (f["kind"], f["severity"], f["message"], f["origin"], f["snippet"]) == (
+        "card_inputs", "suspicious", MESSAGES["card_inputs"], "rendered", None)
+    assert f["details"]["frames"] == SKIM and f["details"]["mechanism"] == "card_inputs"
+    assert site_verdict(blocks, [load], True)["verdict"] == "suspicious"
+
+
+def test_card_inputs_of_the_same_skimmer_merge_across_visitors_and_frames_are_bounded():
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    many = ["https://evil.example/{}.js".format("x" * 400)] + ["https://evil.example/{}.js".format(i) for i in range(15)]
+    loads = [_load(0, "https://s.com/checkout/", p, card_inputs=_cards(_card(frames=many, first_unknown=many[0])))
+             for p in ("default", "mobile-ios")]
+    [b] = build_blocks(loads, "s.com", None)
+    [f] = b["findings"]
+    assert f["visitors"] == ["default", "mobile-ios"]
+    frames = f["details"]["frames"]
+    assert len(frames) == 10 and all(len(u) <= 300 for u in frames)
+
+
+def test_store_vendor_and_provider_insertions_are_not_findings():
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    for card in (_card("store", ["https://s.com/wp-content/plugins/pay/form.js"]),
+                 _card("vendor", ["https://static.hotjar.com/c/hotjar.js"], vendors=["Hotjar"]),
+                 _card("provider", ["https://js.stripe.com/v3/"])):
+        assert build_blocks([_load(0, "https://s.com/checkout/", "default", card_inputs=_cards(card))], "s.com", None) == []
+    # card inputs served with the page: no insertion at all
+    served = _load(0, "https://s.com/checkout/", "default", card_inputs=_cards(present=1))
+    assert build_blocks([served], "s.com", None) == []
+
+
+def test_an_unverifiable_page_url_insertion_is_not_a_finding_but_a_cross_site_one_on_that_load_is():
+    """Card-field ownership the scanner couldn't check (no parse record, no script hash, a charset
+    it can't read) is not outside code; a frame from another site on that same load still is."""
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    page = "https://s.com/checkout/"
+    unchecked = _card(frames=[page], verified=False)
+    assert build_blocks([_load(0, page, "default", card_inputs=_cards(unchecked))], "s.com", None) == []
+    both = _load(0, page, "default", card_inputs=_cards(unchecked, _card(frames=["https://evil.example/s.js"])))
+    [b] = build_blocks([both], "s.com", None)
+    assert [f["kind"] for f in b["findings"]] == ["card_inputs"]
+    assert b["findings"][0]["details"]["frames"] == ["https://evil.example/s.js"]
+
+
+def test_an_empty_stack_an_unseen_insertion_and_a_missing_verified_flag_are_findings():
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    page = "https://s.com/checkout/"
+    empty = _card(frames=[])
+    unseen = _card(frames=[], via="unseen")
+    legacy = {"via": "appendChild", "owner": "unknown", "vendors": [], "frames": [page], "cut": False}  # no "verified"
+    for card in (empty, unseen, legacy):
+        [b] = build_blocks([_load(0, page, "default", card_inputs=_cards(card))], "s.com", None)
+        assert [f["kind"] for f in b["findings"]] == ["card_inputs"]
+
+
+def test_card_inputs_on_an_offsite_landing_and_hostile_metadata_add_nothing():
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    offsite = _load(0, "https://s.com/", "default", final_url="https://evil.net/",
+                    card_inputs=_cards(_card(frames=["https://evil.net/s.js"])))
+    assert build_blocks([offsite], "s.com", None) == []
+    for junk in ("x", {"inserted": "x"}, {"inserted": ["x", 3, None]}, {"inserted": [{"owner": ["unknown"]}]}):
+        assert build_blocks([_load(0, "https://s.com/", "default", card_inputs=junk)], "s.com", None) == []
+    odd = _load(0, "https://s.com/", "default",
+                card_inputs=_cards({"owner": "unknown", "frames": [3, None, "https://evil.example/a.js"], "verified": True,
+                                    "first_unknown": 7}))
+    [b] = build_blocks([odd], "s.com", None)
+    assert b["findings"][0]["details"]["frames"] == ["https://evil.example/a.js"]

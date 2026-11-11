@@ -12,6 +12,21 @@ A frame at the page's own URL is store code only when its script is one of the i
 equal the SHA-256 of a served block (``inline_script_hashes``). A line number is not proof: an
 event handler attribute a script sets at runtime (``onerror="…"``) also runs at the page URL,
 at line 1 or wherever the parser was, plus any newlines its text starts with.
+
+"Store" means no frame on the recorded stack was outside code, not that the store's code is
+proven to have done it. Known limits: a skimmer written to evade this check can read as the
+store's by
+- inserting through a store function scheduled on a timer (a bound jQuery method: only store
+  frames are on the stack when it runs);
+- setting an event handler while ``history.replaceState`` points the document at a same-host
+  script path (the handler's frame then names that path, a store file);
+- writing an event handler with ``document.open()`` / ``write()`` at a served inline block's
+  exact position on a one-line page (the block's text, so its hash, at the block's start);
+- pre-filling the 20 event slots with store re-renders (later insertions are only counted);
+- padding past the 5 000-sibling walk the hook does for HTML handed over as an object.
+It can also turn a finding into "couldn't check" (``judge_stack``'s ``verified``) by flooding
+the parse-position record past 2 000 scripts. Phase 2's test-card exfiltration check, which
+watches where typed card data goes, is the decisive one; this is a watch-only signal.
 """
 import hashlib
 import re
@@ -190,6 +205,37 @@ def served_block_positions(served_html: Optional[bytes]) -> Dict[str, Set[Tuple[
     return out
 
 
+# The charsets ``served_block_positions`` reads blocks in (Chromium's names, as
+# ``document.characterSet`` gives them; ISO-8859-1 and US-ASCII are windows-1252 there).
+READ_CHARSETS = {"utf-8", "windows-1252"}
+_CONTROL_BYTES = re.compile(rb"[\x00-\x08\x0b\x0e-\x1f\x7f]")
+
+
+def blocks_readable(served_html: Optional[bytes], charset: Optional[str]) -> bool:
+    """Whether the served inline blocks' hashes and positions can be computed as the browser
+    read them. ``charset`` is ``document.characterSet`` as the browser decided it (None when it
+    couldn't be read). Readable when it is one ``served_block_positions`` decodes, or when the
+    bytes up to the end of the last inline block are UTF-8 without control characters:
+    Playwright's ``Response.body()`` gives a document's text as the browser decoded it,
+    re-encoded as UTF-8 (CDP ``Network.getResponseBody`` of a text resource), so a Shift_JIS
+    page usually arrives readable; raw bytes in another charset (a body CDP handed over
+    undecoded) are seldom valid UTF-8, and ISO-2022-JP's escapes are control bytes. A page
+    without inline blocks found has nothing to read."""
+    if (charset or "").lower() in READ_CHARSETS or not served_html:
+        return True
+    blocks = inline_blocks(served_html, served_html.lower())
+    if not blocks:
+        return True
+    head = served_html[:max(end for _, end in blocks)]
+    if _CONTROL_BYTES.search(head):
+        return False
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
 def trusted_inline_hashes(served_html: Optional[bytes],
                           parsed: Optional[Dict[str, Set[Tuple[int, int]]]]) -> Set[str]:
     """The served-block hashes that prove a page-URL frame is the store's. ``parsed`` is every
@@ -226,6 +272,18 @@ def _owner_key(host: str) -> str:
     return registrable_domain(host) or host
 
 
+def is_page_frame(frame: Frame, site_host: str, page_url: str) -> bool:
+    """The frame runs at the page's own URL (fragment ignored) on the site: a served inline
+    block, or an event handler or inline script set at runtime, told apart only by script hash
+    and parse position."""
+    if frame.eval or not frame.url:
+        return False
+    host = _parts(frame.url)[0]
+    site_key = _owner_key((site_host or "").lower())
+    return (bool(host) and bool(site_key) and _owner_key(host) == site_key
+            and urldefrag(frame.url)[0] == urldefrag(page_url or "")[0])
+
+
 def frame_owner(frame: Frame, site_host: str, page_url: str,
                 inline_hashes: Optional[Collection[str]]) -> str:
     """``store``, ``provider``, ``vendor`` or ``unknown`` for one stack frame.
@@ -238,7 +296,7 @@ def frame_owner(frame: Frame, site_host: str, page_url: str,
     key = _owner_key(host)
     site_key = _owner_key((site_host or "").lower())
     if site_key and key == site_key:
-        if urldefrag(frame.url)[0] == urldefrag(page_url or "")[0]:
+        if is_page_frame(frame, site_host, page_url):
             # the page's own URL: store code only when its script is a block the server sent
             if frame.hash and frame.hash in (inline_hashes or ()):
                 return "store"
@@ -255,22 +313,47 @@ def frame_owner(frame: Frame, site_host: str, page_url: str,
     return "unknown"
 
 
+class StackJudgement(NamedTuple):
+    owner: str  # store | vendor | unknown (a payment provider's frame counts like a store frame)
+    vendors: List[str]  # known vendors' names, when the owner is "vendor"
+    verified: bool  # False: unknown only through page-URL frames the load couldn't check
+    first_unknown: str  # URL of the first unknown frame ("" for eval / <anonymous> / none)
+
+
+def judge_stack(frames: List[Frame], site_host: str, page_url: str,
+                inline_hashes: Optional[Collection[str]], page_frames_checked: bool = True) -> StackJudgement:
+    """Whose code a stack is, with every frame classified (``stack_owner`` is the short form).
+
+    ``page_frames_checked`` is False when this load couldn't tell a served inline block from
+    code set at runtime at the page URL (no parse record, no served HTML, a charset it can't
+    hash, no script hash in this browser): a page-URL frame then reads unknown without proof
+    either way. The owner is still ``unknown``, but ``verified`` is False when every unknown
+    frame is such a page-URL frame. Any other unknown frame (another site, eval, ``<anonymous>``),
+    or no frames at all, keeps it True: that is outside code whatever the load could check."""
+    if not frames:
+        return StackJudgement("unknown", [], True, "")
+    vendors = []  # type: List[str]
+    unknown = []  # type: List[Frame]
+    for frame in frames:
+        owner = frame_owner(frame, site_host, page_url, inline_hashes)
+        if owner == "unknown":
+            unknown.append(frame)
+        elif owner == "vendor":
+            name = KNOWN_VENDORS.get(_owner_key(_parts(frame.url)[0]), "")
+            if name and name not in vendors:
+                vendors.append(name)
+    if unknown:
+        verified = page_frames_checked or not all(is_page_frame(f, site_host, page_url) for f in unknown)
+        return StackJudgement("unknown", [], verified, unknown[0].url)
+    if vendors:
+        return StackJudgement("vendor", vendors, True, "")
+    return StackJudgement("store", [], True, "")
+
+
 def stack_owner(frames: List[Frame], site_host: str, page_url: str,
                 inline_hashes: Optional[Collection[str]]) -> Tuple[str, List[str]]:
     """``("unknown", [])`` if any frame is unknown or there are no frames; else
     ``("vendor", names)`` if any frame is a known vendor; else ``("store", [])``. A payment
     provider's frame counts like a store frame."""
-    if not frames:
-        return "unknown", []
-    vendors = []  # type: List[str]
-    for frame in frames:
-        owner = frame_owner(frame, site_host, page_url, inline_hashes)
-        if owner == "unknown":
-            return "unknown", []
-        if owner == "vendor":
-            name = KNOWN_VENDORS.get(_owner_key(_parts(frame.url)[0]), "")
-            if name and name not in vendors:
-                vendors.append(name)
-    if vendors:
-        return "vendor", vendors
-    return "store", []
+    judged = judge_stack(frames, site_host, page_url, inline_hashes)
+    return judged.owner, judged.vendors

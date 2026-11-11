@@ -52,6 +52,13 @@ What the hooks can't see (an input renamed after it was inserted, ``document.wri
 moved in from another frame's realm) is caught by ``summarize`` failing closed: card inputs on the
 page, no insertion recorded and none in the served HTML gives an ``unseen`` insertion of unknown
 code.
+
+Whose code it was is decided on the recorded stack (``code_origin``), which an evasive skimmer
+can arrange to hold only store frames: an owner of ``store`` is "no outside frame seen", not
+proof (see ``code_origin``'s known limits; phase 2's test-card exfiltration check is the decisive
+one). When the scanner itself couldn't check page-URL frames on a load (no parse record, no
+served HTML, a charset it can't hash, no script hash), an insertion that is unknown only through
+them is marked ``verified: False``: the site survey reports it as unchecked, not outside code.
 """
 import json
 import re
@@ -60,7 +67,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urldefrag
 
 from .behavior import HOOK_PRELUDE
-from .code_origin import parse_stack, stack_owner, stack_was_cut, trusted_inline_hashes, whole_lines
+from .code_origin import blocks_readable, judge_stack, parse_stack, stack_was_cut, trusted_inline_hashes, whole_lines
 
 MAX_EVENTS = 20  # card-insertion events kept per load
 MAX_STACK_CHARS = 4000
@@ -275,7 +282,11 @@ _INIT_SCRIPT = r"""
     const report = (via, fn) => {
       hits += 1;
       try {
-        if (hits <= __EVENTS__) send({ via: via, stack: stackOf(fn) });
+        if (hits <= __EVENTS__) {
+          const msg = { via: via, stack: stackOf(fn) };
+          if (site === null || site.hash === null) msg.no_hash = 1;  // page-URL frames can't be proven the store's
+          send(msg);
+        }
         else if (hits <= __SENT__) send({ via: via, over: 1 });
         else if (hits % __SENT__ === 0) send({ via: via, over: __SENT__ });
       } catch (e) {}
@@ -428,7 +439,7 @@ class CardWatcher:
 
     def __init__(self) -> None:
         self.binding = "__" + secrets.token_hex(8)
-        self.events: List[Dict[str, Any]] = []  # {"via", "stack", "cut"}
+        self.events: List[Dict[str, Any]] = []  # {"via", "stack", "cut", "no_hash"}
         self.dropped = 0
 
     async def attach(self, ctx) -> None:
@@ -455,24 +466,42 @@ class CardWatcher:
             stack = stack[:MAX_STACK_CHARS + 1] if isinstance(stack, str) else ""
             # a cut inside a line drops that line: a frame cut short could end in another location
             self.events.append({"via": payload["via"], "stack": whole_lines(stack, MAX_STACK_CHARS),
-                                "cut": stack_was_cut(stack)})
+                                "cut": stack_was_cut(stack), "no_hash": payload.get("no_hash") == 1})
         except Exception as exc:  # a binding handler must never raise into Playwright
             print(f"[card-watch] ignored an event: {str(exc)[:200]}")
 
 
 def summarize(events: List[Dict[str, Any]], present: int, site_host: str, landing_url: str,
               served: Optional[bytes], *, dropped: int = 0,
-              parsed: Optional[Dict[str, Set[Tuple[int, int]]]] = None) -> Dict[str, Any]:
+              parsed: Optional[Dict[str, Set[Tuple[int, int]]]] = None,
+              charset: Optional[str] = None) -> Dict[str, Any]:
     """``metadata["card_inputs"]``: how many card inputs the page has (``present``), each
-    recorded insertion with its owner (``code_origin.stack_owner``) and up to 10 frame URLs (an
-    unreadable frame is ``""``), and how many insertions were not kept (``dropped``).
+    recorded insertion, how many insertions were not kept (``dropped``), and why page-URL frames
+    couldn't be checked on this load (``unverifiable``, None when they could).
+
+    Each insertion is ``{via, owner, vendors, frames, cut, verified, first_unknown}``: the owner
+    (``code_origin.judge_stack``), up to 10 frame URLs (an unreadable frame is ``""``), ``cut``
+    when part of the stack was left out (over 4 000 characters or over 30 frames; the owner is
+    decided on what was kept), and the URL of the first unknown frame (``""`` for eval,
+    ``<anonymous>``, no frame, or an owner that isn't unknown).
 
     ``landing_url`` is the document the served HTML belongs to: a frame at that URL is the
     store's only when its script hash is that of a served inline script block and every script
     the browser parsed with that hash (``parsed``: ``EvalCapture.positions_at(landing_url)``)
     started where a served block starts (``code_origin.trusted_inline_hashes``). Without
-    ``parsed`` no page-URL frame is the store's. ``cut`` is true when part of the stack was
-    left out (over 4 000 characters or over 30 frames); the owner is decided on what was kept.
+    ``parsed`` no page-URL frame is the store's.
+
+    ``verified`` is False only for an insertion that is unknown solely through page-URL frames
+    on a load that couldn't check them, which is the scanner's failure, not outside code. The
+    reasons, in ``unverifiable``: ``parse_record`` (``parsed`` is None: ``Debugger.enable``
+    failed or the record overflowed), ``served_html`` (no served body to hash), ``charset``
+    (the browser read the page in a charset whose blocks can't be hashed here:
+    ``code_origin.blocks_readable``, normally checkable since Playwright hands over the decoded
+    text; ``charset`` is ``document.characterSet`` from an isolated world, None when it couldn't
+    be read) and ``script_hash`` (the hook reported a browser
+    without ``CallSite.getScriptHash``, so its frames carry no hash; per event). An empty
+    stack, an eval or ``<anonymous>`` frame, a frame from another site and ``unseen`` are
+    always verified.
 
     Fails closed: card inputs on the page, no insertion recorded and none in the served HTML
     means the inputs got there in a way the hooks can't see, so an ``unseen`` insertion of
@@ -480,20 +509,35 @@ def summarize(events: List[Dict[str, Any]], present: int, site_host: str, landin
     """
     inline = trusted_inline_hashes(served, parsed)
     page_url = urldefrag(landing_url or "")[0]
+    if parsed is None:
+        unverifiable = "parse_record"  # type: Optional[str]
+    elif not served:
+        unverifiable = "served_html"
+    elif not blocks_readable(served, charset):
+        unverifiable = "charset"
+    else:
+        unverifiable = None
     inserted = []  # type: List[Dict[str, Any]]
     for event in events[:MAX_EVENTS]:
         stack = event.get("stack") if isinstance(event.get("stack"), str) else ""
         frames = parse_stack(stack)
-        owner, vendors = stack_owner(frames, site_host, page_url, inline)
+        no_hash = event.get("no_hash") is True
+        if no_hash and unverifiable is None:
+            unverifiable = "script_hash"
+        judged = judge_stack(frames, site_host, page_url, inline,
+                             page_frames_checked=unverifiable in (None, "script_hash") and not no_hash)
         inserted.append({
             "via": event.get("via", ""),
-            "owner": owner,
-            "vendors": vendors,
+            "owner": judged.owner,
+            "vendors": judged.vendors,
             "frames": [frame.url[:MAX_URL_CHARS] for frame in frames[:MAX_FRAME_URLS]],
             "cut": bool(event.get("cut")) or stack_was_cut(stack),
+            "verified": judged.verified,
+            "first_unknown": judged.first_unknown[:MAX_URL_CHARS],
         })
     if present > 0 and not events:
         text = served.decode("utf-8", "replace") if served else ""
         if not html_has_card_input(text):
-            inserted.append({"via": "unseen", "owner": "unknown", "vendors": [], "frames": [], "cut": False})
-    return {"present": present, "inserted": inserted, "dropped": dropped}
+            inserted.append({"via": "unseen", "owner": "unknown", "vendors": [], "frames": [], "cut": False,
+                             "verified": True, "first_unknown": ""})
+    return {"present": present, "inserted": inserted, "dropped": dropped, "unverifiable": unverifiable}

@@ -202,6 +202,8 @@ CARD_PAGES = {
     "/card-served-inline": _checkout(_SERVED_INLINE).replace("<head>", "<head><meta charset='utf-8'>"),
     # the same page without a declared charset (Chromium reads it as windows-1252)
     "/card-served-inline-1252": _checkout(_SERVED_INLINE),
+    # the same page declared Shift_JIS: its non-ASCII block can't be hashed as the browser read it
+    "/card-served-inline-sjis": _checkout(_SERVED_INLINE).replace("<head>", "<head><meta charset='shift_jis'>"),
     # an event handler that is a byte-identical copy of a served block (and its mojibake reading)
     "/card-handler-copy": ("<html><head><meta charset='utf-8'><title>Checkout</title></head><body><h1>Checkout</h1>"
                            f"<script>{_STOCK_LOADER}</script>"
@@ -492,7 +494,7 @@ def _eval_stage(text="OBFUSCATED", caller="", markers=("string_array_rotation",)
 
 
 def _load(page_index, page_url, profile, hops=(), injections=(), state="checked", reason=None, final_url=None,
-          script_requests=(), score=0.0, eval_stages=()):
+          script_requests=(), score=0.0, eval_stages=(), card_inputs=None):
     """A site-check Load around a hand-built ScanResult."""
     from pnakotic.src.scanner.models import ScanResult
     from pnakotic.src.scanner.site_findings import Load
@@ -503,8 +505,25 @@ def _load(page_index, page_url, profile, hops=(), injections=(), state="checked"
         "scoring_findings": [], "decisive_findings": [], "cloaking": None,
         "eval_stages": list(eval_stages),
     }
+    if card_inputs is not None:
+        result.metadata["card_inputs"] = card_inputs
     return Load(page_index=page_index, page_url=page_url, profile=profile, state=state, reason=reason,
                 result=result, shot=None)
+
+
+def _card(owner="unknown", frames=(), via="appendChild", verified=True, vendors=(), first_unknown=None):
+    """One `metadata["card_inputs"]["inserted"]` entry as card_watch.summarize records it."""
+    frames = list(frames)
+    if first_unknown is None:
+        first_unknown = frames[0] if owner == "unknown" and frames else ""
+    return {"via": via, "owner": owner, "vendors": list(vendors), "frames": frames, "cut": False,
+            "verified": verified, "first_unknown": first_unknown}
+
+
+def _cards(*inserted, present=None):
+    """A `metadata["card_inputs"]` dict; `present` defaults to the number of insertions."""
+    return {"present": len(inserted) if present is None else present, "inserted": list(inserted), "dropped": 0,
+            "unverifiable": None}
 
 
 def _result(**metadata):

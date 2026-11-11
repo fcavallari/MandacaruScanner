@@ -177,6 +177,23 @@ function FindingDetails({ taskId, finding, block }: { taskId: string; finding: S
             <span className="font-mono text-[12px] text-muted break-all">{d.initiator}</span>
           </DetailRow>
         ) : null}
+        {(d?.frames ?? []).length > 0 ? (
+          <DetailRow label="Added by code">
+            <ul className="m-0 p-0 list-none space-y-0.5">
+              {(d?.frames ?? []).map((u, i) =>
+                u ? (
+                  <li key={i} className="font-mono text-[12px] text-muted break-all">
+                    {u}
+                  </li>
+                ) : (
+                  <li key={i} className="text-[12px] text-muted">
+                    Code with no file (built at runtime or hidden)
+                  </li>
+                ),
+              )}
+            </ul>
+          </DetailRow>
+        ) : null}
         {finding.loaded_by.length > 0 || finding.loaded_by_more > 0 ? (
           <DetailRow label="Loaded by">
             <UrlList urls={finding.loaded_by} more={finding.loaded_by_more} noun="source" />
@@ -372,6 +389,21 @@ function LoadLine({ taskId, load }: { taskId: string; load: SiteLoad }) {
   );
 }
 
+/** What the survey saw of the page's own card payment fields (never a finding). */
+function CardFieldsNote({ page }: { page: SiteCheckedPage }) {
+  const vendors = page.card_fields_vendors ?? [];
+  if (!page.card_fields && !page.card_fields_unchecked) return null;
+  return (
+    <div className="mt-1 text-[13px] text-muted space-y-0.5">
+      {page.card_fields ? <p className="m-0">This page has its own card payment fields</p> : null}
+      {vendors.length > 0 ? <p className="m-0">Some were added by {vendors.join(', ')}</p> : null}
+      {page.card_fields_unchecked ? (
+        <p className="m-0 text-warning">We couldn't check who added this page's card fields</p>
+      ) : null}
+    </div>
+  );
+}
+
 function PageView({ taskId, page }: { taskId: string; page: SiteCheckedPage }) {
   return (
     <li className="px-4 py-2.5 border-b border-rule last:border-b-0">
@@ -391,6 +423,7 @@ function PageView({ taskId, page }: { taskId: string; page: SiteCheckedPage }) {
           <LoadLine key={l.profile} taskId={taskId} load={l} />
         ))}
       </ul>
+      <CardFieldsNote page={page} />
     </li>
   );
 }
@@ -409,7 +442,9 @@ function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReport
   const pages = checked?.pages ?? [];
   const flagged = pagesWithFindings(report.blocks ?? []);
   // Clean pages fold into "N other pages clean"; the homepage always stays as the anchor.
-  const isClean = (p: SiteCheckedPage) => !flagged.has(p.url) && p.loads.every((l) => l.state === 'checked');
+  // A page whose card fields couldn't be checked stays in view: unchecked must not read as clean.
+  const isClean = (p: SiteCheckedPage) =>
+    !flagged.has(p.url) && !p.card_fields_unchecked && p.loads.every((l) => l.state === 'checked');
   const shown = pages.filter((p) => p.index === 0 || !isClean(p));
   const folded = pages.filter((p) => p.index !== 0 && isClean(p));
   const blocked = report.blocked_hosts ?? [];
