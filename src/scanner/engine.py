@@ -159,9 +159,15 @@ class EgressGuard:
     """Second egress layer: fails HTTP requests whose host isn't public, including redirect hops.
 
     Playwright's page.route() is not re-invoked for redirects, so this uses CDP
-    Fetch interception at the request stage, which pauses each hop (and iframe and
-    worker requests) individually. WebSockets and SharedWorkers are invisible to it;
-    EgressProxy covers those. See netguard.py for the policy.
+    Fetch interception at the request stage, which pauses each hop individually. It is
+    attached to the page's own CDP session only, so it sees the main frame, same-process
+    iframes and the dedicated workers the main frame starts. It does not see cross-site
+    iframes that run out of process (Chrome and full Chromium; chrome-headless-shell keeps
+    them in process), their workers, SharedWorkers or WebSockets (checkout spike Q5,
+    docs/checkout-spike-findings.md). EgressProxy, at launch level, covers all browser
+    traffic, so the egress policy holds there too; only this layer's per-URL
+    ERR_BLOCKED_BY_CLIENT and blocked-host record are missing for those requests.
+    See netguard.py for the policy.
     """
 
     def __init__(self, cdp: CDPSession, host_allowed: HostCheck):

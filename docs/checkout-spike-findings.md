@@ -121,9 +121,14 @@ GET /wp-json/wc/store/v1/products/14 (sold out) -> 200: is_purchasable=True is_i
   **Read from the source, not observed** (`src/StoreApi/Routes/V1/Checkout.php`): inside that one
   POST, WooCommerce creates the `checkout-draft`, reserves stock, tries the payment, and releases
   the hold when it fails. The file says: "As of WooCommerce 10.8.0 the Store API defers draft order
-  creation to place-order time … rather than on the first PATCH". So **before 10.8.0**, the draft
-  was created by the first checkout update, which is a form interaction before any click. Only
-  11.2.2 was tested here. Since 9.2, "Stock is no longer held for all draft orders, nor on
+  creation to place-order time … rather than on the first PATCH". That one comment is the only
+  evidence about older versions: before 10.8.0 a draft was apparently created when the checkout
+  was opened or filled (version-dependent, not tested here). Only 11.2.2 was tested.
+
+  **Fresh session only.** The same file (`get_route_response` and `get_route_update_response`,
+  around lines 227-231 and 409) reuses a `pending` or `failed` order already in the customer's
+  session: the GET and the PUT then update that order. So "opening and filling creates no order"
+  holds for a fresh session, which is what every spike run used. Since 9.2, "Stock is no longer held for all draft orders, nor on
   non-POST requests".
 - **Classic checkout.** Load sends `POST /?wc-ajax=update_order_review`. The click sends
   `POST /?wc-ajax=checkout`, which creates the order. A declined payment leaves it `pending`,
@@ -208,38 +213,47 @@ This blocked all 12 POST senders in all three builds, start-up requests included
    So "Fetch confirmed on every target" can't be the fail-closed test; it has to be "on every page,
    iframe and shared_worker target".
 2. **`waitForDebuggerOnStart` is required (mode B0).** Without it, the iframe's start-up POST
-   leaked. Even its later `fetch` and `sendBeacon` leaked, in both runs on both full builds.
-3. **Playwright's API can't do this.**
+   leaked. Even its later `fetch` and `sendBeacon` leaked, in all three logged runs on both full
+   builds.
+3. **What was tried through Playwright's own API fell short.**
    - Its `CDPSession` accepts `Target.setAutoAttach` and delivers `attachedToTarget` events, but
-     `send(method, params)` has no `sessionId`, so a flattened child can't be sent `Fetch.enable`
-     (mode P).
+     `send(method, params)` takes no `sessionId`, so the script had no way to send a flattened
+     child `Fetch.enable` (mode P; an API reading, not a measured leak).
    - `context.new_cdp_session(frame)` works for an out-of-process iframe (mode C), but only once
-     the frame exists. Its start-up POST leaked in every full-build run. Its dedicated worker's
-     start-up POST leaked in 3 of 4 full-build runs (it is a race).
+     the frame exists. Its start-up POST leaked in every logged full-build run. Its dedicated
+     worker's start-up POST leaked in 5 of 6 logged full-build runs (it is a race).
    - It has no handle on SharedWorkers.
 
-   Mode B needs a second CDP connection (here `--remote-debugging-port` and a WebSocket).
+   Mode B used a second CDP connection (`--remote-debugging-port` and a WebSocket). Not tried:
+   `context.route()` (Playwright then auto-attaches to out-of-process iframes itself) and
+   non-flattened auto-attach through `Target.sendMessageToTarget`. Neither would cover
+   SharedWorkers.
 
 **Observed with** `q5_fetch_reach.py`. A third-origin server on 127.0.0.1 is started by the script;
 its own request log is the ground truth ("LEAKED" = the server received the POST). Each mode runs in
-a fresh browser. The script was run twice; both runs agree except for the race noted above. Builds:
-chrome-headless-shell 148.0.7778.96, Chromium 148.0.7778.96, Google Chrome 157.0.8103.50.
+a fresh browser. Builds: chrome-headless-shell 148.0.7778.96, Chromium 148.0.7778.96, Google
+Chrome 157.0.8103.50.
+
+Logs on disk, three runs: `out/q5_fetch_reach-run0-superseded.log` (the second run before this
+fix), and `-run1.log` and `-run2.log` (two runs in parallel, after it). The very first run's log
+was overwritten and is lost; nothing below rests on it. The three logs agree except for the
+mode C race noted above.
 
 ```
 targets (chromium, mode A): ["iframe:http://127.0.0.1:…/frame.html", "shared_worker:…/shared.js", "worker:blob:http://localhost:8188/…", "worker:…/worker.js"]
 mode C (headless shell): new_cdp_session(frame) failed: … This frame does not have a separate CDP session, it is a part of the parent frame's session
 
-== summary, channel 'chrome' (157.0.8103.50) ==     A=page session  C=+frame session  B=auto-attach  B0=auto-attach, no wait
+== summary, channel 'chrome' (157.0.8103.50), run0-superseded ==     A=page session  C=+frame session  B=auto-attach  B0=auto-attach, no wait
   main-fetch / main-beacon / main-blob-worker[-startup]   blocked    blocked    blocked    blocked
   iframe-startup             LEAKED     LEAKED     blocked    LEAKED
   iframe-fetch               LEAKED     blocked    blocked    LEAKED
   iframe-beacon              LEAKED     blocked    blocked    LEAKED
   iframe-form                LEAKED     blocked    blocked    blocked
-  iframe-worker-startup      LEAKED     blocked*   blocked    blocked     (* LEAKED in the other three full-build runs)
+  iframe-worker-startup      LEAKED     blocked*   blocked    blocked     (* LEAKED in the other five logged full-build runs)
   iframe-worker              LEAKED     blocked    blocked    blocked
   shared-startup / shared-worker   LEAKED  LEAKED  blocked    blocked
-'chromium' (148): identical to 'chrome', with iframe-worker-startup LEAKED under C.
-default headless shell (148): every row blocked under A, C, B and B0 except shared-* LEAKED under A and C.
+'chrome' in run1 and run2, and 'chromium' (148) in all three: identical, with iframe-worker-startup LEAKED under C.
+default headless shell (148), all three: every row blocked under A, C, B and B0 except shared-* LEAKED under A and C.
 mode P: Target.setAutoAttach flatten on a Playwright CDPSession: ok; attachedToTarget events delivered: [["worker",…],["iframe",…],["worker",…]]; no way to send to them.
 ```
 
@@ -276,8 +290,10 @@ skimmer and sends nothing. `/checkout-classic/` fires.
 
 ## Card-field watch on real WooCommerce checkouts
 
-**Answer.** No false alarm. On a clean store, the gateway's own card fields read as the
-**store's** on both checkouts: `owner=store`, `verified=True`, `unverifiable=None`.
+**Answer.** No false alarm on these two checkouts. The gateway's own card fields read as the
+**store's**: `owner=store`, `verified=True`, `unverifiable=None`. Every judged frame was a script
+file (react-dom on block; jQuery and `checkout.min.js` on classic). No frame ran at the page URL,
+so the inline-block trust rule was never exercised, and it has a gap (below).
 
 - **Block.** One `appendChild` insertion, all of whose kept frames are
   `/wp-includes/js/dist/vendor/react-dom.min.js`. The stack is `cut` (React's stack is over 30
@@ -299,14 +315,40 @@ The skimmer's inline script contains the string `autocomplete="cc-number"` in a 
 `c0.wp.com`, which is `STORE_CDN_HOSTS`. The block result depends on `react-dom` being judged as
 the store's.
 
-**Observed with** `card_watch_observe.py`. It is wired as `_scan_in_context` is wired:
+**Inline-block gap ("parse record: 1 hashes at the page URL").** The classic checkout serves 11
+inline `<script>` blocks, and the parse record had one. The cause is not the spike's wiring:
 
-- `CardWatcher.attach` runs before `new_page`.
-- `EvalCapture` is attached on the page's CDP session, with a warm-up, before `goto`.
+- 3 blocks aren't JavaScript (`importmap`, `speculationrules`, `application/json`).
+- 7 carry a `//# sourceURL=` comment, which WordPress adds to the inline scripts it prints
+  (`wc-checkout-js-extra` and the like). Chromium reports such a block's `Debugger.scriptParsed`
+  under the sourceURL name, not the page URL, and `EvalCapture._note_position` keeps only
+  `http(s)` URLs. So these blocks never enter `positions_at(page_url)`.
+- Only 1 plain block was left, and it was recorded.
+
+The card hook writes frames with `CallSite.getFileName()`, which is the page URL for these blocks.
+So a card input inserted by code in such a block reads `owner=unknown` with `verified=True`.
+`trusted_inline_hashes` trusts only hashes with a parse record, so an unrecorded hash is
+untrusted. The result would be a Suspicious finding against the store's own code (a false alarm,
+not a miss).
+
+`spike/engine_gap_sourceurl.py` reproduces this on a local page: the same insertion reads `store`
+without the comment and `unknown`/`verified=True` with it. WooCommerce's js-extra blocks are data,
+so the checkouts here were not affected. A gateway that inserts its fields from a
+`wp_add_inline_script` "after" block would be.
+
+**Observed with** `card_watch_observe.py`. What was wired, and what wasn't:
+
+- `CardWatcher.attach(ctx)` runs before `new_page`.
+- `EvalCapture` is attached on the page's CDP session before `goto`. Its warm-up is one trivial
+  `evaluate`; the engine's also runs `NEUTRAL_POINT_JS` and a behavior-binding round trip.
+- Not attached: `behavior`, `ScriptTracer` and `EgressGuard`.
 - The served body and charset are read with the engine's `_served_body` and `_document_charset`.
 - `summarize` is called with `site_host="localhost"`, the checkout URL and
   `parsed=positions_at(url)`.
 - The cart is filled through `context.request`, so the watcher sees only the checkout.
+
+The gap above reproduces with the same minimal wiring and follows from `_note_position`'s URL
+filter, so the missing pieces don't explain it.
 
 ```
 == block checkout /checkout/ , skimmer OFF ==
@@ -343,18 +385,19 @@ Each item quotes the spec as written, then proposes a replacement.
    > decision): WooCommerce creates it whenever anyone opens the checkout with a cart, hides it from
    > the orders list, deletes it on its own, and holds stock for it only for a few minutes."
 
-   This depends on the WooCommerce version. In 11.2.2, opening and filling the checkout creates no
-   draft (Q4). The draft exists only inside the place-order POST, which the guard fails. The source
-   says this deferral started in 10.8.0. Before that, the first checkout update (a form
-   interaction, before the guard is armed) created the draft. Stock is held only from the
-   place-order POST, for `woocommerce_hold_stock_minutes` (60 by default).
+   In 11.2.2, opening and filling the checkout in a fresh session creates no draft (Q4). The draft
+   exists only inside the place-order POST, which the guard fails. Stock is held only from that
+   POST, for `woocommerce_hold_stock_minutes` (60 by default). A source comment says the deferral
+   started in 10.8.0; what older versions do on opening or filling the checkout is
+   version-dependent and was not tested here.
 
    Replacement: "No order may be created on someone's store beyond what WooCommerce itself makes
    before the click.
    - WooCommerce 10.8.0 and later (block and classic): the order is created only by the Place Order
      request, which the guard fails, so a guarded check leaves no order and no stock hold.
-   - Block checkout before 10.8.0: filling the form creates a `checkout-draft`, which is accepted
-     as before. The guard must keep it in `checkout-draft`."
+   - Older versions: a `checkout-draft` may be created by opening or filling the checkout
+     (version-dependent, not tested here). It is accepted as before, and the guard must keep it
+     in `checkout-draft`."
 
    The check can't count orders on someone else's store. So the guard's rule stays "fail the order
    request". The version split only changes what the report and the live test may expect.
@@ -373,7 +416,9 @@ Each item quotes the spec as written, then proposes a replacement.
    Replacement: "Before the guard is armed, the block checkout posts cart and customer updates
    (`/wc/store/v1/batch`), and a `PUT` to `/wc/store/v1/checkout?__experimental_calc_totals=true`
    (sent as POST with `X-HTTP-Method-Override`) when the payment method changes. The classic
-   checkout posts `?wc-ajax=update_order_review`. None of these creates an order. The guard must
+   checkout posts `?wc-ajax=update_order_review`. In a fresh session none of these creates an
+   order on 11.2.2 (with a `pending` or `failed` order already in the session, the PUT and the GET
+   update that order). The guard must
    prevent any new order row, of any status, and any change to an existing one. The order requests
    it must fail are `POST /wc/store/v1/checkout` (block) and `POST /?wc-ajax=checkout` (classic).
    The check confirms it failed one of them; a click that sent neither is reported as 'Place Order
@@ -400,12 +445,32 @@ Each item quotes the spec as written, then proposes a replacement.
    iframes, their dedicated workers and SharedWorkers (Q5). That matters for §4.6's "test card
    leaves for another website" signal as much as for the guard.
 
+   **The SSRF guarantee survives.** It rests on the launch-level SOCKS proxy (`egress_proxy.py`),
+   which every connection from every frame and worker goes through. Q5 ran without the proxy, so
+   this holds by design and was not exercised. What is lost in those frames:
+   - `EgressGuard`'s per-URL `ERR_BLOCKED_BY_CLIENT` and its blocked-host record (the proxy
+     refuses the connection instead, and its own blocks are still merged into `blocked_hosts`);
+   - §4.6's reading of request bodies.
+
+   `EgressGuard`'s docstring and CLAUDE.md claimed page-session Fetch paused "iframe and worker
+   requests"; both are corrected in this fix.
+
    Replacement: "CDP `Fetch` on the page session covers the main frame and the dedicated workers it
    starts. Cross-site iframes (out of process in Chrome and Chromium), their workers and
-   SharedWorkers need auto-attach: `Target.setAutoAttach {flatten, waitForDebuggerOnStart}` on the
-   page and every iframe target, browser-level auto-attach for `shared_worker`, `Fetch.enable` on
-   each page, iframe and shared-worker target before `Runtime.runIfWaitingForDebugger`. Request
-   bodies for §4.6 are read through the same sessions from page load on, not only after arming."
+   SharedWorkers need more. What worked in the spike is auto-attach:
+   - `Target.setAutoAttach {flatten, waitForDebuggerOnStart}` on the page and every iframe target;
+   - browser-level auto-attach for `shared_worker`;
+   - `Fetch.enable` on each page, iframe and shared-worker target before
+     `Runtime.runIfWaitingForDebugger`.
+   Request bodies for §4.6 are read through the same sessions from page load on, not only after
+   arming."
+
+   **The browser is shared.** A site survey runs up to 6 contexts in one browser, and
+   browser-level auto-attach reports every context's targets. Only one context was tested. The
+   proposal: scope by `targetInfo.browserContextId`. Arm Fetch only on targets whose
+   `browserContextId` is the checkout context's. Resume every other target untouched
+   (`Runtime.runIfWaitingForDebugger`, then detach), so the other loads see no difference beyond a
+   brief start-up pause. Page-level auto-attach is already scoped to that page.
 
 4. **SharedWorkers are visible to CDP.**
 
@@ -417,9 +482,9 @@ Each item quotes the spec as written, then proposes a replacement.
    `waitForDebuggerOnStart`, plus `Fetch.enable` on that target, paused and failed both the
    SharedWorker's start-up POST and its later POST (Q5, mode B).
 
-   Replacement: "SharedWorkers are guarded like iframes, through browser-level auto-attach and Fetch
-   on the shared-worker target. Only WebSockets (not tested in the spike) are left to the egress
-   proxy."
+   Replacement: "SharedWorkers are guarded like iframes, through browser-level auto-attach (scoped
+   to the checkout context by `browserContextId`, item 3) and Fetch on the shared-worker target.
+   Only WebSockets (not tested in the spike) are left to the egress proxy."
 
 5. **How the guard proves it covers every frame and worker.**
 
@@ -440,11 +505,23 @@ Each item quotes the spec as written, then proposes a replacement.
    One case was not tested: attaching over the raw connection to an iframe that already exists.
 
    §7 says "CDP auto-attach and per-target `Fetch.enable`, or something else" is left to the
-   builder. The spike narrows that. Playwright's `CDPSession` can't address flattened child
-   sessions, and `new_cdp_session(frame)` attaches too late (start-up requests leak). So phase 2
-   needs its own CDP connection beside Playwright's: a pipe, or `--remote-debugging-port` bound to
-   127.0.0.1. That port is open to any local process for the browser's lifetime, which matters in a
-   shared worker container. **Builds:** test in the shipped build (Chrome or full Chromium), never
+   builder. What the spike measured:
+   - A second CDP connection beside Playwright's (here `--remote-debugging-port` and a WebSocket)
+     blocked everything (mode B).
+   - `new_cdp_session(frame)` attaches too late; start-up requests leak (mode C).
+
+   It did not measure the other options, which stay open:
+   - Playwright's `context.route()`: with routing on, Playwright auto-attaches to out-of-process
+     iframes itself and routes their requests. Untested here, and it gives no SharedWorker.
+   - Non-flattened auto-attach (`flatten: false`) on a Playwright `CDPSession`, driving children
+     through `Target.sendMessageToTarget`. Untested.
+   - Mode P's "can't" is an API reading, not a measurement: Python's `CDPSession.send(method,
+     params)` takes no `sessionId`, so the flattened children whose `attachedToTarget` events
+     arrived could not be addressed.
+
+   SharedWorkers would still need a browser-level session in every option. If the second
+   connection is chosen, a pipe is safer than `--remote-debugging-port`: that port is open to any
+   local process for the browser's lifetime, which matters in a shared worker container. **Builds:** test in the shipped build (Chrome or full Chromium), never
    in chrome-headless-shell alone, which keeps cross-site iframes in process and hides the gap.
 
 6. **GETs still leave after the guard is armed.**

@@ -25,6 +25,7 @@ Modes, each in a fresh browser:
 """
 import asyncio
 import json
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,7 +35,8 @@ from playwright.async_api import async_playwright
 
 from spike_common import STORE, OrderGuard, Out, RawCDP, free_port, launch
 
-out = Out("q5_fetch_reach")
+# `python3 q5_fetch_reach.py run2` writes out/q5_fetch_reach-run2.log, so repeated runs keep their logs.
+out = Out("q5_fetch_reach" + ("-" + sys.argv[1] if len(sys.argv) > 1 else ""))
 
 FRAME_HTML = """<!doctype html><html><body>spike frame
 <script>
