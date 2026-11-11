@@ -1,0 +1,83 @@
+# Local WooCommerce testbed for the checkout-skimmer spike (throwaway-grade).
+# Fixed project name: nothing here may touch the user's other stacks.
+name: pnakotic-woo-testbed
+
+x-wp-env: &wp-env
+  WORDPRESS_DB_HOST: db
+  WORDPRESS_DB_USER: wp
+  WORDPRESS_DB_PASSWORD: wp-testbed
+  WORDPRESS_DB_NAME: wp
+  # Evaluated by wp-config.php in both the store and wpcli containers.
+  WORDPRESS_CONFIG_EXTRA: |
+    define('WP_HOME', 'http://localhost:${WOO_PORT:-8188}');
+    define('WP_SITEURL', 'http://localhost:${WOO_PORT:-8188}');
+    define('DISABLE_WP_CRON', true);
+    define('AUTOMATIC_UPDATER_DISABLED', true);
+    define('WP_HTTP_BLOCK_EXTERNAL', getenv('PNAKOTIC_BLOCK_EXTERNAL') === '1');
+    define('WP_ACCESSIBLE_HOSTS', 'localhost');
+
+services:
+  db:
+    image: mariadb:11.4
+    environment:
+      MARIADB_DATABASE: wp
+      MARIADB_USER: wp
+      MARIADB_PASSWORD: wp-testbed
+      MARIADB_ROOT_PASSWORD: root-testbed
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  wordpress:
+    image: wordpress:7.1.4-php8.3-apache
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${WOO_PORT:-8188}:80"
+    environment:
+      <<: *wp-env
+      # The running store makes no outside requests (setup runs via wpcli, which
+      # is not blocked, so it can download WordPress plugins).
+      PNAKOTIC_BLOCK_EXTERNAL: "1"
+      # Where the opt-in test skimmer sends what it reads (the browser's view).
+      PNAKOTIC_COLLECTOR_URL: "http://localhost:${COLLECTOR_PORT:-8199}/collect"
+    volumes:
+      - wp_data:/var/www/html
+      - ./mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      - ./plugins/pnakotic-test-gateway:/var/www/html/wp-content/plugins/pnakotic-test-gateway:ro
+
+  # One-off wp-cli: docker compose run --rm wpcli <wp args>
+  wpcli:
+    image: wordpress:cli-2.12.0-php8.3
+    profiles: ["tools"]
+    user: "33:33"
+    entrypoint: ["wp"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *wp-env
+      HOME: /tmp
+    volumes:
+      - wp_data:/var/www/html
+      - ./mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      - ./plugins/pnakotic-test-gateway:/var/www/html/wp-content/plugins/pnakotic-test-gateway:ro
+
+  collector:
+    image: python:3.12-slim-bookworm
+    command: ["python3", "-u", "/app/server.py"]
+    environment:
+      COLLECTOR_LOG: /app/requests.jsonl
+    ports:
+      - "127.0.0.1:${COLLECTOR_PORT:-8199}:8199"
+    volumes:
+      - ./collector:/app
+
+volumes:
+  db_data:
+  wp_data:
