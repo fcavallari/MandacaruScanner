@@ -7,9 +7,9 @@ is at most 300 characters. A frame that can't be read (``eval``, ``<anonymous>``
 URL that is too long) is an eval frame with an empty URL, which counts as unknown code.
 
 A frame at the page's own URL is store code only when its script is one of the inline
-``<script>`` blocks the server sent, proven by content: the frame carries V8's script hash
+``<script>`` blocks the server sent, matched by content: the frame carries V8's script hash
 (``sha256=<hex>`` after the location, written by ``card_watch``'s stack formatter) and it must
-equal the SHA-256 of a served block (``inline_script_hashes``). A line number is not proof: an
+equal the SHA-256 of a served block (``inline_script_hashes``). A line number is not enough: an
 event handler attribute a script sets at runtime (``onerror="…"``) also runs at the page URL,
 at line 1 or wherever the parser was, plus any newlines its text starts with.
 
@@ -238,7 +238,7 @@ def blocks_readable(served_html: Optional[bytes], charset: Optional[str]) -> boo
 
 def trusted_inline_hashes(served_html: Optional[bytes],
                           parsed: Optional[Dict[str, Set[Tuple[int, int]]]]) -> Set[str]:
-    """The served-block hashes that prove a page-URL frame is the store's. ``parsed`` is every
+    """The served-block hashes that make a page-URL frame count as the store's. ``parsed`` is every
     script the browser parsed at the document URL, ``{hash: {(startLine, startColumn)}}``
     (``EvalCapture.positions_at``), or None when that record is incomplete. A hash counts only
     when the browser parsed it and every script with it starts where a served block starts: an

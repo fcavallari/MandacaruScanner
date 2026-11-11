@@ -395,7 +395,7 @@ function CardFieldsNote({ page }: { page: SiteCheckedPage }) {
   if (!page.card_fields && !page.card_fields_unchecked) return null;
   return (
     <div className="mt-1 text-[13px] text-muted space-y-0.5">
-      {page.card_fields ? <p className="m-0">This page has its own card payment fields</p> : null}
+      {page.card_fields && !page.card_fields_unchecked ? <p className="m-0">This page has its own card payment fields</p> : null}
       {vendors.length > 0 ? <p className="m-0">Some were added by {vendors.join(', ')}</p> : null}
       {page.card_fields_unchecked ? (
         <p className="m-0 text-warning">We couldn't check who added this page's card fields</p>

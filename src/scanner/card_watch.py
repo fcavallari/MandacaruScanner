@@ -284,7 +284,7 @@ _INIT_SCRIPT = r"""
       try {
         if (hits <= __EVENTS__) {
           const msg = { via: via, stack: stackOf(fn) };
-          if (site === null || site.hash === null) msg.no_hash = 1;  // page-URL frames can't be proven the store's
+          if (site === null || site.hash === null) msg.no_hash = 1;  // page-URL frames can't be matched to served blocks
           send(msg);
         }
         else if (hits <= __SENT__) send({ via: via, over: 1 });
