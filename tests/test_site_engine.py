@@ -127,6 +127,8 @@ async def test_site_scan_loads_an_unpicked_woocommerce_checkout_once_before_the_
     assert len(checkout) == 1 and checkout[0]["url"] == f"{site_server}/checkout/"
     assert [l["profile"] for l in checkout[0]["loads"]] == ["default"]
     assert checkout[0]["loads"][0]["state"] == "checked"
+    assert (checkout[0]["checkout_state"], checkout[0]["checkout_landing"]) == ("loaded", None)
+    assert checkout[0]["checkout_status"] == checkout[0]["loads"][0]["status"]
     assert report["checked"]["pages"][-1]["probe"] is True
     assert [p["index"] for p in report["checked"]["pages"]] == [0, 1, 2] and checkout[0]["index"] == 1
     assert report["verdict"]["verdict"] == "suspicious"
@@ -170,3 +172,6 @@ async def test_site_scan_a_checkout_that_redirects_to_the_cart_is_still_the_chec
     default = checkout["loads"][0]
     assert default["profile"] == "default" and default["state"] == "checked"
     assert default["landing"].endswith("/woo-redirect/cart/")
+    # worded by where it landed: the cart, which was checked, never "your checkout page" alone
+    assert checkout["checkout_state"] == "redirected"
+    assert checkout["checkout_landing"] == default["landing"]

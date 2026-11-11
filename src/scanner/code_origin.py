@@ -263,8 +263,9 @@ def _parts(url: str) -> Tuple[str, str]:
 
 def _path_has_prefix(path: str, prefix: str) -> bool:
     """``path`` starts with ``prefix`` and the prefix ends a path segment or package name
-    (end of path, ``/``, ``@`` or ``.``)."""
-    return path.startswith(prefix) and (len(path) == len(prefix) or path[len(prefix)] in "/@.")
+    (end of path, ``/`` or ``@``). Never ``.``: anyone can publish an npm package named
+    ``jquery.<anything>``, and no real jQuery CDN path needs it."""
+    return path.startswith(prefix) and (len(path) == len(prefix) or path[len(prefix)] in "/@")
 
 
 def _owner_key(host: str) -> str:

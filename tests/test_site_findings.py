@@ -653,6 +653,19 @@ def test_card_inputs_are_one_finding_per_page_whatever_the_first_frame():
     assert b["findings"][0]["details"]["frames"] == [""] and b["findings"][0]["details"]["first_unknown"] == ""
 
 
+def test_card_inputs_keep_the_first_unknown_frame_when_it_is_not_among_the_kept_frames():
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    store = ["https://s.com/wp-content/plugins/p/{}.js".format(i) for i in range(10)]
+    load = _load(0, "https://s.com/checkout/", "default",
+                 card_inputs=_cards(_card(frames=store, first_unknown="https://evil.example/late.js")))
+    [b] = build_blocks([load], "s.com", None)
+    [f] = b["findings"]
+    assert f["details"]["frames"] == store
+    assert f["details"]["first_unknown"] == "https://evil.example/late.js"
+
+
 def test_store_vendor_and_provider_insertions_are_not_findings():
     from _support import _card, _cards, _load
     from pnakotic.src.scanner.site_findings import build_blocks

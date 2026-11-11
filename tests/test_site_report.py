@@ -326,6 +326,68 @@ def test_the_checkout_page_is_flagged_by_index():
     assert [p["checkout"] for p in build_report("s.com", "s.com", None, loads, 1, [], [])["checked"]["pages"]] == [False] * 3
 
 
+def _checkout_page(*loads):
+    from pnakotic.src.scanner.site_report import build_report
+
+    home = _home()
+    pages = build_report("s.com", "s.com", None, [home, *loads], 1, [], [], checkout_index=1)["checked"]["pages"]
+    assert pages[0]["checkout_state"] is None  # not the checkout page
+    return pages[1]
+
+
+def _home():
+    from _support import _load
+    return _load(0, "https://s.com/", "default")
+
+
+def _with_status(load, status):
+    load.result.metadata["main_status"] = status
+    return load
+
+
+def test_the_checkout_page_says_where_its_load_landed():
+    """A store's checkout answers 302 to the cart when the cart is empty, and a store whose checkout
+    isn't at /checkout/ answers the fallback with a 404: the page entry says which, from the first
+    usable load in profile order, so the report never calls a cart or a 404 "your checkout page"."""
+    from _support import _load
+
+    url = "https://s.com/checkout/"
+    stayed = _checkout_page(_with_status(_load(1, url, "default"), 200))
+    assert (stayed["checkout_state"], stayed["checkout_landing"], stayed["checkout_status"]) == ("loaded", None, 200)
+    # the same path, give or take a trailing slash, the scheme, the www twin, a query or a fragment
+    for landing in ("https://s.com/checkout", "http://www.s.com/checkout/?x=1#pay"):
+        same = _checkout_page(_with_status(_load(1, url, "default", final_url=landing), 200))
+        assert same["checkout_state"] == "loaded" and same["checkout_landing"] is None, landing
+    cart = _checkout_page(_with_status(_load(1, url, "default", final_url="https://s.com/cart/"), 200))
+    assert (cart["checkout_state"], cart["checkout_landing"], cart["checkout_status"]) == (
+        "redirected", "https://s.com/cart/", 200)
+    long = "https://s.com/cart/?" + "a" * 400
+    assert len(_checkout_page(_load(1, url, "default", final_url=long))["checkout_landing"]) == 300
+    # a 4xx wins over a differing path
+    missing = _checkout_page(_with_status(_load(1, url, "default"), 404))
+    assert (missing["checkout_state"], missing["checkout_landing"], missing["checkout_status"]) == ("not_found", None, 404)
+    gone = _checkout_page(_with_status(_load(1, url, "default", final_url="https://s.com/shop/"), 410))
+    assert gone["checkout_state"] == "not_found" and gone["checkout_status"] == 410
+    # a 5xx is a page that loaded badly, not a missing checkout
+    assert _checkout_page(_with_status(_load(1, url, "default"), 500))["checkout_state"] == "loaded"
+
+
+def test_the_checkout_state_comes_from_the_first_usable_load_in_profile_order():
+    from _support import _load
+
+    url = "https://s.com/checkout/"
+    dead = _load(1, url, "default", state="not_checked", reason="load_failed")
+    dead.result = None
+    cart = _with_status(_load(1, url, "mobile-ios", final_url="https://s.com/cart/"), 200)
+    page = _checkout_page(cart, dead)
+    assert page["checkout_state"] == "redirected" and page["checkout_landing"] == "https://s.com/cart/"
+    blocked = _with_status(_load(1, url, "default", state="not_checked", reason="challenge"), 403)
+    blocked.result.metadata["challenge"] = True
+    page = _checkout_page(blocked)  # a bot check says nothing about the checkout
+    assert (page["checkout_state"], page["checkout_landing"], page["checkout_status"]) == (None, None, None)
+    assert _checkout_page(dead)["checkout_state"] is None
+
+
 def test_the_404_probe_is_flagged_on_its_page_and_its_blocks():
     from _support import _load, _yara_hop
     from pnakotic.src.scanner.site_report import build_report

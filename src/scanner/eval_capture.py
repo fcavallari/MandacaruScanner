@@ -61,17 +61,25 @@ ignored is code byte-identical to one of the harness's own scripts.
 
 An inserted inline ``<script>`` (``s.text = ...; document.head.appendChild(s)``) is a stage: no
 URL, and the stack of the code that built it. It is runtime-built code, so it is captured.
-``Debugger.getScriptSource`` is called as soon as the event arrives (a script can be
-garbage-collected before a later call: "No script for id"), as a background task, so the page
-is never waited on; ``drain`` waits, bounded, for the calls still in flight.
+``Debugger.getScriptSource`` is called from a background task started as soon as the event
+arrives (a script can be garbage-collected before a later call: "No script for id"), so the page
+is never waited on; at most ``MAX_FETCHES_IN_FLIGHT`` calls run at once and the rest queue, so a
+burst of stages can see more of them come back "No script for id" (counted in ``dropped``).
+``drain`` waits, bounded, for the calls still in flight or queued, and counts the ones it gives up on.
 
 Everything is page-supplied and bounded: ``MAX_STAGES`` stages, ``MAX_STAGE_CHARS`` characters
 each (a longer one is cut, not dropped), ``MAX_STAGE_BYTES_TOTAL`` bytes in all; whatever does
 not fit, or could not be read, is counted in ``dropped``. A stage that repeats one already seen
 (same ``hash``) takes no slot and is counted in ``repeated``. At most ``MAX_STAGE_FETCHES`` sources
 are read per load, and none above ``MAX_STAGE_FETCH_CHARS`` characters (that stage is recorded
-without source, ``oversized``). Once the slots are full, a stage with obfuscator markers replaces
-a kept one that has none, so junk cannot crowd the payload out. A ``debugger;`` loop cannot stall the
+without source, ``oversized``). The characters read per load are budgeted too: a stage is read
+only while the ``length`` its event claims fits in ``MAX_STAGE_FETCH_TOTAL_CHARS`` with the ones
+already read (a site survey runs six loads at once, and six loads each reading 100 sources of
+2 000 000 characters took the worker past 1 GB); a stage over the budget, or one whose ``length``
+is missing or not an integer, is counted in ``dropped`` and not read. Once the slots are full, a
+stage with obfuscator markers replaces a kept one that has none, so junk cannot crowd the payload
+out (though about five junk stages near 2 000 000 characters now use up the read budget first). A
+``debugger;`` loop cannot stall the
 page: breakpoints are deactivated and any pause is resumed at once.
 """
 import asyncio
@@ -87,6 +95,8 @@ MAX_STAGE_BYTES_TOTAL = 2_000_000
 MAX_CALLER_CHARS = 300
 MAX_STAGE_FETCHES = 100  # sources read per load
 MAX_STAGE_FETCH_CHARS = 2_000_000  # a longer script is not read at all
+MAX_STAGE_FETCH_TOTAL_CHARS = 10_000_000  # characters read per load, by each event's claimed length
+MAX_FETCHES_IN_FLIGHT = 4  # getScriptSource calls running at once per load
 MAX_TRACKED_HASHES = 10_000  # distinct stage hashes remembered for the repeat count
 MAX_POSITIONS = 2_000  # (url, hash, start) entries kept for code_origin; beyond that, none counts
 
@@ -153,6 +163,8 @@ class EvalCapture:
         self.dropped = 0
         self.repeated = 0
         self._fetches = 0
+        self._fetch_chars = 0  # the claimed length of every source read so far
+        self._fetch_slots = None  # type: Optional[asyncio.Semaphore]  # made in attach(), on the running loop
         self._bytes = 0
         self._sealed = False
         self._harness_hashes: Set[str] = set()  # what was parsed before attach() finished: not the page's
@@ -176,6 +188,7 @@ class EvalCapture:
         or evaluate later (Playwright: the utility script and each main-world ``evaluate`` payload),
         so those are known by content before the page runs."""
         self._cdp = cdp
+        self._fetch_slots = asyncio.Semaphore(MAX_FETCHES_IN_FLIGHT)
         cdp.on("Debugger.scriptParsed", self._on_parsed)
         cdp.on("Debugger.paused", self._on_paused)
         try:
@@ -288,10 +301,14 @@ class EvalCapture:
             if isinstance(length, int) and not isinstance(length, bool) and length > MAX_STAGE_FETCH_CHARS:
                 self._keep(Stage(source=b"", caller_url=caller, caller_line=line, oversized=True, length=length))
                 return
-            if self._fetches >= MAX_STAGE_FETCHES:
+            if not isinstance(length, int) or isinstance(length, bool) or length < 0:
+                self.dropped += 1  # no size to budget by: not read
+                return
+            if self._fetches >= MAX_STAGE_FETCHES or self._fetch_chars + length > MAX_STAGE_FETCH_TOTAL_CHARS:
                 self.dropped += 1
                 return
             self._fetches += 1
+            self._fetch_chars += length  # charged now, so stages arriving together can't all fit
             task = asyncio.ensure_future(self._fetch(script_id, caller, line))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
@@ -300,10 +317,11 @@ class EvalCapture:
 
     async def _fetch(self, script_id: str, caller: str, line: Optional[int]) -> None:
         try:
-            reply = await self._cdp.send("Debugger.getScriptSource", {"scriptId": script_id})
+            async with self._fetch_slots:  # at most MAX_FETCHES_IN_FLIGHT reads at once
+                reply = await self._cdp.send("Debugger.getScriptSource", {"scriptId": script_id})
             text = reply.get("scriptSource") if isinstance(reply, dict) else None
         except asyncio.CancelledError:
-            self.dropped += 1  # drain() gave up on it
+            self.dropped += 1  # drain() gave up on it, read or still queued
             raise
         except Exception:
             text = None  # collected before we asked, or the page is gone
@@ -332,9 +350,12 @@ class EvalCapture:
         self.dropped += 1
 
     async def drain(self, timeout: float = 5.0) -> None:
-        """Wait (bounded) for source fetches still in flight; call before the context closes."""
+        """Wait (bounded) for source fetches still in flight or queued; call before the context
+        closes. The ones it gives up on are cancelled and counted in ``dropped`` before it returns."""
         pending = list(self._tasks)
         if pending:
             _done, still = await asyncio.wait(pending, timeout=timeout)
             for task in still:
                 task.cancel()
+            if still:
+                await asyncio.wait(still, timeout=1.0)  # let each cancellation reach its handler

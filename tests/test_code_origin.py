@@ -170,3 +170,19 @@ def test_cdn_path_hosts_match_whole_package_names_only():
     assert own("https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js") == "store"
     assert own("https://ajax.googleapis.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js") == "store"
     assert own("https://ajax.googleapis.com/ajax/libs/jqueryx/1/x.js") == "unknown"
+
+
+def test_a_dot_never_ends_a_cdn_package_name():
+    # anyone can publish an npm package called jquery.<anything>, so "." is not a boundary on any host
+    from pnakotic.src.scanner.code_origin import Frame, frame_owner
+    own = lambda u: frame_owner(Frame(u, 1, False), "shop.com", "https://shop.com/checkout/", [])
+    assert own("https://cdn.jsdelivr.net/npm/jquery.cdn@1/x.js") == "unknown"
+    assert own("https://cdn.jsdelivr.net/npm/jquery.evil/x.js") == "unknown"
+    assert own("https://cdn.jsdelivr.net/npm/jquery-ui.skim@1/x.js") == "unknown"
+    assert own("https://cdnjs.cloudflare.com/ajax/libs/jquery.evil/1/x.js") == "unknown"
+    assert own("https://ajax.googleapis.com/ajax/libs/jquery.evil/1/x.js") == "unknown"
+    # the real jQuery CDN paths end the package name with "/" or "@"
+    assert own("https://cdn.jsdelivr.net/npm/jquery/dist/jquery.min.js") == "store"
+    assert own("https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js") == "store"
+    assert own("https://cdnjs.cloudflare.com/ajax/libs/jquery-migrate/3.4.1/jquery-migrate.min.js") == "store"
+    assert own("https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js") == "store"

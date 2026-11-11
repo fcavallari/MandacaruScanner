@@ -283,6 +283,35 @@ def _card_fields(loads: List[Load], site_host: str) -> dict:
     return {"card_fields": fields, "card_fields_unchecked": unchecked, "card_fields_vendors": vendors}
 
 
+def _path(url: Any) -> Optional[str]:
+    """The URL's path without a trailing slash (``/`` for the root), or None when unreadable."""
+    try:
+        return (urlsplit(url).path.rstrip("/") or "/") if isinstance(url, str) else None
+    except ValueError:
+        return None
+
+
+def _checkout_landing(page_url: str, page_loads: List[Load]) -> dict:
+    """Where the checkout page's load ended, from its first usable load in profile order: a store's
+    checkout answers 302 to the cart while the cart is empty, and a store whose checkout isn't at
+    /checkout/ answers the fallback URL with a 404. ``checkout_state`` is ``not_found`` for a 4xx
+    (``checkout_status``), else ``redirected`` when the landing path differs (a trailing slash,
+    the scheme, the host, the query and the fragment don't count; ``checkout_landing``), else
+    ``loaded``; None when no load is usable (its load line says why)."""
+    load = next((l for l in page_loads if usable_load(l)), None)
+    if load is None:
+        return {"checkout_state": None, "checkout_landing": None, "checkout_status": None}
+    status = load.result.metadata.get("main_status")
+    status = status if isinstance(status, int) and not isinstance(status, bool) else None
+    if status is not None and 400 <= status < 500:
+        state, landing = "not_found", None
+    elif _path(load.result.final_url) != _path(page_url):
+        state, landing = "redirected", _url(load.result.final_url)
+    else:
+        state, landing = "loaded", None
+    return {"checkout_state": state, "checkout_landing": landing, "checkout_status": status}
+
+
 def _checked(loads: List[Load], rules_count: int, probe: Optional[int], site_host: str,
              checkout: Optional[int] = None) -> dict:
     by_page = {}  # type: Dict[int, List[Load]]
@@ -296,6 +325,8 @@ def _checked(loads: List[Load], rules_count: int, probe: Optional[int], site_hos
             "url": _url(page_loads[0].page_url),
             "probe": index == probe,
             "checkout": index == checkout,  # a WooCommerce store's checkout page, wherever it landed
+            **(_checkout_landing(page_loads[0].page_url, page_loads) if index == checkout
+               else {"checkout_state": None, "checkout_landing": None, "checkout_status": None}),
             **_card_fields(page_loads, site_host),
             "loads": [{
                 "profile": l.profile,

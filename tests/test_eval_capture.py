@@ -213,3 +213,95 @@ async def test_a_source_url_makes_a_stage_only_of_a_script_no_document_or_file_e
     cdp.parsed("6", "h6", "older", url="name-x", **sx)
     await capture.drain()
     assert sorted(s.source for s in capture.stages) == [b"blob", b"eval", b"older", b"srcdoc"]
+
+
+def _stage_event(script_id, digest, length="omit"):
+    """A runtime stage's scriptParsed event; ``length`` "omit" leaves the field out."""
+    event = {"scriptId": script_id, "hash": digest, "url": "", "hasSourceURL": False,
+             "executionContextAuxData": {"isDefault": True}}
+    if length != "omit":
+        event["length"] = length
+    return event
+
+
+@pytest.mark.asyncio
+async def test_sources_are_read_only_within_a_per_load_character_budget():
+    """Six hostile loads at once each reading 100 sources of 2 000 000 characters took the worker
+    past 1 GB: the characters read per load are budgeted by each event's ``length``, before the
+    read. A stage over the budget is counted and not read; a smaller later one can still fit."""
+    from pnakotic.src.scanner.eval_capture import MAX_STAGE_FETCH_CHARS, MAX_STAGE_FETCH_TOTAL_CHARS
+
+    assert MAX_STAGE_FETCH_TOTAL_CHARS == 10_000_000
+    cdp = FakeCdp({})
+    capture = await _capture(cdp)
+    size = 1_500_000  # under MAX_STAGE_FETCH_CHARS, so each is read, not recorded as oversized
+    assert size <= MAX_STAGE_FETCH_CHARS
+    for i in range(10):
+        cdp.parsed(str(i), f"h{i}", f"return {i}", length=size)  # the source is small; the claim is what counts
+    cdp.parsed("small", "hs", "return 's'", length=1_000)  # 6 * 1.5M + 1 000 still fits
+    cdp.parsed("edge", "he", "return 'e'", length=MAX_STAGE_FETCH_TOTAL_CHARS - 6 * size - 1_000 + 1)
+    await capture.drain()
+    assert cdp.fetched == [str(i) for i in range(6)] + ["small"]
+    assert len(capture.stages) == 7 and capture.dropped == 4 + 1
+
+
+@pytest.mark.asyncio
+async def test_a_stage_without_a_usable_length_is_counted_and_never_read():
+    cdp = FakeCdp({"1": "a", "2": "b", "3": "c", "4": "d", "5": "e"})
+    capture = await _capture(cdp)
+    handler = cdp.handlers["Debugger.scriptParsed"]
+    for script_id, length in (("1", "omit"), ("2", None), ("3", "12"), ("4", True), ("5", -1)):
+        handler(_stage_event(script_id, "h" + script_id, length))
+    await capture.drain()
+    assert cdp.fetched == [] and capture.stages == [] and capture.dropped == 5
+
+
+class SlowCdp(FakeCdp):
+    """getScriptSource yields until released, recording how many reads were in flight at once."""
+
+    def __init__(self, sources):
+        super().__init__(sources)
+        import asyncio
+        self.release = asyncio.Event()
+        self.in_flight = 0
+        self.most = 0
+
+    async def send(self, method, params=None):
+        if method != "Debugger.getScriptSource":
+            return {}
+        self.in_flight += 1
+        self.most = max(self.most, self.in_flight)
+        try:
+            await self.release.wait()
+            return await super().send(method, params)
+        finally:
+            self.in_flight -= 1
+
+
+@pytest.mark.asyncio
+async def test_at_most_4_sources_are_read_at_once():
+    import asyncio
+
+    from pnakotic.src.scanner.eval_capture import MAX_FETCHES_IN_FLIGHT
+
+    assert MAX_FETCHES_IN_FLIGHT == 4
+    cdp = SlowCdp({})
+    capture = await _capture(cdp)
+    for i in range(10):
+        cdp.parsed(str(i), f"h{i}", f"return {i}")
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert cdp.in_flight == 4
+    cdp.release.set()
+    await capture.drain()
+    assert cdp.most == 4 and len(cdp.fetched) == 10 and len(capture.stages) == 10 and capture.dropped == 0
+
+
+@pytest.mark.asyncio
+async def test_reads_still_queued_when_drain_gives_up_are_counted():
+    cdp = SlowCdp({})
+    capture = await _capture(cdp)
+    for i in range(10):
+        cdp.parsed(str(i), f"h{i}", f"return {i}")
+    await capture.drain(timeout=0.05)  # never released: 4 in flight and 6 waiting are all cancelled
+    assert capture.stages == [] and capture.dropped == 10

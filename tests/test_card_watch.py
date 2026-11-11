@@ -292,3 +292,14 @@ async def test_card_selector_in_a_real_dom():
                                  [CARD_HTML_PATTERN, CARD_FIELDS + OTHER_FIELDS])
         assert js == [True] * len(CARD_FIELDS) + [False] * len(OTHER_FIELDS)
         await browser.close()
+
+
+def test_summarize_names_the_first_unknown_frame_even_past_the_10_kept_frames():
+    from pnakotic.src.scanner.card_watch import summarize
+
+    store = "".join(f"    at https://shop.example/wp-content/plugins/p/{i}.js:1:1\n" for i in range(12))
+    stack = "Error\n" + store + "    at https://evil.example/late.js:1:1\n"
+    [ins] = summarize([{"via": "appendChild", "stack": stack}], 1, "shop.example", PAGE, None)["inserted"]
+    assert ins["owner"] == "unknown" and ins["verified"] is True
+    assert len(ins["frames"]) == 10 and "https://evil.example/late.js" not in ins["frames"]
+    assert ins["first_unknown"] == "https://evil.example/late.js"

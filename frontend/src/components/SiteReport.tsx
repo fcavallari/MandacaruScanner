@@ -133,6 +133,33 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
+function hostOf(u: string): string | null {
+  try {
+    return new URL(u).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** card_inputs: the first outside code on the inserting call's stack, named on its own line, since
+ *  it can sit past the 10 frames kept for "Added by code". An unknown frame on the page's own host is
+ *  always at the address the page landed on (any other file there is the store's), so it is code the
+ *  server didn't send (a script or handler added while the page ran), not another site's file. */
+function OutsideCode({ url, page }: { url: string; page: string }) {
+  if (!url) {
+    return <span className="text-[12px] text-ink">Code with no file of its own (built or added while the page ran)</span>;
+  }
+  const host = hostOf(url);
+  if (host != null && host === hostOf(page)) {
+    return (
+      <span className="text-[12px] text-ink">
+        Code on this page's own address that your server didn't send (added while the page ran)
+      </span>
+    );
+  }
+  return <span className="font-mono text-[12px] text-ink break-all">{url}</span>;
+}
+
 function FindingDetails({ taskId, finding, block }: { taskId: string; finding: SiteFinding; block: SiteBlock }) {
   const d = finding.details;
   const profiles = d?.profiles ?? [];
@@ -177,6 +204,11 @@ function FindingDetails({ taskId, finding, block }: { taskId: string; finding: S
         ) : d?.initiator ? (
           <DetailRow label="Added by">
             <span className="font-mono text-[12px] text-muted break-all">{d.initiator}</span>
+          </DetailRow>
+        ) : null}
+        {finding.kind === 'card_inputs' ? (
+          <DetailRow label="Outside code">
+            <OutsideCode url={d?.first_unknown ?? ''} page={block.location} />
           </DetailRow>
         ) : null}
         {(d?.frames ?? []).length > 0 ? (
@@ -407,12 +439,43 @@ function CardFieldsNote({ page, skimmed }: { page: SiteCheckedPage; skimmed: boo
   );
 }
 
+/** The checkout page, worded by where its load landed: a store's checkout sends visitors to the cart
+ *  while the cart is empty, and a store whose checkout isn't at /checkout/ answers with a 404. */
+function CheckoutHeading({ page }: { page: SiteCheckedPage }) {
+  if (page.checkout_state === 'not_found') {
+    return (
+      <p className="text-[13px] text-warning m-0 mb-1 break-words">
+        We couldn't find your checkout page (<span className="font-mono text-[12px] break-all">{page.url}</span> answered{' '}
+        <span className="font-mono num text-[12px]">{page.checkout_status ?? 'an error'}</span>)
+      </p>
+    );
+  }
+  const landing = page.checkout_state === 'redirected' ? page.checkout_landing : null;
+  const landingChecked = landing != null && page.loads.some((l) => l.landing === landing && l.state === 'checked');
+  return (
+    <div className="mb-1">
+      <p className="text-[13px] text-ink m-0 break-words">
+        {CHECKOUT_LABEL}
+        {landing != null ? (
+          <>
+            : with an empty cart it sends visitors to <span className="font-mono text-[12px] break-all">{landing}</span>
+            {landingChecked ? ', which was checked' : null}
+          </>
+        ) : null}
+      </p>
+      <p className="font-mono text-[12px] text-faint m-0 break-all">{page.url}</p>
+    </div>
+  );
+}
+
 function PageView({ taskId, page, skimmed }: { taskId: string; page: SiteCheckedPage; skimmed: boolean }) {
   return (
     <li className="px-4 py-2.5 border-b border-rule last:border-b-0">
-      {page.probe || page.checkout ? (
+      {page.checkout && !page.probe ? (
+        <CheckoutHeading page={page} />
+      ) : page.probe ? (
         <div className="mb-1">
-          <p className="text-[13px] text-ink m-0">{page.probe ? PROBE_LABEL : CHECKOUT_LABEL}</p>
+          <p className="text-[13px] text-ink m-0">{PROBE_LABEL}</p>
           <p className="font-mono text-[12px] text-faint m-0 break-all">{page.url}</p>
         </div>
       ) : (
@@ -460,8 +523,11 @@ function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReport
   const skimmed = pagesWithCardFindings(report.blocks ?? []);
   // Clean pages fold into "N other pages clean"; the homepage always stays as the anchor.
   // A page whose card fields couldn't be checked stays in view: unchecked must not read as clean.
+  // So does a checkout that sent visitors elsewhere or wasn't found: the checkout itself wasn't checked.
+  const checkoutElsewhere = (p: SiteCheckedPage) =>
+    !!p.checkout && (p.checkout_state === 'redirected' || p.checkout_state === 'not_found');
   const isClean = (p: SiteCheckedPage) =>
-    !flagged.has(p.url) && !p.card_fields_unchecked && p.loads.every((l) => l.state === 'checked');
+    !flagged.has(p.url) && !p.card_fields_unchecked && !checkoutElsewhere(p) && p.loads.every((l) => l.state === 'checked');
   const shown = pages.filter((p) => p.index === 0 || !isClean(p));
   const folded = pages.filter((p) => p.index !== 0 && isClean(p));
   const blocked = report.blocked_hosts ?? [];
