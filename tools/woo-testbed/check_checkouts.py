@@ -25,6 +25,8 @@ HERE = Path(__file__).resolve().parent
 OUT = HERE / "out"
 LOG = HERE / "collector" / "requests.jsonl"
 STORE = f"http://localhost:{os.environ.get('WOO_PORT', '8188')}"
+# The skimmer's drop host must differ from the store's host string (127.0.0.1 vs localhost).
+COLLECTOR_HOST = f"127.0.0.1:{os.environ.get('COLLECTOR_PORT', '8199')}"
 CARD = 'input[autocomplete="cc-number"]'
 TEST_NUMBER = "4000056655665556"  # published Stripe test number, not a real card
 
@@ -68,6 +70,8 @@ def check(page, path: str, label: str, skimmer: bool) -> bool:
 
     if skimmer and ok:
         before = len(collector_lines())
+        sent_to = set()
+        page.on("request", lambda r: sent_to.add(r.url.split("/")[2]) if "/collect" in r.url else None)
         field = page.locator(CARD).first
         field.click()
         field.fill(TEST_NUMBER)
@@ -77,7 +81,8 @@ def check(page, path: str, label: str, skimmer: bool) -> bool:
         hit = [r for r in new if TEST_NUMBER in (r["body"] + r["query"])]
         kinds = sorted({r["method"] for r in hit})
         print(f"[{label}] collector got {len(new)} new request(s), {len(hit)} with the card number, methods {kinds}")
-        ok = ok and {"POST", "GET"} <= set(kinds)
+        print(f"[{label}] page sent to host(s): {sorted(sent_to)}")
+        ok = ok and {"POST", "GET"} <= set(kinds) and sent_to == {COLLECTOR_HOST}
     return ok
 
 

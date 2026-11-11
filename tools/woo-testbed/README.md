@@ -12,7 +12,7 @@ live test. Throwaway-grade: weak passwords, no TLS, everything bound to `127.0.0
 | wp-cli | `wordpress:cli-2.12.0-php8.3` |
 | Collector | `python:3.12-slim-bookworm`, standard library only |
 | Store | `http://localhost:8188` (`WOO_PORT`) |
-| Collector | `http://localhost:8199` (`COLLECTOR_PORT`) |
+| Collector | `http://127.0.0.1:8199` (`COLLECTOR_PORT`) |
 | Admin | `http://localhost:8188/wp-admin/`, user `admin`, password `pnakotic-testbed` (`WOO_ADMIN_PASSWORD`, first setup only) |
 
 The compose project is named `pnakotic-woo-testbed`; it never touches other
@@ -41,7 +41,7 @@ python3 check_checkouts.py --skimmer  # same, and expects the collector to recei
 - Products: `PNK-DOLLAR` Test Dollar Item (1.00), `PNK-WIDGET` (12.50), `PNK-GADGET` (24.00), all simple and in stock; `PNK-SOLDOUT` (simple, out of stock; note the Store API still reports `is_purchasable: true` for it, so filter on `is_in_stock`); `PNK-TEE` (variable, sizes S and M, 15.00).
 - Pages: `/checkout/` has the block checkout (WooCommerce's default), `/checkout-classic/` has `[woocommerce_checkout]`.
 - Shipping: a flat rate of 5.00 for every address. Currency USD, store address in California.
-- Payment methods: `pnakotic_test` (listed first), Direct bank transfer, Cash on delivery. `pnakotic_test` renders native `cc-number`, `cc-exp` and `cc-csc` inputs in the store's own page in both checkouts and always fails server-side (`process_payment` returns `failure`). Cash on delivery and bank transfer succeed, so they create real orders when a checkout is submitted with them.
+- Payment methods: only `pnakotic_test` is enabled, so order counts can only come from the always-failing gateway. It renders native `cc-number`, `cc-exp` and `cc-csc` inputs in the store's own page in both checkouts and always fails server-side (`process_payment` returns `failure`). A failed payment can still leave an order behind: a `pending` order in the classic checkout, a `checkout-draft` order in the block checkout. `./toggle.sh gateways extra on` enables Direct bank transfer and Cash on delivery as a positive control (they succeed and create real orders); `setup.sh` switches them off again.
 - No outside requests while running: `WP_HTTP_BLOCK_EXTERNAL` is on in the store container (not in wpcli, which needs it for setup), WP-Cron and updates are off, mail is short-circuited, and WooCommerce's marketplace suggestions, tracking, onboarding and WC Admin are switched off (`mu-plugins/pnakotic-offline.php`).
 
 ## Toggles
@@ -49,6 +49,7 @@ python3 check_checkouts.py --skimmer  # same, and expects the collector to recei
 ```bash
 ./toggle.sh checkout classic    # the store's checkout page (woocommerce_checkout_page_id) becomes /checkout-classic/
 ./toggle.sh checkout block      # back to /checkout/
+./toggle.sh gateways extra on|off # cod + bacs, default off (positive control that creates real orders)
 ./toggle.sh skimmer on          # option pnakotic_test_skimmer = 1
 ./toggle.sh skimmer off
 ```
@@ -63,9 +64,8 @@ the toggle changes what WooCommerce links to (cart's Proceed to checkout, redire
 on, on the checkout (classic or block) it reads the card number field and, on
 that field's blur and on a Place Order click, sends it once as a `fetch` POST
 (`no-cors`, `text/plain`) and once as an image beacon (`GET /collect?t=<trigger>&c=<value>`)
-to `http://localhost:8199/collect` (`PNAKOTIC_COLLECTOR_URL` in `docker-compose.yml`,
-or the option `pnakotic_test_skimmer_url`). It is a separate origin from the
-store (different port), so it looks like third-party exfiltration. From inside
+to `http://127.0.0.1:8199/collect` (`PNAKOTIC_COLLECTOR_URL` in `docker-compose.yml`,
+or the option `pnakotic_test_skimmer_url`). The store is at `localhost` and the collector at `127.0.0.1`: a different host string and origin, so it looks like third-party exfiltration (`registrable_domain('localhost')` is empty, so two `localhost` ports would not count as another site). From inside
 a container, `localhost` is not the host: if a Pnakotic worker is to scan the store,
 set the option to a name that both can reach.
 
@@ -73,7 +73,15 @@ set the option to a name that both can reach.
 
 `collector/server.py` appends one JSON line per request (`ts`, `method`, `path`,
 `query`, `body`, `origin`, `content_type`) to `collector/requests.jsonl`
-(git-ignored) and answers 204 with open CORS headers to anything.
+(git-ignored) and answers 204 to anything.
+
+Limits: a body over 1 MB gets 413, a bad or negative `Content-Length` 400, a chunked
+body 411 (all closing the connection and not logged), slow clients are dropped after
+10 s, and CORS headers go only to the store's own origins. `requests.jsonl` stops
+growing at 50 MB (`COLLECTOR_MAX_LOG_BYTES`): later requests are still answered but
+not written, and counted as `skipped_log_full`. `curl http://127.0.0.1:8199/__stats`
+shows `logged`, `skipped_log_full`, `rejected` and the log size, so check it if a
+spike run seems to be missing requests.
 
 ```bash
 tail -f collector/requests.jsonl

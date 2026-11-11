@@ -83,9 +83,11 @@ if [ "$(wp option get woocommerce_checkout_page_id)" = "" ]; then
 fi
 
 log "Payment gateways"
+# Only the always-failing gateway by default, so order counts can only come from it.
+# ./toggle.sh gateways extra on  enables cod and bacs (a positive control that does create orders).
 wp wc payment_gateway update pnakotic_test --enabled=true --user="$ADMIN_USER" >/dev/null
-wp wc payment_gateway update cod --enabled=true --user="$ADMIN_USER" >/dev/null
-wp wc payment_gateway update bacs --enabled=true --user="$ADMIN_USER" >/dev/null
+wp wc payment_gateway update cod --enabled=false --user="$ADMIN_USER" >/dev/null
+wp wc payment_gateway update bacs --enabled=false --user="$ADMIN_USER" >/dev/null
 wp option update woocommerce_gateway_order '{"pnakotic_test":0,"bacs":1,"cod":2}' --format=json >/dev/null
 
 log "Shipping (flat rate for every address)"
@@ -129,4 +131,4 @@ fi
 wp cache flush >/dev/null 2>&1 || true
 wp eval 'add_filter("got_mod_rewrite", "__return_true"); require_once ABSPATH . "wp-admin/includes/file.php"; require_once ABSPATH . "wp-admin/includes/misc.php"; $GLOBALS["wp_rewrite"]->flush_rules(true);' >/dev/null
 
-log "Done. Store: $WOO_URL   Collector: http://localhost:${COLLECTOR_PORT}   Admin: $ADMIN_USER / (WOO_ADMIN_PASSWORD, default in setup.sh)"
+log "Done. Store: $WOO_URL   Collector: http://127.0.0.1:${COLLECTOR_PORT}   Admin: $ADMIN_USER / (WOO_ADMIN_PASSWORD, default in setup.sh)"

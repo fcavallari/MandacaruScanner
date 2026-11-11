@@ -44,8 +44,8 @@ services:
       # The running store makes no outside requests (setup runs via wpcli, which
       # is not blocked, so it can download WordPress plugins).
       PNAKOTIC_BLOCK_EXTERNAL: "1"
-      # Where the opt-in test skimmer sends what it reads (the browser's view).
-      PNAKOTIC_COLLECTOR_URL: "http://localhost:${COLLECTOR_PORT:-8199}/collect"
+      # Where the opt-in test skimmer sends what it reads (the browser's view). 127.0.0.1, not localhost: a different host string from the store.
+      PNAKOTIC_COLLECTOR_URL: "http://127.0.0.1:${COLLECTOR_PORT:-8199}/collect"
     volumes:
       - wp_data:/var/www/html
       - ./mu-plugins:/var/www/html/wp-content/mu-plugins:ro
@@ -73,6 +73,7 @@ services:
     command: ["python3", "-u", "/app/server.py"]
     environment:
       COLLECTOR_LOG: /app/requests.jsonl
+      WOO_PORT: "${WOO_PORT:-8188}"
     ports:
       - "127.0.0.1:${COLLECTOR_PORT:-8199}:8199"
     volumes:
