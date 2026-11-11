@@ -315,26 +315,30 @@ The skimmer's inline script contains the string `autocomplete="cc-number"` in a 
 `c0.wp.com`, which is `STORE_CDN_HOSTS`. The block result depends on `react-dom` being judged as
 the store's.
 
-**Inline-block gap ("parse record: 1 hashes at the page URL").** The classic checkout serves 11
-inline `<script>` blocks, and the parse record had one. The cause is not the spike's wiring:
+**Inline-block gap ("parse record: 1 hashes at the page URL"), fixed in 0fa9372.** The classic
+checkout serves 11 inline `<script>` blocks, and the parse record had one. The cause was not the
+spike's wiring:
 
 - 3 blocks aren't JavaScript (`importmap`, `speculationrules`, `application/json`).
 - 7 carry a `//# sourceURL=` comment, which WordPress adds to the inline scripts it prints
   (`wc-checkout-js-extra` and the like). Chromium reports such a block's `Debugger.scriptParsed`
-  under the sourceURL name, not the page URL, and `EvalCapture._note_position` keeps only
-  `http(s)` URLs. So these blocks never enter `positions_at(page_url)`.
+  with `url` set to the sourceURL name and `embedderName` set to the page URL. At the time,
+  `EvalCapture._note_position` keyed by `url` and kept only `http(s)` URLs, so these blocks never
+  entered `positions_at(page_url)`.
 - Only 1 plain block was left, and it was recorded.
 
 The card hook writes frames with `CallSite.getFileName()`, which is the page URL for these blocks.
-So a card input inserted by code in such a block reads `owner=unknown` with `verified=True`.
-`trusted_inline_hashes` trusts only hashes with a parse record, so an unrecorded hash is
-untrusted. The result would be a Suspicious finding against the store's own code (a false alarm,
-not a miss).
+So a card input inserted by code in such a block read `owner=unknown` with `verified=True`: a
+Suspicious finding against the store's own code (a false alarm, not a miss).
 
-`spike/engine_gap_sourceurl.py` reproduces this on a local page: the same insertion reads `store`
-without the comment and `unknown`/`verified=True` with it. WooCommerce's js-extra blocks are data,
-so the checkouts here were not affected. A gateway that inserts its fields from a
-`wp_add_inline_script` "after" block would be.
+Commit 0fa9372 closed it. `EvalCapture` now records a page-world script's start under its
+`embedderName`, the same name its frames carry, so a served block ending in a sourceURL comment
+is recorded at the page and its hash is trusted when every script with it started at a served
+block. Runtime code that names itself with a sourceURL has no embedder; it is counted at every
+document, so an `eval` of a served block's exact text still makes that hash untrusted.
+`tests/test_site_load.py` covers it in a browser. `spike/engine_gap_sourceurl.py` is now a
+regression check: the same insertion reads `store` with and without the comment (re-run
+2026-11-11, both `owner: store verified: True`). The observation below predates the fix.
 
 **Observed with** `card_watch_observe.py`. What was wired, and what wasn't:
 

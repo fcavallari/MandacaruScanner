@@ -1,9 +1,15 @@
-"""Repro: a served inline <script> carrying `//# sourceURL=` (WordPress adds one to every inline
-script it prints) is recorded by EvalCapture under the sourceURL name, not the page URL, so
-code_origin never trusts its hash; a card input it inserts reads owner=unknown, verified=True."""
+"""Regression check for the spike's inline-block gap, fixed in 0fa9372: a served inline <script>
+carrying `//# sourceURL=` (WordPress adds one to every inline script it prints).
+
+Chromium reports such a block's `Debugger.scriptParsed` with `url` set to the sourceURL name and
+`embedderName` set to the page URL. Before the fix, EvalCapture recorded it under the name, so
+code_origin never trusted its hash and a card input it inserted read owner=unknown, verified=True
+(a false alarm against the store's own code). EvalCapture now records it under `embedderName`, so
+both pages below should print owner=store."""
 import asyncio, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-sys.path.insert(0, "/Users/fioa8c/WORK/Pnakotic/pnakotic/.claude/worktrees/checkout-skimmer")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # the directory that holds pnakotic/
 from playwright.async_api import async_playwright
 from pnakotic.src.scanner.card_watch import CARD_SELECTOR, CardWatcher, summarize
 from pnakotic.src.scanner.eval_capture import EvalCapture
