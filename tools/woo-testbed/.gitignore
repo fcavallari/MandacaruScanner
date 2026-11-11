@@ -1,2 +1,5 @@
 out/
 collector/requests.jsonl
+# spike output (raw logs of tools/woo-testbed/spike/*.py)
+spike/out/
+__pycache__/
