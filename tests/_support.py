@@ -169,6 +169,46 @@ _SERVED_INLINE = ("<script>\r\n// Caf\u00e9 \u20ac checkout \u2013 store code\r\
                   "f.innerHTML = '<input autocomplete=\"cc-number\">';\r\n"
                   "document.body.appendChild(f);\r\n</script>")
 
+# WordPress ends each inline script it prints with a sourceURL comment naming it (`*-js-extra`);
+# Chromium then reports the served block with that name as its URL, and its frames at the page URL.
+_WC_SOURCE_URL = "\n//# sourceURL=wc-checkout-js-extra\n"
+_SERVED_SX = ("var f = document.createElement('form');\n"
+              "f.innerHTML = '<input autocomplete=\"cc-number\">';\n"
+              "document.body.appendChild(f);" + _WC_SOURCE_URL)
+_STOCK_LOADER_SX = _STOCK_LOADER + "//# sourceURL=wc-checkout-js-extra\n"
+_EVAL_CARD = ("var f = document.createElement(\"form\"); f.innerHTML = \"<input autocomplete=cc-number>\";\n"
+              "document.body.appendChild(f);\n//# sourceURL=")
+
+
+def _js_extra(name, params):
+    return f"<script id='{name}-js-extra'>\nvar {name.replace('-', '_')}_params = {params};\n//# sourceURL={name}-js-extra\n</script>\n"
+
+
+# a WooCommerce classic checkout's inline scripts, as WordPress prints them (shapes from the testbed)
+WP_PAGES = {
+    "/wp-extras": ("<!DOCTYPE html>\n<html lang='en-US'><head><meta charset='UTF-8'><title>Checkout</title>\n"
+                   + _js_extra("wc-add-to-cart", '{"ajax_url":"/wp-admin/admin-ajax.php","i18n_view_cart":"View cart"}')
+                   + _js_extra("woocommerce", '{"ajax_url":"/wp-admin/admin-ajax.php"}')
+                   + _js_extra("wc-country-select", '{"countries":"{\\"AF\\":[]}","i18n_searching":"Searching\\u2026"}')
+                   + _js_extra("wc-address-i18n", '{"locale":"{}","i18n_optional_text":"optional"}')
+                   + _js_extra("wc-checkout", '{"ajax_url":"/wp-admin/admin-ajax.php","option_guest_checkout":"yes"}')
+                   + "<script id='wp-importmap' type='importmap'>\n{\"imports\":{\"@wordpress/interactivity\":"
+                     "\"/js/empty.js\"}}\n</script>\n"
+                   + "<script type='speculationrules'>\n{\"prefetch\":[{\"source\":\"document\",\"where\":"
+                     "{\"href_matches\":\"/*\"},\"eagerness\":\"conservative\"}]}\n</script>\n"
+                   + "</head><body class='woocommerce-checkout woocommerce-no-js'><h1>Checkout</h1>\n"
+                   + "<script>\n\t\t(function () {\n\t\t\tvar c = document.body.className;\n"
+                     "\t\t\tc = c.replace(/woocommerce-no-js/, 'woocommerce-js');\n"
+                     "\t\t\tdocument.body.className = c;\n\t\t})();\n\t</script>\n"
+                   + _js_extra("wc-order-attribution", '{"params":{"lifetime":1.0e-5,"session":30}}')
+                   + "<script id='wp-emoji-settings' type='application/json'>\n{\"baseUrl\":\"/emoji/\",\"ext\":\".png\"}"
+                     "\n</script>\n"
+                   + "<script type='module'>\n/*! This file is auto-generated */\n"
+                     "var t=document.querySelector('script#wp-emoji-settings');window._wpemojiSettings=JSON.parse(t.text);\n"
+                     "//# sourceURL=http://127.0.0.1:{port}/wp-includes/js/wp-emoji-loader.min.js\n</script>\n"
+                   + "</body></html>"),
+}
+
 CARD_PAGES = {
     # the store's own script builds a card form (detached, then attached: one insertion)
     "/card-store": _checkout("<script src='/js/form.js'></script>"),
@@ -234,8 +274,24 @@ CARD_PAGES = {
     "/card-builtins-store": _checkout("<script src='/js/builtins.js'></script>"),
     # the same code from another site
     "/card-builtins-skim": _checkout(_load_script("http://localhost:{port}/builtins.js")),
+    # the store's served inline block, ending in a WordPress sourceURL comment, inserts card fields
+    "/card-served-sourceurl": _checkout(f"<script id='wc-checkout-js-extra'>{_SERVED_SX}</script>")
+                              .replace("<head>", "<head><meta charset='utf-8'>"),
+    # the same block, then after load a cross-site script evals a byte-identical copy of its text
+    "/card-sourceurl-eval-copy": _checkout(f"<script id='wc-checkout-js-extra'>{_SERVED_SX}</script>"
+                                           + _load_script("http://localhost:{port}/eval-copy.js"))
+                                 .replace("<head>", "<head><meta charset='utf-8'>"),
+    # a served inline block evals code that names itself after the page and inserts card fields
+    "/card-eval-pageurl": _checkout(f"<script>eval({json.dumps(_EVAL_CARD)} + location.href);</script>")
+                          .replace("<head>", "<head><meta charset='utf-8'>"),
+    # a served sourceURL'd loader, and a cross-site script setting a handler with its exact text
+    "/card-handler-copy-sx": ("<html><head><meta charset='utf-8'><title>Checkout</title></head><body><h1>Checkout</h1>"
+                              f"<script>{_STOCK_LOADER_SX}</script>"
+                              + _load_script("http://localhost:{port}/handler-copy-sx.js") + "</body></html>"),
 }
 CARD_SCRIPTS = {
+    "/eval-copy.js": f"setTimeout(function () {{ eval({json.dumps(_SERVED_SX)}); }}, 50);\n",
+    "/handler-copy-sx.js": _handler_copy(_STOCK_LOADER_SX),
     "/js/form.js": ("var f = document.createElement('form'); var i = document.createElement('input');\n"
                     "i.name = 'number'; i.setAttribute('autocomplete', 'cc-number'); f.appendChild(i);\n"
                     "document.body.appendChild(f);\n"),
@@ -445,6 +501,8 @@ def site_server():
                 }
                 self._send(200, "text/html", (f"<html><head><title>Eval</title></head><body><h1>Eval</h1><iframe srcdoc='<p>hi</p>'></iframe>"
                                               f"<script>{scripts[self.path]}</script></body></html>").encode())
+            elif self.path in WP_PAGES:  # served inline blocks with WordPress's sourceURL comments
+                self._send(200, "text/html; charset=UTF-8", WP_PAGES[self.path].replace("{port}", str(port)).encode())
             elif self.path in CARD_PAGES:  # card inputs inserted into a checkout (Task 4: card_watch)
                 self._send(200, "text/html", CARD_PAGES[self.path].replace("{port}", str(port)).encode())
             elif self.path.split("?")[0] in CARD_SCRIPTS:

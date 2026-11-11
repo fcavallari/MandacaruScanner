@@ -524,6 +524,70 @@ async def test_an_event_handler_copying_a_served_block_is_not_the_stores(site_se
     assert e["owner"] == "unknown" and e["verified"] is True
 
 
+# ---------- served inline blocks ending in a //# sourceURL comment (WordPress prints one on each) ----------
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_a_served_inline_script_with_a_source_url_is_the_stores(site_server, tmp_path):
+    """Chromium reports the block under its sourceURL name, but its frames (and its embedderName)
+    are the page URL: the block is the store's by hash and served position, and not a stage."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-served-sourceurl")
+    ci = r.metadata["card_inputs"]
+    [e] = ci["inserted"]
+    assert (e["via"], e["owner"], e["frames"]) == ("appendChild", "store", [f"{site_server}/card-served-sourceurl"])
+    assert e["verified"] is True and ci["unverifiable"] is None
+    assert r.metadata["eval_stages"] == []
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_wordpress_inline_scripts_with_source_urls_are_not_runtime_stages(site_server, tmp_path):
+    """Several `*-js-extra` blocks, a module and the non-JavaScript script types of a WooCommerce
+    checkout: none is code built at runtime, so none takes a stage slot."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/wp-extras")
+    assert r.metadata["eval_stages"] == []
+    assert "eval_stages_dropped" not in r.metadata and "eval_stages_repeated" not in r.metadata
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_an_eval_copy_of_a_served_source_url_block_makes_its_hash_untrusted(site_server, tmp_path):
+    """A cross-site script evals the served block's exact text, sourceURL comment included, after
+    load: that parse starts at no served position, so the block's hash is no longer proof and even
+    the served block's own insertion reads unknown. The copy is a stage, built by the other site."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-sourceurl-eval-copy")
+    port = site_server.rsplit(":", 1)[1]
+    ci = r.metadata["card_inputs"]
+    [served, copy] = ci["inserted"]
+    assert served["frames"] == [f"{site_server}/card-sourceurl-eval-copy"]
+    assert (served["owner"], served["verified"]) == ("unknown", True)
+    assert copy["frames"][0] == "" and (copy["owner"], copy["verified"]) == ("unknown", True)
+    assert ci["unverifiable"] is None
+    assert [s["caller"] for s in r.metadata["eval_stages"]] == [f"http://localhost:{port}/eval-copy.js"]
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_an_eval_naming_itself_after_the_page_is_not_the_stores(site_server, tmp_path):
+    page = f"{site_server}/card-eval-pageurl"
+    r = await _site_load(_site_engine(tmp_path), page)
+    [e] = r.metadata["card_inputs"]["inserted"]
+    assert e["frames"] == ["", page] and (e["owner"], e["verified"]) == ("unknown", True)
+    assert [s["caller"] for s in r.metadata["eval_stages"]] == [page]  # still a stage
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_an_event_handler_copying_a_served_source_url_block_is_not_the_stores(site_server, tmp_path):
+    """A handler's frames are the page URL, and so is its embedderName: its parse is recorded at
+    the page at the handler's position, which no served block starts at."""
+    page = f"{site_server}/card-handler-copy-sx"
+    r = await _site_load(_site_engine(tmp_path), page)
+    [e] = r.metadata["card_inputs"]["inserted"]
+    assert e["via"] == "insertBefore" and set(e["frames"]) == {page}
+    assert (e["owner"], e["verified"]) == ("unknown", True)
+
+
 @requires_browser
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path,count", [("/card-paren-url", 1), ("/card-data-url", 2)])

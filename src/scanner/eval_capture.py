@@ -5,31 +5,42 @@ Skimmers unpack themselves this way: the file the page loads is a stub, and the 
 matters exists only after it has run. This module keeps the source of such scripts, bounded.
 
 What Chromium 148 reports (observed with scratch pages against a local server, Debugger
-enabled before navigation; ``hasSourceURL`` is false unless stated):
+enabled before navigation; ``hasSourceURL`` is false unless stated). ``embedderName`` is the name
+the browser gave the script, and it is what ``CallSite.getFileName()`` returns for the script's
+frames (the file name ``card_watch``'s hook writes), in every row:
 
-================================== ===================== ==============================================
-script                             ``url``               ``stackTrace``
-================================== ===================== ==============================================
-the document's inline script       the document URL      none
-a network script, ``<script src>``  its URL               none
-an inline handler's own text       the document URL      none (the code it ``eval``s is a stage)
-``eval(...)``                      ``""``                top frame = the calling page script
-``new Function(...)``              ``""``                top frame = the calling page script
-``eval`` ending in a sourceURL     the claimed URL       top frame = the calling page script
+================================== ===================== ===================== ======================
+script                             ``url``               ``embedderName``      ``stackTrace``
+================================== ===================== ===================== ======================
+the document's inline script       the document URL      the document URL      none
+... ending in ``//# sourceURL=n``  ``n`` (hasSourceURL)  the document URL      none
+a network script, ``<script src>``  its URL               its URL               none
+... ending in ``//# sourceURL=n``  ``n`` (hasSourceURL)  its URL               none
+an inline handler's own text       the document URL      the document URL      none (what it ``eval``s is a stage)
+``eval(...)``                      ``""``                ``""``                top frame = the calling page script
+``new Function(...)``              ``""``                ``""``                top frame = the calling page script
+``eval`` ending in a sourceURL     the claimed URL       ``""``                top frame = the calling page script
                                    (``hasSourceURL`` true)
-inserted inline ``<script>``       ``""``                top frame = the inserting script
-``setTimeout("code")``             ``""``                none
-``setTimeout(eval, 0, "code")``    ``""``                none
-``Promise.resolve(c).then(eval)``  ``""``                none
-``setTimeout(Function, 0, "c")``   ``""``                none
-``javascript:`` URL                ``""``                none
-an ``eval`` inside a timer string  ``""``                top frame has an empty URL
-================================== ===================== ==============================================
+inserted inline ``<script>``       ``""``                ``""``                top frame = the inserting script
+``document.write`` of a script     ``""``                ``""``                top frame = the writing script
+``setTimeout("code")``             ``""``                ``""``                none
+``setTimeout(eval, 0, "code")``    ``""``                ``""``                none
+``Promise.resolve(c).then(eval)``  ``""``                ``""``                none
+``setTimeout(Function, 0, "c")``   ``""``                ``""``                none
+``javascript:`` URL                ``""``                ``""``                none
+an ``eval`` inside a timer string  ``""``                ``""``                top frame has an empty URL
+a ``blob:`` script                 its URL (or a name)   the ``blob:`` URL     none
+================================== ===================== ===================== ======================
 
-So ``url == ""`` or ``hasSourceURL`` selects every runtime-built script, with or without a
-stack (a stage built from a timer or a promise has none, so ``caller`` is ``""`` for it, and
-requiring a stack would give a loader a one-line bypass). ``data:`` and ``blob:`` URLs are
-selected too: such a script has a URL, no sourceURL and no stack, and the page made it up.
+So ``url == ""``, or ``hasSourceURL`` on a script whose ``embedderName`` is not an http(s) URL,
+selects every runtime-built script, with or without a stack (a stage built from a timer or a
+promise has none, so ``caller`` is ``""`` for it, and requiring a stack would give a loader a
+one-line bypass). A sourceURL comment only renames a script: a served inline block or a network
+file ending in one (WordPress puts one on every inline script it prints, ``wc-checkout-js-extra``)
+keeps its http(s) ``embedderName`` and is not a stage, while runtime code calling itself anything,
+the page URL included, keeps its empty one and is. A browser that sends no ``embedderName`` makes
+every sourceURL script a stage. ``data:`` and ``blob:`` URLs are selected too: such a script has
+a URL, no sourceURL and no stack, and the page made it up.
 
 The same selection also catches everything Playwright injects into the page: its init scripts
 (ours included), its utility script and wrapper, and every ``page.evaluate`` payload, in the
@@ -90,6 +101,36 @@ class Stage:
     length: int = 0  # characters, for an oversized stage
 
 
+_WEB = ("http://", "https://")
+_NO_DOCUMENT = ""  # the record key of runtime scripts that named themselves: they count at every document
+
+
+def _embedded_by_url(event: Dict[str, Any]) -> bool:
+    """The script came from an http(s) document or file: ``embedderName``, the name the browser
+    gave the script, is that URL (a served inline block: the document; a network script: its
+    file). Runtime-built code has an empty one, whatever its sourceURL says."""
+    embedder = event.get("embedderName")
+    return isinstance(embedder, str) and embedder.startswith(_WEB)
+
+
+def _document_of(event: Dict[str, Any]) -> Optional[str]:
+    """The record key of a page-world script's start: the URL its frames carry
+    (``CallSite.getFileName``, which is ``embedderName``: the document for a served inline block
+    or an event handler, sourceURL or not), ``_NO_DOCUMENT`` for runtime code that named itself
+    with a sourceURL (an ``eval`` copy of a served block then makes that hash untrusted at every
+    document), None for a script left out (runtime code without a name: its frames have no URL).
+    A browser without ``embedderName`` keys by ``url``, as before. Fragment dropped, 2 048
+    characters kept."""
+    embedder, url = event.get("embedderName"), event.get("url")
+    if isinstance(embedder, str):
+        if embedder.startswith(_WEB):
+            return urldefrag(embedder)[0][:2048]
+        return _NO_DOCUMENT if event.get("hasSourceURL") is True else None
+    if isinstance(url, str) and url.startswith(_WEB):
+        return urldefrag(url)[0][:2048]
+    return None
+
+
 def _top_frame(event: Dict[str, Any], harness_ids: Set[str]) -> Optional[Dict[str, Any]]:
     """The top frame of the stack that built the script, passing over frames of the harness's
     own scripts (the card hooks wrap appendChild, so an inserted inline script compiles inside
@@ -119,8 +160,9 @@ class EvalCapture:
         # in each one): ScriptTracer passes over their frames, so a loader's appendChild going
         # through our hooks is still the loader's
         self.harness_script_ids: Set[str] = set()
-        # where every page-world script with a URL started, by (URL, hash): code_origin trusts a
-        # served inline block's hash only when every script with it starts at a served block
+        # where every page-world script whose frames carry a URL started, by (that URL, hash), plus
+        # runtime scripts that named themselves (under _NO_DOCUMENT, counted at every URL): code_origin
+        # trusts a served inline block's hash only when every script with it starts at a served block
         self._positions: Dict[Tuple[str, str], Set[Tuple[int, int]]] = {}
         self._position_count = 0
         self.positions_dropped = 0
@@ -156,13 +198,15 @@ class EvalCapture:
         self._sealed = True
 
     def _note_position(self, event: Dict[str, Any]) -> None:
-        url, digest = event.get("url"), event.get("hash")
-        line, column = event.get("startLine"), event.get("startColumn")
-        if not (isinstance(url, str) and url.startswith(("http://", "https://")) and isinstance(digest, str)):
+        digest, line, column = event.get("hash"), event.get("startLine"), event.get("startColumn")
+        if not isinstance(digest, str):
             return
         if not all(isinstance(v, int) and not isinstance(v, bool) for v in (line, column)):
             return
-        key = (urldefrag(url)[0][:2048], digest[:128])
+        document = _document_of(event)
+        if document is None:
+            return
+        key = (document, digest[:128])
         where = self._positions.get(key)
         if where is not None and (line, column) in where:
             return
@@ -173,14 +217,19 @@ class EvalCapture:
         self._positions.setdefault(key, set()).add((line, column))
 
     def positions_at(self, url: str) -> Optional[Dict[str, Set[Tuple[int, int]]]]:
-        """``{hash: {(startLine, startColumn)}}`` of the page-world scripts parsed at ``url``
-        (fragment ignored), or None when there is no complete record: the record overflowed, or
-        ``Debugger.enable`` failed (then nothing can be trusted, and ``card_watch.summarize``
-        says page-URL frames couldn't be checked)."""
+        """``{hash: {(startLine, startColumn)}}`` of the page-world scripts whose frames name
+        ``url`` (fragment ignored), plus every runtime script that named itself with a sourceURL
+        (it has no document, so it counts at all of them), or None when there is no complete
+        record: the record overflowed, or ``Debugger.enable`` failed (then nothing can be trusted,
+        and ``card_watch.summarize`` says page-URL frames couldn't be checked)."""
         if self.positions_dropped or not self.debugger_on:
             return None
         page = urldefrag(url or "")[0][:2048]
-        return {digest: set(where) for (at, digest), where in self._positions.items() if at == page}
+        out = {}  # type: Dict[str, Set[Tuple[int, int]]]
+        for (at, digest), where in self._positions.items():
+            if at == page or at == _NO_DOCUMENT:
+                out.setdefault(digest, set()).update(where)
+        return out
 
     def _note_harness(self, script_id: str) -> None:
         if len(self.harness_script_ids) < MAX_TRACKED_HASHES:
@@ -214,8 +263,11 @@ class EvalCapture:
                 return  # an isolated world: Playwright's, never the page's
             self._note_position(event)
             url = event.get("url")
-            if not (url == "" or event.get("hasSourceURL") is True
-                    or (isinstance(url, str) and url.startswith(("data:", "blob:")))):
+            # A sourceURL comment renames a script, so it says nothing about where the script came
+            # from; its embedder does: a served block or a network file ending in one has an
+            # http(s) embedderName (WordPress puts one on every inline script it prints).
+            named = event.get("hasSourceURL") is True and not _embedded_by_url(event)
+            if not (url == "" or named or (isinstance(url, str) and url.startswith(("data:", "blob:")))):
                 return  # a network script or the document's own inline script
             if isinstance(digest, str):
                 if digest in self._harness_hashes:

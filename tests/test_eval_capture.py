@@ -163,3 +163,53 @@ async def test_parse_positions_are_none_when_they_cannot_be_trusted():
     capture = EvalCapture()
     await capture.attach(failing)
     assert capture.positions_at("https://s.com/p") is None
+
+
+@pytest.mark.asyncio
+async def test_a_source_url_block_is_recorded_at_the_document_that_embeds_it():
+    """Chromium 148 reports a served block ending in ``//# sourceURL=<name>`` with ``url`` the
+    name and ``embedderName`` the document URL, which is also what ``CallSite.getFileName`` gives
+    its frames: its start is recorded at that document. A runtime script naming itself has an
+    empty ``embedderName``: its start counts at every document, so a copy of a served block
+    makes that hash untrusted."""
+    cdp = FakeCdp({})
+    capture = await _capture(cdp)
+    page = "https://s.com/checkout/"
+    loader = "https://s.com/wp-includes/js/wp-emoji-loader.min.js"
+    cdp.parsed("1", "hb", "x", url="wc-checkout-js-extra", hasSourceURL=True, embedderName=page + "#x",
+               startLine=4, startColumn=36)
+    # a module whose sourceURL names a file: still the document's
+    cdp.parsed("2", "hm", "x", url=loader, hasSourceURL=True, embedderName=page, startLine=9, startColumn=22)
+    # a network file with a sourceURL: its own URL's
+    cdp.parsed("3", "hn", "x", url="net-x", hasSourceURL=True, embedderName="https://s.com/app.js",
+               startLine=0, startColumn=0)
+    assert capture.positions_at(page) == {"hb": {(4, 36)}, "hm": {(9, 22)}}
+    assert capture.positions_at(loader) == {}
+    assert capture.positions_at("https://s.com/app.js") == {"hn": {(0, 0)}}
+    # an eval of the block's exact text, and an eval naming itself after the page: no embedder
+    cdp.parsed("4", "hb", "x", url="wc-checkout-js-extra", hasSourceURL=True, embedderName="",
+               startLine=0, startColumn=0)
+    cdp.parsed("5", "he", "x", url=page, hasSourceURL=True, embedderName="", startLine=0, startColumn=0)
+    # a runtime script without a sourceURL has no file name in its frames either: not recorded
+    cdp.parsed("6", "hr", "x", url="", embedderName="", startLine=0, startColumn=0)
+    assert capture.positions_at(page) == {"hb": {(4, 36), (0, 0)}, "hm": {(9, 22)}, "he": {(0, 0)}}
+    assert capture.positions_at("https://s.com/app.js") == {"hn": {(0, 0)}, "hb": {(0, 0)}, "he": {(0, 0)}}
+
+
+@pytest.mark.asyncio
+async def test_a_source_url_makes_a_stage_only_of_a_script_no_document_or_file_embeds():
+    """A served block or a network file that ends in a sourceURL comment is not runtime-built; code
+    built at runtime (no embedder) is, whatever it calls itself, and so is a blob: script or a
+    script in a document the page wrote itself. Without ``embedderName`` (an older browser) every
+    sourceURL script is a stage, as before."""
+    cdp = FakeCdp({})
+    capture = await _capture(cdp)
+    sx = {"hasSourceURL": True}
+    cdp.parsed("1", "h1", "served", url="wc-checkout-js-extra", embedderName="https://s.com/p", **sx)
+    cdp.parsed("2", "h2", "network", url="net-x", embedderName="https://s.com/app.js", **sx)
+    cdp.parsed("3", "h3", "eval", url="https://s.com/p", embedderName="", **sx)
+    cdp.parsed("4", "h4", "blob", url="blob-x", embedderName="blob:https://s.com/1234", **sx)
+    cdp.parsed("5", "h5", "srcdoc", url="srcdoc-x", embedderName="about:srcdoc", **sx)
+    cdp.parsed("6", "h6", "older", url="name-x", **sx)
+    await capture.drain()
+    assert sorted(s.source for s in capture.stages) == [b"blob", b"eval", b"older", b"srcdoc"]

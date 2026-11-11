@@ -239,8 +239,10 @@ def blocks_readable(served_html: Optional[bytes], charset: Optional[str]) -> boo
 def trusted_inline_hashes(served_html: Optional[bytes],
                           parsed: Optional[Dict[str, Set[Tuple[int, int]]]]) -> Set[str]:
     """The served-block hashes that make a page-URL frame count as the store's. ``parsed`` is every
-    script the browser parsed at the document URL, ``{hash: {(startLine, startColumn)}}``
-    (``EvalCapture.positions_at``), or None when that record is incomplete. A hash counts only
+    script the browser parsed whose frames carry the document URL (keyed by ``embedderName``, so a
+    served block ending in a ``//# sourceURL`` comment is there too), plus every runtime script that
+    named itself with one, ``{hash: {(startLine, startColumn)}}`` (``EvalCapture.positions_at``),
+    or None when that record is incomplete. A hash counts only
     when the browser parsed it and every script with it starts where a served block starts: an
     event handler or a runtime script with a served block's exact text has the same hash, but
     not a served block's position, and then no frame with that hash is the store's."""
