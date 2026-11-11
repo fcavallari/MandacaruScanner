@@ -389,13 +389,14 @@ function LoadLine({ taskId, load }: { taskId: string; load: SiteLoad }) {
   );
 }
 
-/** What the survey saw of the page's own card payment fields (never a finding). */
-function CardFieldsNote({ page }: { page: SiteCheckedPage }) {
+/** What the survey saw of the page's own card payment fields (never a finding). A page where
+ *  outside code added card fields (a card_inputs finding) doesn't say it has its own. */
+function CardFieldsNote({ page, skimmed }: { page: SiteCheckedPage; skimmed: boolean }) {
   const vendors = page.card_fields_vendors ?? [];
   if (!page.card_fields && !page.card_fields_unchecked) return null;
   return (
     <div className="mt-1 text-[13px] text-muted space-y-0.5">
-      {page.card_fields && !page.card_fields_unchecked ? <p className="m-0">This page has its own card payment fields</p> : null}
+      {page.card_fields && !page.card_fields_unchecked && !skimmed ? <p className="m-0">This page has its own card payment fields</p> : null}
       {vendors.length > 0 ? <p className="m-0">Some were added by {vendors.join(', ')}</p> : null}
       {page.card_fields_unchecked ? (
         <p className="m-0 text-warning">We couldn't check who added this page's card fields</p>
@@ -404,7 +405,7 @@ function CardFieldsNote({ page }: { page: SiteCheckedPage }) {
   );
 }
 
-function PageView({ taskId, page }: { taskId: string; page: SiteCheckedPage }) {
+function PageView({ taskId, page, skimmed }: { taskId: string; page: SiteCheckedPage; skimmed: boolean }) {
   return (
     <li className="px-4 py-2.5 border-b border-rule last:border-b-0">
       {page.probe ? (
@@ -423,7 +424,7 @@ function PageView({ taskId, page }: { taskId: string; page: SiteCheckedPage }) {
           <LoadLine key={l.profile} taskId={taskId} load={l} />
         ))}
       </ul>
-      <CardFieldsNote page={page} />
+      <CardFieldsNote page={page} skimmed={skimmed} />
     </li>
   );
 }
@@ -437,10 +438,24 @@ function pagesWithFindings(blocks: SiteBlock[]): Set<string> {
   return out;
 }
 
+/** Pages with a card_inputs finding: outside code added card fields there. */
+function pagesWithCardFindings(blocks: SiteBlock[]): Set<string> {
+  const out = new Set<string>();
+  for (const b of blocks) {
+    for (const f of b.findings) {
+      if (f.kind !== 'card_inputs') continue;
+      if (b.location_kind === 'page') out.add(b.location);
+      for (const p of f.pages ?? []) out.add(p);
+    }
+  }
+  return out;
+}
+
 function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReportData }) {
   const checked = report.checked;
   const pages = checked?.pages ?? [];
   const flagged = pagesWithFindings(report.blocks ?? []);
+  const skimmed = pagesWithCardFindings(report.blocks ?? []);
   // Clean pages fold into "N other pages clean"; the homepage always stays as the anchor.
   // A page whose card fields couldn't be checked stays in view: unchecked must not read as clean.
   const isClean = (p: SiteCheckedPage) =>
@@ -455,7 +470,7 @@ function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReport
       <div className="border border-line rounded-card overflow-hidden">
         <ul className="m-0 p-0 list-none">
           {shown.map((p) => (
-            <PageView key={p.index} taskId={taskId} page={p} />
+            <PageView key={p.index} taskId={taskId} page={p} skimmed={skimmed.has(p.url)} />
           ))}
         </ul>
         {folded.length > 0 ? (
@@ -465,7 +480,7 @@ function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReport
             </summary>
             <ul className="m-0 p-0 list-none border-t border-rule">
               {folded.map((p) => (
-                <PageView key={p.index} taskId={taskId} page={p} />
+                <PageView key={p.index} taskId={taskId} page={p} skimmed={skimmed.has(p.url)} />
               ))}
             </ul>
           </details>

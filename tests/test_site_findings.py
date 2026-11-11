@@ -622,6 +622,35 @@ def test_card_inputs_of_the_same_skimmer_merge_across_visitors_and_frames_are_bo
     assert f["visitors"] == ["default", "mobile-ios"]
     frames = f["details"]["frames"]
     assert len(frames) == 10 and all(len(u) <= 300 for u in frames)
+    assert f["details"]["first_unknown"] == many[0][:300]
+
+
+def test_card_inputs_are_one_finding_per_page_whatever_the_first_frame():
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_findings import build_blocks
+
+    page = "https://s.com/checkout/"
+    loads = [_load(0, page, "default", card_inputs=_cards(_card(frames=["https://evil.example/a.js"]))),
+             _load(0, page, "mobile-ios", card_inputs=_cards(_card(frames=["https://other.example/b.js"])))]
+    [b] = build_blocks(loads, "s.com", None)
+    [f] = b["findings"]
+    assert f["visitors"] == ["default", "mobile-ios"]
+    assert f["details"]["frames"] == ["https://evil.example/a.js"]  # the first load's
+    # an empty stack first, then a cross-site insertion: the finding names the cross-site code
+    load = _load(0, page, "default", card_inputs=_cards(_card(frames=[]), _card(frames=["https://evil.example/s.js"])))
+    [b] = build_blocks([load], "s.com", None)
+    [f] = b["findings"]
+    assert (f["details"]["frames"], f["details"]["first_unknown"]) == (["https://evil.example/s.js"], "https://evil.example/s.js")
+    # the same across loads: a later load with a named frame replaces an empty-stack one
+    loads = [_load(0, page, "default", card_inputs=_cards(_card(frames=[], via="unseen"))),
+             _load(0, page, "googlebot", card_inputs=_cards(_card(frames=["", "https://evil.example/s.js"],
+                                                                  first_unknown="https://evil.example/s.js")))]
+    [b] = build_blocks(loads, "s.com", None)
+    [f] = b["findings"]
+    assert f["details"]["frames"] == ["", "https://evil.example/s.js"] and f["visitors"] == ["default", "googlebot"]
+    # nothing named anywhere: the first verified-unknown insertion's
+    [b] = build_blocks([_load(0, page, "default", card_inputs=_cards(_card(frames=[""]), _card(frames=[])))], "s.com", None)
+    assert b["findings"][0]["details"]["frames"] == [""] and b["findings"][0]["details"]["first_unknown"] == ""
 
 
 def test_store_vendor_and_provider_insertions_are_not_findings():

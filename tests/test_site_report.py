@@ -496,3 +496,42 @@ def test_card_fields_skip_unusable_and_offsite_loads():
     loads[2].result.metadata["challenge"] = True
     pages = {p["url"]: p for p in build_report("s.com", "s.com", None, loads, 1, [], [])["checked"]["pages"]}
     assert (pages[page]["card_fields"], pages[page]["card_fields_unchecked"]) == (False, False)
+
+
+def test_unchecked_card_fields_keep_a_clean_site_from_reading_clean():
+    """Unchecked must never read as Clean: card fields whose owner couldn't be checked make an
+    otherwise clean site Partly checked; a Suspicious verdict is unaffected."""
+    from _support import _card, _cards, _load
+    from pnakotic.src.scanner.site_report import build_report
+
+    home = [_load(0, "https://s.com/", p) for p in ("default", "mobile-ios")]
+    unchecked = _load(1, "https://s.com/checkout/", "default",
+                      card_inputs=_cards(_card(frames=[], via="unseen", verified=False)))
+    v = build_report("s.com", "s.com", None, home + [unchecked], 1, [], [])["verdict"]
+    assert v["verdict"] == "partly_checked"
+    assert v["summary"] == "No malware found, but we couldn't check who added some card payment fields"
+    checked = _load(1, "https://s.com/checkout/", "default", card_inputs=_cards(present=1))
+    assert build_report("s.com", "s.com", None, home + [checked], 1, [], [])["verdict"]["verdict"] == "clean"
+    skim = _load(2, "https://s.com/pay/", "default", card_inputs=_cards(_card(frames=["https://evil.example/s.js"])))
+    assert build_report("s.com", "s.com", None, home + [unchecked, skim], 1, [], [])["verdict"]["verdict"] == "suspicious"
+
+
+def test_unseen_card_fields_without_the_whole_served_body_are_unchecked_not_outside_code():
+    """summarize's unseen insertion end to end: with no served body, or one cut at the cap, the
+    page's card fields may be in the part we didn't get, so no finding and the page is unchecked;
+    with the whole body and no card inputs in it, outside code it is."""
+    from _support import _load
+    from pnakotic.src.scanner.card_watch import summarize
+    from pnakotic.src.scanner.site_report import build_report
+    from pnakotic.src.scanner.yara_scan import MAX_BUFFER_BYTES
+
+    page = "https://s.com/checkout/"
+    whole = b"<html><body><form></form></body></html>"
+    cut = (whole + b" " * MAX_BUFFER_BYTES)[:MAX_BUFFER_BYTES]
+    for served, finding in ((None, False), (cut, False), (whole, True)):
+        load = _load(0, page, "default", card_inputs=summarize([], 1, "s.com", page, served, parsed={}))
+        report = build_report("s.com", "s.com", None, [load], 1, [], [])
+        kinds = [f["kind"] for b in report["blocks"] for f in b["findings"]]
+        assert kinds == (["card_inputs"] if finding else []), served is None
+        [p] = report["checked"]["pages"]
+        assert (p["card_fields"], p["card_fields_unchecked"]) == (True, not finding)

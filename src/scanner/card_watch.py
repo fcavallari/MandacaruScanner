@@ -68,6 +68,7 @@ from urllib.parse import urldefrag
 
 from .behavior import HOOK_PRELUDE
 from .code_origin import blocks_readable, judge_stack, parse_stack, stack_was_cut, trusted_inline_hashes, whole_lines
+from .yara_scan import MAX_BUFFER_BYTES  # the engine's cap on the served body (_served_body)
 
 MAX_EVENTS = 20  # card-insertion events kept per load
 MAX_STACK_CHARS = 4000
@@ -493,26 +494,28 @@ def summarize(events: List[Dict[str, Any]], present: int, site_host: str, landin
 
     ``verified`` is False only for an insertion that is unknown solely through page-URL frames
     on a load that couldn't check them, which is the scanner's failure, not outside code. The
-    reasons, in ``unverifiable``: ``parse_record`` (``parsed`` is None: ``Debugger.enable``
-    failed or the record overflowed), ``served_html`` (no served body to hash), ``charset``
+    reasons, in ``unverifiable``: ``served_html`` (no served body, or one the engine cut at
+    ``MAX_BUFFER_BYTES``: blocks past the cut can't be hashed, and an ``unseen`` insertion is
+    then unverified too, as the inputs may be in the part we didn't get), ``parse_record``
+    (``parsed`` is None: ``Debugger.enable`` failed or the record overflowed), ``charset``
     (the browser read the page in a charset whose blocks can't be hashed here:
     ``code_origin.blocks_readable``, normally checkable since Playwright hands over the decoded
     text; ``charset`` is ``document.characterSet`` from an isolated world, None when it couldn't
     be read) and ``script_hash`` (the hook reported a browser
     without ``CallSite.getScriptHash``, so its frames carry no hash; per event). An empty
-    stack, an eval or ``<anonymous>`` frame, a frame from another site and ``unseen`` are
-    always verified.
+    stack, an eval or ``<anonymous>`` frame and a frame from another site are always verified.
 
     Fails closed: card inputs on the page, no insertion recorded and none in the served HTML
     means the inputs got there in a way the hooks can't see, so an ``unseen`` insertion of
-    unknown code is added.
+    unknown code is added (verified only when the whole served body was read).
     """
     inline = trusted_inline_hashes(served, parsed)
     page_url = urldefrag(landing_url or "")[0]
-    if parsed is None:
-        unverifiable = "parse_record"  # type: Optional[str]
-    elif not served:
-        unverifiable = "served_html"
+    whole = bool(served) and len(served) < MAX_BUFFER_BYTES  # the engine cuts a longer body at the cap
+    if not whole:
+        unverifiable = "served_html"  # type: Optional[str]
+    elif parsed is None:
+        unverifiable = "parse_record"
     elif not blocks_readable(served, charset):
         unverifiable = "charset"
     else:
@@ -538,6 +541,7 @@ def summarize(events: List[Dict[str, Any]], present: int, site_host: str, landin
     if present > 0 and not events:
         text = served.decode("utf-8", "replace") if served else ""
         if not html_has_card_input(text):
+            # without the whole served body the inputs may be in the part we didn't get
             inserted.append({"via": "unseen", "owner": "unknown", "vendors": [], "frames": [], "cut": False,
-                             "verified": True, "first_unknown": ""})
+                             "verified": whole, "first_unknown": ""})
     return {"present": present, "inserted": inserted, "dropped": dropped, "unverifiable": unverifiable}

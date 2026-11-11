@@ -86,6 +86,7 @@ class _Finding:
         self.initiator = initiator
         self.offsite = offsite  # code on the page a visitor was sent to on another site
         self.frames: Optional[List[str]] = None  # card_inputs: the inserting call's frame URLs
+        self.first_unknown = ""  # card_inputs: the first unknown frame's URL among them
         self.visitors: List[str] = []
         self.pages: List[str] = []
         self.loaded_by: List[str] = []
@@ -122,7 +123,7 @@ class _Finding:
                 "scoring": self.scoring[:MAX_DETAIL_ITEMS],
                 "initiator": self.initiator,
                 "offsite": self.offsite,
-                **({"frames": self.frames} if self.frames is not None else {}),
+                **({"frames": self.frames, "first_unknown": self.first_unknown} if self.frames is not None else {}),
             },
         }
 
@@ -360,26 +361,29 @@ def card_insertions(result: ScanResult) -> List[dict]:
 
 def _card_inputs(c: _Collector, load: Load, site_host: str) -> None:
     """Card inputs that unknown code put into the page (card_watch.summarize): one finding per
-    load, from its first such insertion, keyed by the page and the first unknown frame's URL so
-    the same skimmer seen by several visitors merges. An insertion is outside code only when it
-    is ``verified``: one that is unknown solely through page-URL frames the load couldn't check
-    is the scanner's failure and is noted on the page instead (site_report). A missing flag
-    counts as verified. The store's, a payment provider's and known vendors' insertions are not
-    findings either; the page's details list them."""
+    page (key ``("card_inputs", page)``), so every visitor that saw it merges into it. Its
+    ``details.frames`` and ``details.first_unknown`` come from the first verified-unknown
+    insertion that names its first unknown frame, else from the first verified-unknown one; a
+    later load can only replace an unnamed one. An insertion is outside code only when it is
+    ``verified``: one that is unknown solely through what the load couldn't check is the
+    scanner's failure and is noted on the page instead (site_report). A missing flag counts as
+    verified. The store's, a payment provider's and known vendors' insertions are not findings
+    either; the page's details list them."""
     if ended_off_site(load.result, site_host):
         return  # another site's checkout is not the owner's page
-    for event in card_insertions(load.result):
-        if event.get("owner") != "unknown" or event.get("verified") is False:
-            continue
-        frames = event.get("frames")
-        frames = [_url(f) for f in frames if isinstance(f, str)][:MAX_CARD_FRAMES] if isinstance(frames, list) else []
-        first = _url(event.get("first_unknown"))
-        finding = c.add(load, ("card_inputs", load.page_url, first), severity="suspicious", kind="card_inputs",
-                        message=MESSAGES["card_inputs"], snippet=None, origin="rendered", location=load.page_url,
-                        location_kind="page", mechanism="card_inputs")
-        if finding.frames is None:
-            finding.frames = frames
+    outside = [e for e in card_insertions(load.result)
+               if e.get("owner") == "unknown" and e.get("verified") is not False]
+    if not outside:
         return
+    event = next((e for e in outside if _url(e.get("first_unknown"))), outside[0])
+    frames = event.get("frames")
+    frames = [_url(f) for f in frames if isinstance(f, str)][:MAX_CARD_FRAMES] if isinstance(frames, list) else []
+    first = _url(event.get("first_unknown"))
+    finding = c.add(load, ("card_inputs", load.page_url), severity="suspicious", kind="card_inputs",
+                    message=MESSAGES["card_inputs"], snippet=None, origin="rendered", location=load.page_url,
+                    location_kind="page", mechanism="card_inputs")
+    if finding.frames is None or (not finding.first_unknown and first):
+        finding.frames, finding.first_unknown = frames, first
 
 
 def _behaviour(c: _Collector, load: Load) -> None:

@@ -133,7 +133,10 @@ def test_summarize_fails_closed_when_inputs_appeared_unseen():
     unseen = {"via": "unseen", "owner": "unknown", "vendors": [], "frames": [], "cut": False, "verified": True,
               "first_unknown": ""}
     assert summarize([], 1, "shop.example", PAGE, b"<html><body></body></html>")["inserted"] == [unseen]
-    assert summarize([], 1, "shop.example", PAGE, None)["inserted"] == [unseen]
+    # no served body, or one cut at the cap: the inputs may well be in the part we didn't get, so
+    # the insertion can't be called outside code
+    missing = summarize([], 1, "shop.example", PAGE, None)
+    assert missing["inserted"] == [dict(unseen, verified=False)] and missing["unverifiable"] == "served_html"
     served = b"<form><input name='cardnumber' autocomplete='cc-number'></form>"
     assert summarize([], 1, "shop.example", PAGE, served)["inserted"] == []  # served with the page
     assert summarize([], 0, "shop.example", PAGE, None)["inserted"] == []  # no card inputs at all
@@ -173,9 +176,19 @@ def test_summarize_marks_page_url_frames_it_could_not_check():
     assert [(e["owner"], e["verified"]) for e in out["inserted"]] == [
         ("unknown", False), ("unknown", True), ("unknown", True), ("unknown", True), ("unknown", True), ("store", True)]
     assert [e["first_unknown"] for e in out["inserted"][3:5]] == ["", PAGE]  # the first unknown frame, as it is
-    # no served HTML to hash the inline blocks of
+    # no served HTML to hash the inline blocks of, or only its first MAX_BUFFER_BYTES
     none = summarize([HANDLER_ONLY], 1, "shop.example", PAGE, None, parsed={})
     assert none["unverifiable"] == "served_html" and none["inserted"][0]["verified"] is False
+    from pnakotic.src.scanner.yara_scan import MAX_BUFFER_BYTES
+
+    cut = (served + b" " * MAX_BUFFER_BYTES)[:MAX_BUFFER_BYTES]
+    out = summarize([HANDLER_ONLY, CROSS_SITE], 1, "shop.example", PAGE, cut, parsed={_hash("var a = 1;"): {(0, 20)}})
+    assert out["unverifiable"] == "served_html" and [e["verified"] for e in out["inserted"]] == [False, True]
+    unseen = summarize([], 1, "shop.example", PAGE, cut, parsed={})
+    assert [(e["via"], e["verified"]) for e in unseen["inserted"]] == [("unseen", False)]
+    # served_html wins over parse_record: an unseen insertion's check needs the body
+    both = summarize([], 1, "shop.example", PAGE, None, parsed=None)
+    assert both["unverifiable"] == "served_html" and both["inserted"][0]["verified"] is False
     # a browser without CallSite.getScriptHash: the hook says so on each event
     no_hash = dict(HANDLER_ONLY, stack=f"Error\n    at {PAGE}:1:9", no_hash=True)
     out = summarize([no_hash, dict(CROSS_SITE, no_hash=True)], 1, "shop.example", PAGE, served, parsed={})

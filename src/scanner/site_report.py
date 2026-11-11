@@ -203,9 +203,15 @@ def _count(n: int, noun: str) -> str:
     return "{} {}".format(n, noun if n == 1 else noun + "s")
 
 
-def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool, findings_more_total: int = 0) -> dict:
+NOTE_CARDS_UNCHECKED = "No malware found, but we couldn't check who added some card payment fields"
+
+
+def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool, findings_more_total: int = 0,
+                 cards_unchecked: bool = False) -> dict:
     """The site verdict (spec §5.5): the label and a one-line summary for the report header.
-    ``findings_more_total`` (findings dropped by the report-wide cap) counts in the summary."""
+    ``findings_more_total`` (findings dropped by the report-wide cap) counts in the summary.
+    ``cards_unchecked`` (a checked page's ``card_fields_unchecked``) keeps a would-be Clean
+    verdict at Partly checked: unchecked must never read as Clean."""
     severities = [f.get("severity") for b in blocks for f in b.get("findings") or []]
     not_checked = [l for l in loads if l.state == "not_checked"]
     homepage = [l for l in loads if l.page_index == 0]
@@ -225,6 +231,9 @@ def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool, find
           or 2 * sum(1 for l in later if l.state == "not_checked") > len(later)):
         verdict = "partly_checked"
         summary = "No malware found, but {} of {} checks couldn't run".format(len(not_checked), len(loads))
+    elif cards_unchecked:
+        verdict = "partly_checked"
+        summary = NOTE_CARDS_UNCHECKED
     else:
         verdict = "clean"
         summary = "Clean" if rules_loaded else "Clean (no malware rules loaded)"
@@ -346,16 +355,18 @@ def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str
     probe_url = next((_url(l.page_url) for l in loads if l.page_index == probe), None) if probe is not None else None
     for block in blocks:
         block["probe"] = block["location_kind"] == "page" and block["location"] == probe_url
+    checked = _checked(loads, rules_count, probe, site_host)
+    cards_unchecked = any(p["card_fields_unchecked"] for p in checked["pages"])
     return {
         "site": site_host,
         "entered": entered_host,
         "redirected_from": entered_host if entered_host != site_host else None,
-        "verdict": site_verdict(blocks, loads, rules_count > 0, findings_more_total),
+        "verdict": site_verdict(blocks, loads, rules_count > 0, findings_more_total, cards_unchecked),
         "blocks": blocks,
         "blocks_more": blocks_more,  # blocks past MAX_BLOCKS, plus blocks the findings cap left empty
         "findings_more_total": findings_more_total,  # findings dropped by the report-wide MAX_FINDINGS cap
         "external_scripts": external_scripts(loads, site_host, blocks),
-        "checked": _checked(loads, rules_count, probe, site_host),
+        "checked": checked,
         "blocked_hosts": list(dict.fromkeys(h[:253] for h in blocked_hosts if isinstance(h, str)))[:MAX_BLOCKED_HOSTS],
         "notes": list(notes),
         "challenge": challenge_summary(loads),  # a CDN bot check kept some loads out

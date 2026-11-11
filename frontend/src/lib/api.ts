@@ -70,6 +70,7 @@ export interface SiteFindingDetails {
   initiator: string | null;
   offsite?: boolean; // code on the page a visitor was sent to on another site; `pages` are the owner's pages that sent them
   frames?: string[]; // card_inputs: the URLs of the code that inserted the card fields ("" = code with no file), at most 10
+  first_unknown?: string; // card_inputs: the first of those frames that is outside code ("" when none is named)
 }
 
 export interface SiteFinding {
