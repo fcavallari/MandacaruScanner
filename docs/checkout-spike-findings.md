@@ -50,7 +50,8 @@ present, and the block summary showing `$6.00`.
 
 - **The response.** The add-to-cart URL answers `200` on the homepage. It does not redirect.
 - **Notices.** The page that loads shows no notice. The "has been added to your cart" notice appears
-  later, on the checkout (it is in every Q4 run's notices).
+  later, on the block checkout (it is in every block run's notices in Q4, and in none of the classic
+  runs').
 - **Products that can't be added.** The sold-out product (14) and the variable product (15) add
   nothing and show no notice. So the cart must be checked through the Store API after the add.
 - **Loading the URL twice** adds a second unit.
@@ -112,14 +113,18 @@ GET /wp-json/wc/store/v1/products/14 (sold out) -> 200: is_purchasable=True is_i
   is a `PUT` that `wp.apiFetch` sends as `POST` with `X-HTTP-Method-Override`; see
   `wc-blocks-data.js` (`method:"PUT"`) and `api-fetch` (`X-HTTP-Method-Override`).
 
-  The order appears inside the click's `POST /wp-json/wc/store/v1/checkout`. That request creates
-  the `checkout-draft`, reserves stock, tries the payment, and returns. When the gateway declines,
-  the order is left **`pending`**, not `checkout-draft` and not `failed`. Its stock hold is
-  released at once. No `checkout-draft` row was visible at any snapshot.
+  **Observed:** the order appears only after the click's `POST /wp-json/wc/store/v1/checkout`.
+  When the gateway declines, the order is left **`pending`**, not `checkout-draft` and not
+  `failed`. The stock-hold table was empty right afterwards. No `checkout-draft` row was visible
+  at any snapshot.
 
-  The WooCommerce source says the same (`src/StoreApi/Routes/V1/Checkout.php`): "Draft order
-  creation is deferred to POST (place-order time)". Since 9.2, "Stock is no longer held for all
-  draft orders, nor on non-POST requests".
+  **Read from the source, not observed** (`src/StoreApi/Routes/V1/Checkout.php`): inside that one
+  POST, WooCommerce creates the `checkout-draft`, reserves stock, tries the payment, and releases
+  the hold when it fails. The file says: "As of WooCommerce 10.8.0 the Store API defers draft order
+  creation to place-order time … rather than on the first PATCH". So **before 10.8.0**, the draft
+  was created by the first checkout update, which is a form interaction before any click. Only
+  11.2.2 was tested here. Since 9.2, "Stock is no longer held for all draft orders, nor on
+  non-POST requests".
 - **Classic checkout.** Load sends `POST /?wc-ajax=update_order_review`. The click sends
   `POST /?wc-ajax=checkout`, which creates the order. A declined payment leaves it `pending`,
   holding stock for `woocommerce_hold_stock_minutes` (60): `expires` = created + 60 min. The hold
@@ -172,7 +177,9 @@ with stock held for 60 min. With the guard on, both create nothing.
 
 ## Q5. Does CDP Fetch on the page session reach a cross-site iframe and workers?
 
-**Answer.** It depends on the build.
+**Answer.** It depends on the build. The builds were tested on macOS (Google Chrome 157, Chromium
+148), not inside the Linux Docker image; the Linux builds are expected to behave the same but were
+not run.
 
 - **In the builds Pnakotic ships, no.** That is Google Chrome stable (`BROWSER_CHANNEL=chrome`,
   amd64 image) and full Chromium (`chromium`, arm64 image). In both, the 127.0.0.1 iframe on the
@@ -322,7 +329,8 @@ the store's.
   `wp_wc_reserved_stock`; `cleanup.py` removed it.
 - **Carts.** 45 carts from the runs stay in `wp_woocommerce_sessions` until they expire.
 - **Settings.** The skimmer is off (`0`), cod and bacs are off, and the checkout page is the block
-  page (id 7). Product 11 is back to unmanaged stock (`_stock` NULL).
+  page (id 7). Product 11 is back to unmanaged stock (`_stock` NULL). The two cod orders had raised
+  its `total_sales` to 2; it was reset to 0 in the post meta and in `wp_wc_product_meta_lookup`.
 - **Testbed.** Still running.
 
 ## What this changes in the design
@@ -335,17 +343,25 @@ Each item quotes the spec as written, then proposes a replacement.
    > decision): WooCommerce creates it whenever anyone opens the checkout with a cart, hides it from
    > the orders list, deletes it on its own, and holds stock for it only for a few minutes."
 
-   WooCommerce 11.2.2 creates no draft on opening or filling the checkout (Q4). The draft exists
-   only inside the place-order POST, which the guard fails. Stock is held only from that POST, for
-   `woocommerce_hold_stock_minutes` (60 by default).
+   This depends on the WooCommerce version. In 11.2.2, opening and filling the checkout creates no
+   draft (Q4). The draft exists only inside the place-order POST, which the guard fails. The source
+   says this deferral started in 10.8.0. Before that, the first checkout update (a form
+   interaction, before the guard is armed) created the draft. Stock is held only from the
+   place-order POST, for `woocommerce_hold_stock_minutes` (60 by default).
 
-   Replacement: "No order of any status may be created on someone's store, drafts included. In
-   WooCommerce 11, block and classic, the order is created only by the Place Order request, which
-   the guard fails, so a guarded check leaves no order and no stock hold."
+   Replacement: "No order may be created on someone's store beyond what WooCommerce itself makes
+   before the click.
+   - WooCommerce 10.8.0 and later (block and classic): the order is created only by the Place Order
+     request, which the guard fails, so a guarded check leaves no order and no stock hold.
+   - Block checkout before 10.8.0: filling the form creates a `checkout-draft`, which is accepted
+     as before. The guard must keep it in `checkout-draft`."
+
+   The check can't count orders on someone else's store. So the guard's rule stays "fail the order
+   request". The version split only changes what the report and the live test may expect.
 
    The user's decision in §9.7 ("The block checkout's automatic `checkout-draft` order is
-   acceptable; no other order may be created") rested on the old behaviour. **Proposal, for the
-   user to confirm:** make it "no order of any kind".
+   acceptable; no other order may be created") still holds for older stores. **For the user to
+   confirm:** on 10.8.0 and later, expect no order at all.
 
 2. **What the guard must prevent.**
 
@@ -368,8 +384,9 @@ Each item quotes the spec as written, then proposes a replacement.
    > §6: "After every run, WooCommerce has no new order outside `checkout-draft` status, and no draft
    > has moved on to pending, failed or any other status."
 
-   Replacement: "After every run, WooCommerce has no new order of any status (query
-   `--status=checkout-draft` separately), and no existing order changed."
+   Replacement, for a testbed on WooCommerce 10.8.0 or later: "After every run, WooCommerce has no
+   new order of any status (query `--status=checkout-draft` separately), and no existing order
+   changed." On an older testbed the current wording stays.
 
 3. **Fetch on the page session doesn't cover cross-site iframes.**
 
@@ -409,10 +426,18 @@ Each item quotes the spec as written, then proposes a replacement.
    > §4.5: "Fail closed. If the guard can't confirm it is in place for every frame and worker of the
    > page, the click doesn't happen."
 
-   Replacement: "Confirmed means `Fetch.enable` succeeded on every page, iframe and shared_worker
-   target the auto-attach reported, each before it was let run. Dedicated `worker` targets have no
-   Fetch domain (`'Fetch.enable' wasn't found`); their requests are paused on the owning frame's
+   Replacement: "Confirmed means all of these hold:
+   - Auto-attach was on, with `waitForDebuggerOnStart`, before the first navigation.
+   - Every page, iframe and shared_worker target it reported arrived with
+     `waitingForDebugger: true`.
+   - `Fetch.enable` succeeded on each of those targets before it was let run.
+
+   Arming then only switches the policy from record to fail. A success reply alone is not proof:
+   in mode B0, `Fetch.enable` succeeded and requests still leaked. Dedicated `worker` targets have
+   no Fetch domain (`'Fetch.enable' wasn't found`); their requests are paused on the owning frame's
    session, so they count as covered by it."
+
+   One case was not tested: attaching over the raw connection to an iframe that already exists.
 
    §7 says "CDP auto-attach and per-target `Fetch.enable`, or something else" is left to the
    builder. The spike narrows that. Playwright's `CDPSession` can't address flattened child
