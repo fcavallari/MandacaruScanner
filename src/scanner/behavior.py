@@ -78,7 +78,9 @@ CLIPBOARD_COMMAND = re.compile(
 #                undefined), so a hook can cut its own frames off a stack with captureStackTrace.
 #                With `nest` (an object), nest.depth counts the wrappers running the original
 #                right now: page code the original runs (an inserted script, a custom element's
-#                callback) has that many of our frames under it.
+#                callback) has that many of our frames under it. If before(...) returns a
+#                function, it runs (errors swallowed) after the original returned, so a hook
+#                can look at what the call did.
 # Function.prototype.toString is patched to read nativeText. Each hook script installs its own
 # prelude, so with two scripts the second patch delegates to the first and both stay native.
 # Calls go through Reflect.apply saved here, so a page that redefines Function.prototype.apply
@@ -98,10 +100,17 @@ HOOK_PRELUDE = r"""
     const orig = owner[key];
     if (typeof orig !== 'function') return undefined;
     const wrapped = function () {
-      try { rApply(before, this, arguments); } catch (e) {}
-      if (!nest) return rApply(orig, this, arguments);
-      nest.depth += 1;
-      try { return rApply(orig, this, arguments); } finally { nest.depth -= 1; }
+      let after;
+      try { after = rApply(before, this, arguments); } catch (e) {}
+      let result;
+      if (!nest) {
+        result = rApply(orig, this, arguments);
+      } else {
+        nest.depth += 1;
+        try { result = rApply(orig, this, arguments); } finally { nest.depth -= 1; }
+      }
+      if (typeof after === 'function') { try { after(); } catch (e) {} }
+      return result;
     };
     nativeText.set(wrapped, rApply(fnToString, orig, []));
     try { Object.defineProperty(wrapped, 'name', { value: orig.name }); } catch (e) {}

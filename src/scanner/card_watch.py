@@ -10,7 +10,10 @@ Page side: an init script (installed before any page script, like ``behavior.py`
 same ``HOOK_PRELUDE`` so wrapped functions keep their native ``toString()``) wraps the DOM
 insertion methods on their prototypes and the ``innerHTML`` / ``outerHTML`` setters. Each call
 tests its argument: a node with ``matches`` / ``querySelector`` and ``CARD_SELECTOR``, an HTML
-string with ``CARD_HTML_RE`` on its first 200 000 characters. Only a call that puts a card input
+string with ``CARD_HTML_RE`` on its first 200 000 characters. HTML handed over as an object
+(``new String(...)``, an array, TrustedHTML) is not converted, which would run the page's code:
+the hook looks at what the call added once it returned (the element's subtree for ``innerHTML``,
+the nodes around and inside it for ``insertAdjacentHTML`` / ``outerHTML``). Only a call that puts a card input
 into this document (the target is connected to it) is reported, so a form built detached and then
 attached is one insertion, and a template or a parsed document is none.
 
@@ -18,10 +21,13 @@ On a hit the hook takes the stack with the ``Error.captureStackTrace`` saved at 
 wrapper, so the hook's own frames above it are not on it. For that one call it sets
 ``Error.stackTraceLimit`` to 31 (not 30: a stack deeper than the 30 frames ``code_origin`` reads
 then shows it was cut) and ``Error.prepareStackTrace`` to its own formatter, then restores both
-exactly. The formatter writes each frame as ``at <url>:<line>:<column>`` with the script's real URL
-(V8's own text shows a ``//# sourceURL`` name instead, which a cross-site script can set to a store
-file), and any frame without a URL (eval, an inline script added at runtime, a builtin) as
-``at <anonymous>``, which ``code_origin`` counts as unknown. Page code that a hooked call runs (a
+exactly. The formatter writes each frame as ``at <url>:<line>:<column> sha256=<hash>`` with the
+script's real URL (V8's own text shows a ``//# sourceURL`` name instead, which a cross-site script
+can set to a store file) and V8's hash of the script, which is how ``code_origin`` tells a served
+inline block from an event handler set at runtime (both run at the page URL). Any frame without a
+URL (eval, a string timer, a ``javascript:`` URL, an inline script added at runtime) is written
+``at <anonymous>``, which ``code_origin`` counts as unknown. A builtin (``forEach``, the code that
+runs a ``Promise`` executor) has no script at all, neither file nor line, and is left out. Page code that a hooked call runs (a
 custom element's callback, an inserted inline script) has our wrapper's URL-less frame under it;
 the hook counts how many of its wrappers are running and leaves out that many of the deepest
 URL-less frames, so every other one still shows. If the page has made either property an accessor
@@ -52,7 +58,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urldefrag
 
 from .behavior import HOOK_PRELUDE
-from .code_origin import inline_line_ranges, parse_stack, stack_owner, stack_was_cut
+from .code_origin import inline_script_hashes, parse_stack, stack_owner, stack_was_cut
 
 MAX_EVENTS = 20  # card-insertion events kept per load
 MAX_STACK_CHARS = 4000
@@ -151,6 +157,12 @@ _INIT_SCRIPT = r"""
     const isConnected = getter(Node.prototype, 'isConnected');
     const ownerDocument = getter(Node.prototype, 'ownerDocument');
     const childCount = getter(Element.prototype, 'childElementCount');
+    const parentOf = getter(Node.prototype, 'parentNode');
+    const prevOf = getter(Node.prototype, 'previousSibling');
+    const nextOf = getter(Node.prototype, 'nextSibling');
+    const firstOf = getter(Node.prototype, 'firstChild');
+    const lastOf = getter(Node.prototype, 'lastChild');
+    const HASH_RE = /^[0-9a-f]{64}$/;
     const SELECTOR = __SELECTOR__;
     const HTML_RE = new RegExp(__HTML_RE__, 'i');
     const nest = { depth: 0 };  // our wrappers running their original right now
@@ -182,15 +194,19 @@ _INIT_SCRIPT = r"""
           site = {
             file: uncurry(proto.getFileName), line: uncurry(proto.getLineNumber),
             column: uncurry(proto.getColumnNumber), isEval: uncurry(proto.isEval),
+            hash: uncurry(proto.getScriptHash),  // null when this V8 has none: page frames then read unknown
           };
         }
       } catch (e) {}
       restore('prepareStackTrace', prep);
     }
     // The stack as text code_origin reads. Each frame is the script's real URL (getFileName, not
-    // the //# sourceURL name V8's own text shows, which a script can set to anything); code
-    // without a URL (eval, an inline script added at runtime, a builtin, our own wrappers) is
-    // "<anonymous>". When `drop` of our wrappers are running under this call (page code that
+    // the //# sourceURL name V8's own text shows, which a script can set to anything) and V8's
+    // SHA-256 of the script (" sha256=<hex>", so code_origin can tell a served inline block from
+    // an event handler set at runtime, both at the page URL); code without a URL (eval, a string
+    // timer, a javascript: URL, an inline script added at runtime, our own wrappers) is
+    // "<anonymous>". A builtin (Array.prototype.forEach, a Promise executor's caller) has no
+    // script at all, neither file nor line, and is left out: it is nobody's code. When `drop` of our wrappers are running under this call (page code that
     // a hooked call ran, such as a custom element's callback), the deepest `drop` script frames
     // without a URL are left out: ours are among them, and whichever are left out, every other
     // URL-less frame still shows. Only when the stack is whole (fewer frames than the limit) and
@@ -211,8 +227,11 @@ _INIT_SCRIPT = r"""
           const s = sites[i];
           if (site.isEval(s)) { out += '\n    at eval (eval at <anonymous>)'; continue; }
           const file = site.file(s);
+          if ((file === null || file === undefined) && (site.line(s) === null || site.line(s) === undefined)) continue;
           if (typeof file === 'string' && file !== '') {
-            out += '\n    at ' + slice(file, 0, 1000) + ':' + site.line(s) + ':' + site.column(s);
+            const hash = site.hash === null ? '' : site.hash(s);
+            out += '\n    at ' + slice(file, 0, 1000) + ':' + site.line(s) + ':' + site.column(s)
+                   + (typeof hash === 'string' && exec(HASH_RE, hash) !== null ? ' sha256=' + hash : '');
             continue;
           }
           if (drop > 0 && file === '') {
@@ -279,23 +298,64 @@ _INIT_SCRIPT = r"""
       for (let i = 0; i < args.length; i++) if (hasCard(args[i])) return true;
       return false;
     };
+    // HTML given as an object (new String(...), an array, TrustedHTML) is not converted here, as
+    // that would run the page's code: the call's result is looked at once the original returned.
+    const isObject = (v) => v !== null && (typeof v === 'object' || typeof v === 'function');
+    const subtreeHasCard = (n) => {
+      const type = nodeType(n);
+      if (type === 1) return elementQuery(n, SELECTOR) !== null;
+      if (type === 11) return fragmentQuery(n, SELECTOR) !== null;
+      return false;
+    };
+    // a card input among the children of `container` after `after` (or from the first) up to `before`
+    const newBetween = (container, after, before) => {
+      if (container === null) return false;
+      let n = after === null ? firstOf(container) : nextOf(after);
+      for (let i = 0; n !== null && n !== before && i < 5000; i++) {
+        if (hasCard(n)) return true;
+        n = nextOf(n);
+      }
+      return false;
+    };
+    // what insertAdjacentHTML / outerHTML can add: around `target` in its parent, and in it
+    const aroundAndInside = (target) => {
+      const parent = parentOf(target), prev = prevOf(target), next = nextOf(target);
+      const first = firstOf(target), last = lastOf(target);
+      return () => newBetween(parent, prev, target) || newBetween(parent, target, next)
+                   || newBetween(target, null, first) || (last !== null && newBetween(target, last, null));
+    };
 
     const hook = (owner, key, test) => {
       if (!owner) return;
       const d = getDesc(owner, key);
       const length = d && typeof d.value === 'function' ? d.value.length : 0;
       let self;
-      self = wrap(owner, key, function () { if (test(this, arguments)) report(key, self); }, nest);
+      // test returns true (report now) or a check to run after the original returned
+      self = wrap(owner, key, function () {
+        const hit = test(this, arguments);
+        if (hit === true) report(key, self);
+        else if (typeof hit === 'function') return () => { if (hit() === true) report(key, self); };
+        return undefined;
+      }, nest);
       if (self) { try { defProp(self, 'length', { value: length }); } catch (e) {} }
     };
-    const hookSetter = (proto, key) => {
+    const hookSetter = (proto, key, later) => {
       const d = proto ? getDesc(proto, key) : undefined;
       if (!d || typeof d.set !== 'function' || !d.configurable) return;
       const setter = d.set;
       const patched = function (v) {
-        try { if (live(this) && htmlHasCard(v)) report(key, patched); } catch (e) {}
+        let check = null;
+        try {
+          if (live(this)) {
+            if (typeof v === 'string') { if (htmlHasCard(v)) report(key, patched); }
+            else if (isObject(v)) check = later(this);
+          }
+        } catch (e) {}
+        let result;
         nest.depth += 1;
-        try { return rApply(setter, this, arguments); } finally { nest.depth -= 1; }
+        try { result = rApply(setter, this, arguments); } finally { nest.depth -= 1; }
+        if (check !== null) { try { if (check() === true) report(key, patched); } catch (e) {} }
+        return result;
       };
       nativeText.set(patched, rApply(fnToString, setter, []));
       try { defProp(patched, 'name', { value: setter.name }); } catch (e) {}
@@ -306,7 +366,14 @@ _INIT_SCRIPT = r"""
     const first = (target, args) => live(target) && hasCard(args[0]);
     const second = (target, args) => live(target) && hasCard(args[1]);
     const any = (target, args) => live(target) && anyCard(args);
-    const markup = (index) => (target, args) => live(target) && htmlHasCard(args[index]);
+    // HTML in args[index]: a string is tested now; an object, after the call, where `later` looks
+    const markup = (index, later) => (target, args) => {
+      if (!live(target)) return false;
+      const v = args[index];
+      if (typeof v === 'string') return htmlHasCard(v);
+      return isObject(v) ? later(target) : false;
+    };
+    const inside = (target) => () => subtreeHasCard(target);
 
     hook(Node.prototype, 'appendChild', first);
     hook(Node.prototype, 'insertBefore', first);
@@ -321,13 +388,16 @@ _INIT_SCRIPT = r"""
       hook(proto, 'before', any);
       hook(proto, 'after', any);
     }
-    hook(Element.prototype, 'insertAdjacentHTML', markup(1));
+    hook(Element.prototype, 'insertAdjacentHTML', markup(1, aroundAndInside));
     hook(Element.prototype, 'insertAdjacentElement', second);
-    hook(Element.prototype, 'setHTMLUnsafe', markup(0));
-    if (window.ShadowRoot) hook(ShadowRoot.prototype, 'setHTMLUnsafe', markup(0));
-    hookSetter(Element.prototype, 'innerHTML');
-    hookSetter(Element.prototype, 'outerHTML');
-    if (window.ShadowRoot) hookSetter(ShadowRoot.prototype, 'innerHTML');
+    hook(Element.prototype, 'setHTMLUnsafe', markup(0, inside));
+    if (window.ShadowRoot) hook(ShadowRoot.prototype, 'setHTMLUnsafe', markup(0, inside));
+    hookSetter(Element.prototype, 'innerHTML', inside);
+    hookSetter(Element.prototype, 'outerHTML', (target) => {
+      const parent = parentOf(target), prev = prevOf(target), next = nextOf(target);
+      return () => newBetween(parent, prev, next);
+    });
+    if (window.ShadowRoot) hookSetter(ShadowRoot.prototype, 'innerHTML', inside);
   } catch (e) {}
 })();
 """
@@ -393,14 +463,14 @@ def summarize(events: List[Dict[str, Any]], present: int, site_host: str, landin
     unreadable frame is ``""``), and how many insertions were not kept (``dropped``).
 
     ``landing_url`` is the document the served HTML belongs to: a frame at that URL is the
-    store's only inside a served inline script block. ``cut`` is true when part of the stack was
+    store's only when its script hash is that of a served inline script block. ``cut`` is true when part of the stack was
     left out (over 4 000 characters or over 30 frames); the owner is decided on what was kept.
 
     Fails closed: card inputs on the page, no insertion recorded and none in the served HTML
     means the inputs got there in a way the hooks can't see, so an ``unseen`` insertion of
     unknown code is added.
     """
-    inline = inline_line_ranges(served)
+    inline = inline_script_hashes(served)
     page_url = urldefrag(landing_url or "")[0]
     inserted = []  # type: List[Dict[str, Any]]
     for event in events[:MAX_EVENTS]:

@@ -50,36 +50,44 @@ def test_same_site_is_store_and_ip_and_localhost_are_different_owners():
     assert frame_owner(Frame("", None, True), "shop.com", page, []) == "unknown"
 
 
-def test_inline_frame_is_store_only_inside_a_served_script_block():
+def test_inline_frame_is_store_only_when_its_script_is_a_served_block():
+    """A page-URL frame is store code only when its script hash is a served inline block's. Its
+    line is no proof: an event handler set at runtime also runs at the page URL, at any line."""
     from pnakotic.src.scanner.code_origin import Frame, frame_owner
-    blocks = [(5, 9)]
+    served, handler = "a" * 64, "b" * 64
     page = "https://shop.com/checkout/"
-    assert frame_owner(Frame(page, 7, False), "shop.com", page, blocks) == "store"
-    assert frame_owner(Frame(page, 2, False), "shop.com", page, blocks) == "unknown"
-    assert frame_owner(Frame(page + "#x", 7, False), "shop.com", page, blocks) == "store"
-    assert frame_owner(Frame(page, 2, False), "shop.com", page + "#y", blocks) == "unknown"
-    assert frame_owner(Frame(page, None, False), "shop.com", page, blocks) == "unknown"
-    assert frame_owner(Frame(page, 7, False), "shop.com", page, None) == "unknown"
+    assert frame_owner(Frame(page, 7, False, served), "shop.com", page, {served}) == "store"
+    assert frame_owner(Frame(page + "#x", 7, False, served), "shop.com", page, {served}) == "store"
+    assert frame_owner(Frame(page, 7, False, handler), "shop.com", page, {served}) == "unknown"
+    assert frame_owner(Frame(page, 7, False), "shop.com", page, {served}) == "unknown"  # no hash: unknown
+    assert frame_owner(Frame(page, 7, False, served), "shop.com", page, None) == "unknown"
+    assert frame_owner(Frame(page, 7, False, served), "shop.com", page + "#y", set()) == "unknown"
+    # another file of the site needs no hash
+    assert frame_owner(Frame("https://shop.com/a.js", 7, False), "shop.com", page, set()) == "store"
 
 
-def test_any_unknown_frame_wins_and_empty_stack_is_unknown():
-    from pnakotic.src.scanner.code_origin import Frame, stack_owner
-    page = "https://shop.com/checkout/"
-    store = Frame("https://shop.com/wp-includes/js/jquery/jquery.min.js", 2, False)
-    assert stack_owner([store, Frame("https://evil.io/x.js", 1, False)], "shop.com", page, [])[0] == "unknown"
-    assert stack_owner([store, Frame("https://static.hotjar.com/c/h.js", 1, False)], "shop.com", page, []) == ("vendor", ["Hotjar"])
-    assert stack_owner([], "shop.com", page, [])[0] == "unknown"
+def test_parse_stack_reads_the_script_hash_after_the_location():
+    from pnakotic.src.scanner.code_origin import parse_stack
+    h = "0123456789abcdef" * 4
+    s = (f"Error\n    at https://shop.com/checkout/:3:5 sha256={h}\n    at https://shop.com/a.js:1:1\n"
+         f"    at f (https://shop.com/b.js:2:2) sha256={h[:-1]}\n")
+    assert [(f.url, f.line, f.hash) for f in parse_stack(s)] == [
+        ("https://shop.com/checkout/", 3, h), ("https://shop.com/a.js", 1, None), ("", None, None)]
 
 
-def test_stack_owner_store_provider_and_vendor_names_are_unique_in_order():
-    from pnakotic.src.scanner.code_origin import Frame, stack_owner
-    page = "https://shop.com/checkout/"
-    f = lambda u: Frame(u, 1, False)
-    assert stack_owner([f("https://shop.com/a.js"), f("https://js.stripe.com/v3/")],
-                       "shop.com", page, []) == ("store", [])
-    frames = [f("https://static.hotjar.com/a.js"), f("https://www.clarity.ms/t.js"),
-              f("https://script.hotjar.com/b.js"), f("https://shop.com/a.js")]
-    assert stack_owner(frames, "shop.com", page, []) == ("vendor", ["Hotjar", "Microsoft Clarity"])
+def test_inline_script_hashes_are_the_served_blocks_as_the_browser_runs_them():
+    import hashlib
+
+    from pnakotic.src.scanner.code_origin import inline_script_hashes, inline_script_texts
+    html = ("<html>\r\n<script>\r\nvar a = 'caf\u00e9';\rvar b;\r\n</script>\r\n<script src='x.js'></script>"
+            "<script>one()</script>\n").encode("utf-8")
+    assert inline_script_texts(html) == ["\nvar a = 'caf\u00e9';\nvar b;\n", "one()"]
+    assert inline_script_hashes(html) >= {hashlib.sha256(t.encode("utf-8")).hexdigest()
+                                          for t in ("\nvar a = 'caf\u00e9';\nvar b;\n", "one()")}
+    assert inline_script_hashes(None) == set() and inline_script_hashes(b"") == set()
+    # a page with no declared charset is read as windows-1252 (0x80 is the euro sign there, 0x81 is U+0081)
+    raw = b"<script>x = '\x80\x81\xe9'</script>"
+    assert hashlib.sha256("x = '\u20ac\u0081\u00e9'".encode("utf-8")).hexdigest() in inline_script_hashes(raw)
 
 
 def test_inline_line_ranges_are_one_based_line_spans_of_script_blocks():

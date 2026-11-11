@@ -472,6 +472,55 @@ async def test_store_code_run_inside_a_hooked_call_is_still_the_stores(site_serv
 
 @requires_browser
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/card-onerror-shift", "/card-onerror-min"])
+async def test_an_event_handler_set_at_runtime_is_not_a_served_block(site_server, tmp_path, path):
+    """A handler attribute a cross-site script sets runs at the page URL, at a line inside a served
+    inline block (newline-shifted, or line 1 of a one-line page): its script hash is not a served
+    block's, so it is unknown code."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}{path}")
+    [e] = r.metadata["card_inputs"]["inserted"]
+    assert e["frames"] == [f"{site_server}{path}"]  # the handler's own frame, at the page URL
+    assert e["owner"] == "unknown"
+
+
+@requires_browser
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/card-served-inline", "/card-served-inline-1252"])
+async def test_a_served_inline_script_is_the_stores(site_server, tmp_path, path):
+    """CRLF line ends and non-ASCII text in the block, on a UTF-8 page and on one with no declared
+    charset: its hash still matches the served text."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}{path}")
+    [e] = r.metadata["card_inputs"]["inserted"]
+    assert (e["via"], e["owner"], e["frames"]) == ("appendChild", "store", [f"{site_server}{path}"])
+
+
+@requires_browser
+@pytest.mark.asyncio
+async def test_html_given_as_an_object_is_seen_after_the_call(site_server, tmp_path):
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-object-html")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] == 3
+    assert [(e["via"], e["owner"]) for e in ci["inserted"]] == [
+        ("innerHTML", "unknown"), ("insertAdjacentHTML", "unknown"), ("outerHTML", "unknown")]
+    port = site_server.rsplit(":", 1)[1]
+    assert all(e["frames"] == [f"http://localhost:{port}/object-html.js"] for e in ci["inserted"])
+
+
+@requires_browser
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path,owner", [("/card-builtins-store", "store"), ("/card-builtins-skim", "unknown")])
+async def test_builtin_frames_are_nobodys(site_server, tmp_path, path, owner):
+    """forEach and a Promise executor put a builtin frame between two of the inserting script's
+    own frames: it is left out, so the owner is the script's."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}{path}")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] == 2
+    assert [e["owner"] for e in ci["inserted"]] == [owner, owner]
+    assert all(len(e["frames"]) == 2 and "" not in e["frames"] for e in ci["inserted"])
+
+
+@requires_browser
+@pytest.mark.asyncio
 async def test_url_probe_has_no_card_inputs(site_server, tmp_path):
     engine = _site_engine(tmp_path)
     async with engine.browser_session() as (browser, _):

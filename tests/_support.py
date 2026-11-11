@@ -133,6 +133,11 @@ _CARD_FORM = ("'<label>Card number <input id=\"payment-numberInput\" name=\"numb
               " + '<label>CVC <input id=\"payment-cvcInput\" name=\"cvc\" autocomplete=\"cc-csc\"></label>'")
 _INLINE_FILLER = "\n".join(f"var storeSetting{i} = {i};" for i in range(38))  # served lines 2-40
 
+_SERVED_INLINE = ("<script>\r\n// Caf\u00e9 \u20ac checkout \u2013 store code\r\n"
+                  "var f = document.createElement('form');\r\n"
+                  "f.innerHTML = '<input autocomplete=\"cc-number\">';\r\n"
+                  "document.body.appendChild(f);\r\n</script>")
+
 CARD_PAGES = {
     # the store's own script builds a card form (detached, then attached: one insertion)
     "/card-store": _checkout("<script src='/js/form.js'></script>"),
@@ -162,6 +167,27 @@ CARD_PAGES = {
     # the store's custom element builds its card form when it is attached (appendChild, then
     # innerHTML): the store's code runs inside our hooked call, under our wrapper's frame
     "/card-custom-element": _checkout("<script src='/js/element.js'></script>"),
+    # after load, a cross-site script sets an onerror handler whose text starts with 5 newlines,
+    # so the handler (at the page URL) runs at line 6, inside the served block on lines 2-33
+    "/card-onerror-shift": ("<!doctype html>\n<html><head><title>Checkout</title><script>\n"
+                            + "\n".join(f"var storeSetting{i} = {i};" for i in range(31))
+                            + "\n</script></head>\n<body><h1>Checkout</h1>"
+                            + _load_script("http://localhost:{port}/onerror-shift.js") + "</body></html>"),
+    # the same on a one-line (minified) page: the handler's line 1 is the served block's line
+    "/card-onerror-min": ("<html><head><title>Checkout</title><script>var storeCfg=1;</script></head><body>"
+                          "<h1>Checkout</h1>" + _load_script("http://localhost:{port}/onerror-min.js")
+                          + "</body></html>"),
+    # the store's own served inline script inserts card fields (CRLF line ends, non-ASCII text):
+    # proven the store's by its script hash
+    "/card-served-inline": _checkout(_SERVED_INLINE).replace("<head>", "<head><meta charset='utf-8'>"),
+    # the same page without a declared charset (Chromium reads it as windows-1252)
+    "/card-served-inline-1252": _checkout(_SERVED_INLINE),
+    # HTML handed over as objects, which the hook must not convert (a cross-site script)
+    "/card-object-html": _checkout(_load_script("http://localhost:{port}/object-html.js")),
+    # the store's script inserts from inside forEach and a Promise executor (builtin frames)
+    "/card-builtins-store": _checkout("<script src='/js/builtins.js'></script>"),
+    # the same code from another site
+    "/card-builtins-skim": _checkout(_load_script("http://localhost:{port}/builtins.js")),
 }
 CARD_SCRIPTS = {
     "/js/form.js": ("var f = document.createElement('form'); var i = document.createElement('input');\n"
@@ -210,11 +236,30 @@ CARD_SCRIPTS = {
                        "document.body.appendChild(document.createElement('pay-form'));\n"
                        "var holder = document.createElement('div'); document.body.appendChild(holder);\n"
                        "holder.innerHTML = '<pay-form></pay-form>';\n"),
+    "/onerror-shift.js": ("setTimeout(function () { var im = document.createElement('img');\n"
+                          "  im.setAttribute('onerror', '\\n\\n\\n\\n\\n' + 'var f = document.createElement(\"form\"); '\n"
+                          "    + 'f.innerHTML = \"<input name=cardnumber>\"; document.body.appendChild(f);');\n"
+                          "  im.src = 'data:,x'; document.body.appendChild(im); }, 50);\n"),
+    "/onerror-min.js": ("setTimeout(function () { var im = document.createElement('img');\n"
+                        "  im.setAttribute('onerror', 'var f = document.createElement(\"form\"); '\n"
+                        "    + 'f.innerHTML = \"<input name=cardnumber>\"; document.body.appendChild(f);');\n"
+                        "  im.src = 'data:,x'; document.body.appendChild(im); }, 50);\n"),
+    "/object-html.js": ("var a = document.createElement('div'); document.body.appendChild(a);\n"
+                        "a.innerHTML = new String('<input autocomplete=\"cc-number\">');\n"
+                        "var b = document.createElement('div'); document.body.appendChild(b);\n"
+                        "b.insertAdjacentHTML('beforeend', ['<input name=\"cvc\">']);\n"
+                        "var c = document.createElement('div'); document.body.appendChild(c);\n"
+                        "c.outerHTML = new String('<p><input name=\"card_exp\"></p>');\n"),
+    "/js/builtins.js": ("[1].forEach(function () { var f = document.createElement('form');\n"
+                        "  f.innerHTML = '<input autocomplete=\"cc-number\">'; document.body.appendChild(f); });\n"
+                        "new Promise(function () { var g = document.createElement('form');\n"
+                        "  g.innerHTML = '<input name=\"cvc\">'; document.body.appendChild(g); });\n"),
     "/js/deep.js": ("function down(n) { if (n > 0) return down(n - 1);\n"
                     "  var f = document.createElement('form'); f.innerHTML = '<input autocomplete=\"cc-number\">';\n"
                     "  document.body.appendChild(f); }\n"
                     "down(40);\n"),
 }
+CARD_SCRIPTS["/builtins.js"] = CARD_SCRIPTS["/js/builtins.js"]  # the same code from another site
 
 
 @pytest.fixture(scope="module")

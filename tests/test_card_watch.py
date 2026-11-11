@@ -89,14 +89,18 @@ def test_summarize_owner_of_each_insertion():
     assert store["owner"] == "store" and store["frames"] == ["https://shop.example/wp-content/plugins/pay/form.js"]
 
 
-def test_summarize_reads_the_page_frame_against_the_served_inline_blocks():
+def test_summarize_reads_the_page_frame_against_the_served_inline_block_hashes():
     from pnakotic.src.scanner.card_watch import summarize
 
+    import hashlib
+
     served = b"<html><head>\n<script>\nvar a = 1;\nvar b = 2;\n</script>\n</head><body></body></html>"
-    inside = {"via": "appendChild", "stack": f"Error\n    at {PAGE}:3:5"}
-    outside = {"via": "appendChild", "stack": f"Error\n    at {PAGE}:7:5"}
-    [a, b] = summarize([inside, outside], 1, "shop.example", PAGE + "#x", served)["inserted"]
-    assert a["owner"] == "store" and b["owner"] == "unknown"
+    block = hashlib.sha256(b"\nvar a = 1;\nvar b = 2;\n").hexdigest()
+    served_block = {"via": "appendChild", "stack": f"Error\n    at {PAGE}:3:5 sha256={block}"}
+    handler = {"via": "appendChild", "stack": f"Error\n    at {PAGE}:3:5 sha256={'0' * 64}"}  # same line
+    no_hash = {"via": "appendChild", "stack": f"Error\n    at {PAGE}:3:5"}
+    [a, b, c] = summarize([served_block, handler, no_hash], 1, "shop.example", PAGE + "#x", served)["inserted"]
+    assert a["owner"] == "store" and b["owner"] == "unknown" and c["owner"] == "unknown"
 
 
 def test_summarize_bounds_frames_and_marks_a_cut_stack():
