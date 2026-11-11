@@ -23,8 +23,10 @@ wrapper, so the hook's own frames above it are not on it. For that one call it s
 then shows it was cut) and ``Error.prepareStackTrace`` to its own formatter, then restores both
 exactly. The formatter writes each frame as ``at <url>:<line>:<column> sha256=<hash>`` with the
 script's real URL (V8's own text shows a ``//# sourceURL`` name instead, which a cross-site script
-can set to a store file) and V8's hash of the script, which is how ``code_origin`` tells a served
-inline block from an event handler set at runtime (both run at the page URL). Any frame without a
+can set to a store file), only when that URL is a plain ``https?://`` one without spaces or
+parentheses (a ``data:`` URL or a query holding ``(https://store/...`` is written ``<anonymous>``),
+and V8's hash of the script, which with the scripts' parse positions is how ``code_origin`` tells
+a served inline block from an event handler set at runtime (both run at the page URL). Any frame without a
 URL (eval, a string timer, a ``javascript:`` URL, an inline script added at runtime) is written
 ``at <anonymous>``, which ``code_origin`` counts as unknown. A builtin (``forEach``, the code that
 runs a ``Promise`` executor) has no script at all, neither file nor line, and is left out. Page code that a hooked call runs (a
@@ -54,11 +56,11 @@ code.
 import json
 import re
 import secrets
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urldefrag
 
 from .behavior import HOOK_PRELUDE
-from .code_origin import inline_script_hashes, parse_stack, stack_owner, stack_was_cut
+from .code_origin import parse_stack, stack_owner, stack_was_cut, trusted_inline_hashes, whole_lines
 
 MAX_EVENTS = 20  # card-insertion events kept per load
 MAX_STACK_CHARS = 4000
@@ -163,6 +165,7 @@ _INIT_SCRIPT = r"""
     const firstOf = getter(Node.prototype, 'firstChild');
     const lastOf = getter(Node.prototype, 'lastChild');
     const HASH_RE = /^[0-9a-f]{64}$/;
+    const FILE_RE = /^https?:\/\/[^\s()]+$/;  // what code_origin reads as a location; anything else is <anonymous>
     const SELECTOR = __SELECTOR__;
     const HTML_RE = new RegExp(__HTML_RE__, 'i');
     const nest = { depth: 0 };  // our wrappers running their original right now
@@ -228,9 +231,9 @@ _INIT_SCRIPT = r"""
           if (site.isEval(s)) { out += '\n    at eval (eval at <anonymous>)'; continue; }
           const file = site.file(s);
           if ((file === null || file === undefined) && (site.line(s) === null || site.line(s) === undefined)) continue;
-          if (typeof file === 'string' && file !== '') {
+          if (typeof file === 'string' && file !== '' && file.length <= 300 && exec(FILE_RE, file) !== null) {
             const hash = site.hash === null ? '' : site.hash(s);
-            out += '\n    at ' + slice(file, 0, 1000) + ':' + site.line(s) + ':' + site.column(s)
+            out += '\n    at ' + file + ':' + site.line(s) + ':' + site.column(s)
                    + (typeof hash === 'string' && exec(HASH_RE, hash) !== null ? ' sha256=' + hash : '');
             continue;
           }
@@ -450,27 +453,32 @@ class CardWatcher:
                 return
             stack = payload.get("stack")
             stack = stack[:MAX_STACK_CHARS + 1] if isinstance(stack, str) else ""
-            self.events.append({"via": payload["via"], "stack": stack[:MAX_STACK_CHARS],
+            # a cut inside a line drops that line: a frame cut short could end in another location
+            self.events.append({"via": payload["via"], "stack": whole_lines(stack, MAX_STACK_CHARS),
                                 "cut": stack_was_cut(stack)})
         except Exception as exc:  # a binding handler must never raise into Playwright
             print(f"[card-watch] ignored an event: {str(exc)[:200]}")
 
 
 def summarize(events: List[Dict[str, Any]], present: int, site_host: str, landing_url: str,
-              served: Optional[bytes], *, dropped: int = 0) -> Dict[str, Any]:
+              served: Optional[bytes], *, dropped: int = 0,
+              parsed: Optional[Dict[str, Set[Tuple[int, int]]]] = None) -> Dict[str, Any]:
     """``metadata["card_inputs"]``: how many card inputs the page has (``present``), each
     recorded insertion with its owner (``code_origin.stack_owner``) and up to 10 frame URLs (an
     unreadable frame is ``""``), and how many insertions were not kept (``dropped``).
 
     ``landing_url`` is the document the served HTML belongs to: a frame at that URL is the
-    store's only when its script hash is that of a served inline script block. ``cut`` is true when part of the stack was
+    store's only when its script hash is that of a served inline script block and every script
+    the browser parsed with that hash (``parsed``: ``EvalCapture.positions_at(landing_url)``)
+    started where a served block starts (``code_origin.trusted_inline_hashes``). Without
+    ``parsed`` no page-URL frame is the store's. ``cut`` is true when part of the stack was
     left out (over 4 000 characters or over 30 frames); the owner is decided on what was kept.
 
     Fails closed: card inputs on the page, no insertion recorded and none in the served HTML
     means the inputs got there in a way the hooks can't see, so an ``unseen`` insertion of
     unknown code is added.
     """
-    inline = inline_script_hashes(served)
+    inline = trusted_inline_hashes(served, parsed)
     page_url = urldefrag(landing_url or "")[0]
     inserted = []  # type: List[Dict[str, Any]]
     for event in events[:MAX_EVENTS]:

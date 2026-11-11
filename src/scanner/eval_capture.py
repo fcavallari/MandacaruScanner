@@ -65,7 +65,8 @@ page: breakpoints are deactivated and any pause is resumed at once.
 """
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
+from urllib.parse import urldefrag
 
 from .obfuscation import obfuscator_markers
 
@@ -76,6 +77,7 @@ MAX_CALLER_CHARS = 300
 MAX_STAGE_FETCHES = 100  # sources read per load
 MAX_STAGE_FETCH_CHARS = 2_000_000  # a longer script is not read at all
 MAX_TRACKED_HASHES = 10_000  # distinct stage hashes remembered for the repeat count
+MAX_POSITIONS = 2_000  # (url, hash, start) entries kept for code_origin; beyond that, none counts
 
 
 @dataclass
@@ -117,6 +119,11 @@ class EvalCapture:
         # in each one): ScriptTracer passes over their frames, so a loader's appendChild going
         # through our hooks is still the loader's
         self.harness_script_ids: Set[str] = set()
+        # where every page-world script with a URL started, by (URL, hash): code_origin trusts a
+        # served inline block's hash only when every script with it starts at a served block
+        self._positions: Dict[Tuple[str, str], Set[Tuple[int, int]]] = {}
+        self._position_count = 0
+        self.positions_dropped = 0
         self._seen: Set[str] = set()  # hashes of stages already met
         self._tasks: Set["asyncio.Future[None]"] = set()
         self._cdp: Any = None
@@ -145,6 +152,31 @@ class EvalCapture:
         except Exception as exc:
             print(f"[eval-capture] warm-up failed: {str(exc)[:200]}")
         self._sealed = True
+
+    def _note_position(self, event: Dict[str, Any]) -> None:
+        url, digest = event.get("url"), event.get("hash")
+        line, column = event.get("startLine"), event.get("startColumn")
+        if not (isinstance(url, str) and url.startswith(("http://", "https://")) and isinstance(digest, str)):
+            return
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (line, column)):
+            return
+        key = (urldefrag(url)[0][:2048], digest[:128])
+        where = self._positions.get(key)
+        if where is not None and (line, column) in where:
+            return
+        if self._position_count >= MAX_POSITIONS:
+            self.positions_dropped += 1
+            return
+        self._position_count += 1
+        self._positions.setdefault(key, set()).add((line, column))
+
+    def positions_at(self, url: str) -> Optional[Dict[str, Set[Tuple[int, int]]]]:
+        """``{hash: {(startLine, startColumn)}}`` of the page-world scripts parsed at ``url``
+        (fragment ignored), or None when the record overflowed (then nothing can be trusted)."""
+        if self.positions_dropped:
+            return None
+        page = urldefrag(url or "")[0][:2048]
+        return {digest: set(where) for (at, digest), where in self._positions.items() if at == page}
 
     def _note_harness(self, script_id: str) -> None:
         if len(self.harness_script_ids) < MAX_TRACKED_HASHES:
@@ -176,6 +208,7 @@ class EvalCapture:
             aux = event.get("executionContextAuxData")
             if isinstance(aux, dict) and aux.get("isDefault") is False:
                 return  # an isolated world: Playwright's, never the page's
+            self._note_position(event)
             url = event.get("url")
             if not (url == "" or event.get("hasSourceURL") is True
                     or (isinstance(url, str) and url.startswith(("data:", "blob:")))):

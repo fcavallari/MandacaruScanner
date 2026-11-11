@@ -4,6 +4,8 @@ Test modules import from here as ``from _support import ...`` (pytest's default 
 mode puts ``tests/`` on ``sys.path``). A fixture is made available to a module with
 ``from _support import <fixture>  # noqa: F401``.
 """
+import json
+
 import pytest
 
 
@@ -133,6 +135,24 @@ _CARD_FORM = ("'<label>Card number <input id=\"payment-numberInput\" name=\"numb
               " + '<label>CVC <input id=\"payment-cvcInput\" name=\"cvc\" autocomplete=\"cc-csc\"></label>'")
 _INLINE_FILLER = "\n".join(f"var storeSetting{i} = {i};" for i in range(38))  # served lines 2-40
 
+# a stock async loader, served inline; a cross-site script then sets an onerror handler with
+# exactly this text (or its windows-1252 reading) on an element whose expandos stand in for
+# `document`, so the copy inserts a card form from the page URL with a served block's hash
+_STOCK_LOADER = ("\n// Caf\u00e9 loader\n(function(){var s=document.createElement('script');s.async=true;"
+                 "s.src='/js/empty.js';var t=document.getElementsByTagName('script')[0];"
+                 "t.parentNode.insertBefore(s,t);})();\n")
+_STOCK_LOADER_1252 = _STOCK_LOADER.encode("utf-8").decode("cp1252")
+
+
+def _handler_copy(text):
+    return ("setTimeout(function () { var im = document.createElement('img');\n"
+            "  var form = document.createElement('form'); form.innerHTML = '<input autocomplete=\"cc-number\">';\n"
+            "  im.document = {createElement: function () { return form; },\n"
+            "    getElementsByTagName: function () { return [document.querySelector('h1')]; }};\n"
+            f"  im.setAttribute('onerror', {json.dumps(text)});\n"
+            "  im.src = 'data:,x'; document.body.appendChild(im); }, 50);\n")
+
+
 _SERVED_INLINE = ("<script>\r\n// Caf\u00e9 \u20ac checkout \u2013 store code\r\n"
                   "var f = document.createElement('form');\r\n"
                   "f.innerHTML = '<input autocomplete=\"cc-number\">';\r\n"
@@ -182,6 +202,19 @@ CARD_PAGES = {
     "/card-served-inline": _checkout(_SERVED_INLINE).replace("<head>", "<head><meta charset='utf-8'>"),
     # the same page without a declared charset (Chromium reads it as windows-1252)
     "/card-served-inline-1252": _checkout(_SERVED_INLINE),
+    # an event handler that is a byte-identical copy of a served block (and its mojibake reading)
+    "/card-handler-copy": ("<html><head><meta charset='utf-8'><title>Checkout</title></head><body><h1>Checkout</h1>"
+                           f"<script>{_STOCK_LOADER}</script>"
+                           + _load_script("http://localhost:{port}/handler-copy.js") + "</body></html>"),
+    "/card-handler-moji": ("<html><head><meta charset='utf-8'><title>Checkout</title></head><body><h1>Checkout</h1>"
+                           f"<script>{_STOCK_LOADER}</script>"
+                           + _load_script("http://localhost:{port}/handler-moji.js") + "</body></html>"),
+    # a cross-site script whose URL holds "(" and a store URL after it
+    "/card-paren-url": _checkout("<script src='http://localhost:{port}/paren.js?(http://127.0.0.1:{port}/js/form.js'>"
+                                 "</script>"),
+    # a cross-site script that runs data: URL scripts ending in a comment naming a store file (raw
+    # text: the space before it stays in the URL, where V8's file name keeps it)
+    "/card-data-url": _checkout(_load_script("http://localhost:{port}/data-url.js")),
     # HTML handed over as objects, which the hook must not convert (a cross-site script)
     "/card-object-html": _checkout(_load_script("http://localhost:{port}/object-html.js")),
     # the store's script inserts from inside forEach and a Promise executor (builtin frames)
@@ -254,6 +287,18 @@ CARD_SCRIPTS = {
                         "  f.innerHTML = '<input autocomplete=\"cc-number\">'; document.body.appendChild(f); });\n"
                         "new Promise(function () { var g = document.createElement('form');\n"
                         "  g.innerHTML = '<input name=\"cvc\">'; document.body.appendChild(g); });\n"),
+    "/js/empty.js": "",
+    "/handler-copy.js": _handler_copy(_STOCK_LOADER),
+    "/handler-moji.js": _handler_copy(_STOCK_LOADER_1252),
+    "/paren.js": ("var f = document.createElement('form'); f.innerHTML = '<input autocomplete=\"cc-number\">';\n"
+                  "document.body.appendChild(f);\n"),
+    "/data-url.js": ("var code = function (n) { return 'var f = document.createElement(\"form\"); '\n"
+                     "  + 'f.innerHTML = \"<input name=' + n + '>\"; document.body.appendChild(f);'\n"
+                     "  + '// http://127.0.0.1:{port}/js/form.js'; };\n"
+                     "var s = document.createElement('script');\n"
+                     "s.src = 'data:text/javascript,' + code('cardnumber');\n"
+                     "document.head.appendChild(s);\n"
+                     "import('data:text/javascript,' + code('cvc'));\n"),
     "/js/deep.js": ("function down(n) { if (n > 0) return down(n - 1);\n"
                     "  var f = document.createElement('form'); f.innerHTML = '<input autocomplete=\"cc-number\">';\n"
                     "  document.body.appendChild(f); }\n"
@@ -374,8 +419,9 @@ def site_server():
                                               f"<script>{scripts[self.path]}</script></body></html>").encode())
             elif self.path in CARD_PAGES:  # card inputs inserted into a checkout (Task 4: card_watch)
                 self._send(200, "text/html", CARD_PAGES[self.path].replace("{port}", str(port)).encode())
-            elif self.path in CARD_SCRIPTS:
-                self._send(200, "text/javascript", CARD_SCRIPTS[self.path].replace("{port}", str(port)).encode())
+            elif self.path.split("?")[0] in CARD_SCRIPTS:
+                body = CARD_SCRIPTS[self.path.split("?")[0]].replace("{port}", str(port))
+                self._send(200, "text/javascript", body.encode())
             elif self.path in DYNAMIC_PAGES:
                 self._send(200, "text/html", DYNAMIC_PAGES[self.path].encode())
             elif self.path == "/payload.js":

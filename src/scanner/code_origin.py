@@ -59,22 +59,35 @@ KNOWN_VENDORS = {
 }  # type: Dict[str, str]
 
 _FRAME_START_RE = re.compile(r"^\s*at\s")
-# V8 puts the real location last on the line, so read it from the end: a function name
-# containing "(https://store/...)" can't pose as the location. A URL has no spaces or parens.
-# card_watch's formatter may add " sha256=<hex>" after the location; V8's own text never has
-# anything after it, so a page can't put a hash there.
-_LOCATION_RE = re.compile(r"(?:(?<=\()|(?<=\s))(https?://[^\s()]{1,300}?):(\d{1,7}):\d{1,7}\)?"
-                          r"(?: sha256=([0-9a-f]{64}))?\s*$")
+# card_watch's formatter writes a frame as exactly "    at <url>:<line>:<column>", optionally
+# followed by " sha256=<hex>", and only for a URL matching ^https?://[^\s()]+$ of at most 300
+# characters; everything else is "    at <anonymous>" or "    at eval (eval at <anonymous>)".
+# So the location is anchored right after "at " and the hash is the only thing after it: no
+# function name, query string or text inside a URL can pose as a location.
+_LOCATION_RE = re.compile(r"^\s*at (https?://[^\s()]{1,300}?):(\d{1,7}):\d{1,7}(?: sha256=([0-9a-f]{64}))?$")
 _EVAL_FRAME = Frame("", None, True)
 
 
+def whole_lines(text: str, limit: int = MAX_STACK_CHARS) -> str:
+    """``text`` cut to ``limit`` characters without a partial last line: a cut that lands
+    inside a line drops that line (a frame cut short could end in a different location)."""
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    if text[limit] == "\n":
+        return text[:limit]
+    cut = text[:limit]
+    return cut[:cut.rfind("\n")] if "\n" in cut else ""
+
+
 def parse_stack(stack: str) -> List[Frame]:
-    """V8 stack text to at most 30 frames (input cut to 4 000 characters)."""
+    """card_watch's stack text (its formatter is the only producer; V8's own text is not read)
+    to at most 30 frames. The input is cut to 4 000 characters at a line end."""
     frames = []  # type: List[Frame]
-    for text in (stack or "")[:MAX_STACK_CHARS].split("\n"):
+    for text in whole_lines(stack).split("\n"):
         if not _FRAME_START_RE.match(text):
             continue
-        match = None if "eval at" in text else _LOCATION_RE.search(text)
+        match = None if "eval at" in text else _LOCATION_RE.match(text)
         if match is None:
             frames.append(_EVAL_FRAME)
         else:
@@ -139,14 +152,56 @@ def inline_script_hashes(served_html: Optional[bytes]) -> Set[str]:
     one-line pages). Each block is hashed as UTF-8 and as windows-1252 (what Chromium reads a
     page without a declared charset as); a page in another charset has non-ASCII blocks that
     match neither, so their frames read as unknown."""
+    return set(served_block_positions(served_html))
+
+
+_BOM = b"\xef\xbb\xbf"
+_DECODERS = (lambda raw: raw.decode("utf-8", "replace"), _windows_1252)
+
+
+def _utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def served_block_positions(served_html: Optional[bytes]) -> Dict[str, Set[Tuple[int, int]]]:
+    """``{hash: {(line, column)}}`` for every served inline block: the SHA-256 of its text (as
+    ``inline_script_hashes``) and where its text starts in the document, in CDP's coordinates
+    (0-based line, 0-based column in UTF-16 units, after a leading BOM is dropped and CRLF / CR
+    become LF), as ``Debugger.scriptParsed`` reports the block (``startLine``, ``startColumn``).
+    Each block is read as UTF-8 and as windows-1252, so it can have two hashes and positions."""
+    out = {}  # type: Dict[str, Set[Tuple[int, int]]]
     if not served_html:
+        return out
+    data = served_html[len(_BOM):] if served_html.startswith(_BOM) else served_html
+    blocks = inline_blocks(data, data.lower())
+    for decode in _DECODERS:
+        line, column, done = 0, 0, 0
+        for start, end in blocks:
+            chunk = _normalized(decode(data[done:start]))  # ends with ">", so no CRLF is split
+            breaks = chunk.count("\n")
+            if breaks:
+                line += breaks
+                column = _utf16_len(chunk[chunk.rfind("\n") + 1:])
+            else:
+                column += _utf16_len(chunk)
+            done = start
+            digest = hashlib.sha256(_normalized(decode(data[start:end])).encode("utf-8")).hexdigest()
+            out.setdefault(digest, set()).add((line, column))
+    return out
+
+
+def trusted_inline_hashes(served_html: Optional[bytes],
+                          parsed: Optional[Dict[str, Set[Tuple[int, int]]]]) -> Set[str]:
+    """The served-block hashes that prove a page-URL frame is the store's. ``parsed`` is every
+    script the browser parsed at the document URL, ``{hash: {(startLine, startColumn)}}``
+    (``EvalCapture.positions_at``), or None when that record is incomplete. A hash counts only
+    when the browser parsed it and every script with it starts where a served block starts: an
+    event handler or a runtime script with a served block's exact text has the same hash, but
+    not a served block's position, and then no frame with that hash is the store's."""
+    if not parsed:
         return set()
-    hashes = set()  # type: Set[str]
-    for start, end in inline_blocks(served_html, served_html.lower()):
-        raw = served_html[start:end]
-        for text in (raw.decode("utf-8", "replace"), _windows_1252(raw)):
-            hashes.add(hashlib.sha256(_normalized(text).encode("utf-8")).hexdigest())
-    return hashes
+    served = served_block_positions(served_html)
+    return {digest for digest, where in parsed.items() if where and where <= served.get(digest, set())}
 
 
 def _parts(url: str) -> Tuple[str, str]:

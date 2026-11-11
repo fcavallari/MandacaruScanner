@@ -99,15 +99,21 @@ def test_summarize_reads_the_page_frame_against_the_served_inline_block_hashes()
     served_block = {"via": "appendChild", "stack": f"Error\n    at {PAGE}:3:5 sha256={block}"}
     handler = {"via": "appendChild", "stack": f"Error\n    at {PAGE}:3:5 sha256={'0' * 64}"}  # same line
     no_hash = {"via": "appendChild", "stack": f"Error\n    at {PAGE}:3:5"}
-    [a, b, c] = summarize([served_block, handler, no_hash], 1, "shop.example", PAGE + "#x", served)["inserted"]
+    parsed = {block: {(1, 8)}}  # where the browser parsed it: the served block's own start
+    [a, b, c] = summarize([served_block, handler, no_hash], 1, "shop.example", PAGE + "#x", served,
+                          parsed=parsed)["inserted"]
     assert a["owner"] == "store" and b["owner"] == "unknown" and c["owner"] == "unknown"
+    # a copy of the block parsed somewhere else (an event handler with its exact text): not proof
+    copied = summarize([served_block], 1, "shop.example", PAGE, served, parsed={block: {(1, 8), (0, 0)}})
+    assert copied["inserted"][0]["owner"] == "unknown"
+    assert summarize([served_block], 1, "shop.example", PAGE, served)["inserted"][0]["owner"] == "unknown"
 
 
 def test_summarize_bounds_frames_and_marks_a_cut_stack():
     from pnakotic.src.scanner.card_watch import summarize
 
     long_url = STORE + "/" + "a" * 400 + ".js"
-    deep = "Error\n" + "".join(f"    at f (https://shop.example/{i}.js:1:1)\n" for i in range(31))
+    deep = "Error\n" + "".join(f"    at https://shop.example/{i}.js:1:1\n" for i in range(31))
     out = summarize([{"via": "append", "stack": f"Error\n    at {long_url}:1:1"},
                      {"via": "append", "stack": deep}], 1, "shop.example", PAGE, None, dropped=4)
     wide, tall = out["inserted"]
@@ -146,8 +152,8 @@ def test_watcher_keeps_bounded_events_from_the_main_frame_only():
 
     w = CardWatcher()
     assert w.binding.startswith("__") and len(w.binding) == 18
-    w._on_page_event(_source(), {"via": "innerHTML", "stack": "x" * 5000})
-    assert w.events == [{"via": "innerHTML", "stack": "x" * 4000, "cut": True}]
+    w._on_page_event(_source(), {"via": "innerHTML", "stack": "Error\n" + "x" * 5000})
+    assert w.events == [{"via": "innerHTML", "stack": "Error", "cut": True}]  # the cut line is dropped
     w._on_page_event(_source(), {"via": "eval", "stack": ""})  # not a hook's name
     w._on_page_event(_source(), "appendChild")
     w._on_page_event(_source(main=False), {"via": "appendChild", "stack": ""})  # a subframe's own document

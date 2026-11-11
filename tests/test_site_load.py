@@ -496,6 +496,33 @@ async def test_a_served_inline_script_is_the_stores(site_server, tmp_path, path)
 
 @requires_browser
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/card-handler-copy", "/card-handler-moji"])
+async def test_an_event_handler_copying_a_served_block_is_not_the_stores(site_server, tmp_path, path):
+    """A handler with a served block's exact text (or its windows-1252 reading) has that block's
+    hash at the page URL, and the element's expandos stand in for `document`; but the browser parsed
+    it at the handler's position, not a served block's, so no frame with that hash is the store's."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}{path}")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] == 1
+    [e] = ci["inserted"]
+    assert e["via"] == "insertBefore" and set(e["frames"]) == {f"{site_server}{path}"}  # the IIFE and the handler
+    assert e["owner"] == "unknown"
+
+
+@requires_browser
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path,count", [("/card-paren-url", 1), ("/card-data-url", 2)])
+async def test_a_script_url_holding_a_store_url_is_not_the_stores(site_server, tmp_path, path, count):
+    """A script URL with "(" and a store URL in it, or a data: URL ending in a comment that names
+    a store file, is written as <anonymous>: unknown code."""
+    r = await _site_load(_site_engine(tmp_path), f"{site_server}{path}")
+    ci = r.metadata["card_inputs"]
+    assert ci["present"] == count
+    assert [(e["owner"], e["frames"]) for e in ci["inserted"]] == [("unknown", [""])] * count
+
+
+@requires_browser
+@pytest.mark.asyncio
 async def test_html_given_as_an_object_is_seen_after_the_call(site_server, tmp_path):
     r = await _site_load(_site_engine(tmp_path), f"{site_server}/card-object-html")
     ci = r.metadata["card_inputs"]

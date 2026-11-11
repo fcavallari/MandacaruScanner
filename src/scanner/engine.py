@@ -717,7 +717,7 @@ class PnakoticEngine:
                 # survey's site host (the homepage loads run before it is resolved).
                 result.metadata["card_inputs"] = summarize_card_inputs(
                     cards.events, cards_present, urlsplit(served_url).hostname or "", served_url, served,
-                    dropped=cards.dropped)
+                    dropped=cards.dropped, parsed=evals.positions_at(served_url))
 
         eval_stages = [_eval_stage_entry(stage) for stage in evals.stages]
         result.metadata["eval_stages"] = eval_stages

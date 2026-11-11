@@ -1,12 +1,14 @@
 def test_parse_stack_reads_url_line_and_eval():
+    """parse_stack reads card_watch's formatter output (the only producer), not V8's own text."""
     from pnakotic.src.scanner.code_origin import parse_stack
-    s = ("Error\n    at f (https://shop.com/wp-content/plugins/x/a.js:10:5)\n"
+    s = ("Error\n    at https://shop.com/wp-content/plugins/x/a.js:10:5\n"
          "    at https://cdn.evil.io/s.js:1:200\n"
-         "    at eval (eval at g (https://shop.com/a.js:3:1), <anonymous>:1:9)\n    at <anonymous>:2:3")
+         "    at eval (eval at <anonymous>)\n    at <anonymous>\n"
+         "    at f (https://shop.com/a.js:3:1)")  # V8's own form: not ours, so unreadable
     fr = parse_stack(s)
     assert [(f.url, f.line, f.eval) for f in fr] == [
         ("https://shop.com/wp-content/plugins/x/a.js", 10, False), ("https://cdn.evil.io/s.js", 1, False),
-        ("", None, True), ("", None, True)]
+        ("", None, True), ("", None, True), ("", None, True)]
 
 
 def test_parse_stack_is_bounded():
@@ -14,15 +16,20 @@ def test_parse_stack_is_bounded():
     assert len(parse_stack("Error\n" + "    at https://a.com/x.js:1:1\n" * 500)) == 30
 
 
-def test_parse_stack_reads_the_real_location_not_a_spoofed_function_name():
+def test_parse_stack_reads_the_location_right_after_at_and_nothing_inside_it():
+    """A store URL inside a frame's text (a function name, a query string with "(", a data: URL's
+    comment) can't pose as the location: the location is anchored right after "at "."""
     from pnakotic.src.scanner.code_origin import parse_stack
-    s = "Error\n    at x (https://shop.com/a.js:1:1) y (https://evil.io/s.js:7:3)"
-    assert [(f.url, f.line) for f in parse_stack(s)] == [("https://evil.io/s.js", 7)]
+    for text in ("    at x (https://shop.com/a.js:1:1) y (https://evil.io/s.js:7:3)",
+                 "    at https://evil.io/s.js?(https://shop.com/a.js:1:97",
+                 "    at data:text/javascript,x// https://shop.com/wp-includes/js/jquery/jquery.min.js:1:5",
+                 "    at https://evil.io/s.js:1:2 https://shop.com/a.js:3:4"):
+        assert [(f.url, f.eval) for f in parse_stack("Error\n" + text)] == [("", True)], text
 
 
 def test_parse_stack_handles_async_ports_and_junk():
     from pnakotic.src.scanner.code_origin import parse_stack
-    s = ("TypeError: x\n    at async go (https://shop.com:8443/a.js:4:2)\n"
+    s = ("TypeError: x\n    at https://shop.com:8443/a.js:4:2\n"
          "    at blob:https://shop.com/uuid:1:1\n    not a frame\n")
     assert [(f.url, f.line, f.eval) for f in parse_stack(s)] == [
         ("https://shop.com:8443/a.js", 4, False), ("", None, True)]
@@ -73,6 +80,47 @@ def test_parse_stack_reads_the_script_hash_after_the_location():
          f"    at f (https://shop.com/b.js:2:2) sha256={h[:-1]}\n")
     assert [(f.url, f.line, f.hash) for f in parse_stack(s)] == [
         ("https://shop.com/checkout/", 3, h), ("https://shop.com/a.js", 1, None), ("", None, None)]
+
+
+def test_a_stack_cut_inside_a_line_drops_that_line():
+    """A 4 000-character cut can end a line just after an embedded store location: that line is
+    dropped, not read."""
+    from pnakotic.src.scanner.code_origin import parse_stack, stack_was_cut, whole_lines
+    tail = "    at https://evil.io/" + "a" * 50 + ".js?https://shop.com/:3:5"
+    head = "Error\n" + "    at https://evil.io/x.js:1:1\n" * 3
+    stack = head + "x" * (4000 - len(head) - len(tail)) + "\n" + tail + "9:9"
+    assert len(stack) > 4000 and stack_was_cut(stack)
+    assert all(f.url != "https://shop.com/" for f in parse_stack(stack))
+    assert whole_lines("ab\ncd", 4) == "ab" and whole_lines("ab\ncd", 2) == "ab" and whole_lines("abcd", 2) == ""
+    assert whole_lines("ab\ncd", 10) == "ab\ncd"
+
+
+def test_served_block_positions_are_cdp_coordinates():
+    """0-based line and UTF-16 column of each block's text, after a BOM and with CRLF as LF
+    (matched against Chromium 148's Debugger.scriptParsed on six pages)."""
+    import hashlib
+
+    from pnakotic.src.scanner.code_origin import served_block_positions
+    sha = lambda t: hashlib.sha256(t.encode("utf-8")).hexdigest()
+    html = "\ufeff<html>\r\n<p>\U0001F600</p> <script>a()</script><script>b()</script>".encode("utf-8")
+    pos = served_block_positions(html)
+    # line 1 is "<p>" + an emoji (2 UTF-16 units) + "</p> <script>": a() starts at column 18
+    assert (1, 18) in pos[sha("a()")] and (1, 38) in pos[sha("b()")]
+    assert (1, 20) in pos[sha("a()")]  # the windows-1252 reading counts the emoji's 4 bytes
+    assert served_block_positions(None) == {}
+
+
+def test_a_served_hash_is_trusted_only_when_every_copy_sits_at_a_served_block():
+    import hashlib
+
+    from pnakotic.src.scanner.code_origin import trusted_inline_hashes
+    html = b"<html><head><script>var a = 1;</script></head></html>"
+    h = hashlib.sha256(b"var a = 1;").hexdigest()
+    assert trusted_inline_hashes(html, {h: {(0, 20)}}) == {h}
+    assert trusted_inline_hashes(html, {h: {(0, 20), (0, 0)}}) == set()  # a handler with the same text
+    assert trusted_inline_hashes(html, {h: {(0, 0)}}) == set()
+    assert trusted_inline_hashes(html, {}) == set()  # never parsed (no debugger): not proven
+    assert trusted_inline_hashes(html, None) == set()  # the record overflowed
 
 
 def test_inline_script_hashes_are_the_served_blocks_as_the_browser_runs_them():
