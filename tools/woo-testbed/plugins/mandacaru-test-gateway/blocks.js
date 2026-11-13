@@ -1,4 +1,4 @@
-/* Block checkout side of the Pnakotic test gateway. No build step. */
+/* Block checkout side of the Mandacaru test gateway. No build step. */
 ( function () {
 	var registry = window.wc && window.wc.wcBlocksRegistry;
 	var el = window.wp && window.wp.element && window.wp.element.createElement;
@@ -22,15 +22,15 @@
 	function Content() {
 		return el(
 			'div',
-			{ className: 'pnakotic-test-card', style: { display: 'grid', gap: '8px', maxWidth: '420px' } },
-			input( 'pnakotic-card-number', 'pnakotic_card_number', 'cc-number', 'Card number' ),
-			input( 'pnakotic-card-exp', 'pnakotic_card_exp', 'cc-exp', 'MM / YY' ),
-			input( 'pnakotic-card-csc', 'pnakotic_card_csc', 'cc-csc', 'CVC' )
+			{ className: 'mandacaru-test-card', style: { display: 'grid', gap: '8px', maxWidth: '420px' } },
+			input( 'mandacaru-card-number', 'mandacaru_card_number', 'cc-number', 'Card number' ),
+			input( 'mandacaru-card-exp', 'mandacaru_card_exp', 'cc-exp', 'MM / YY' ),
+			input( 'mandacaru-card-csc', 'mandacaru_card_csc', 'cc-csc', 'CVC' )
 		);
 	}
 
 	registry.registerPaymentMethod( {
-		name: 'pnakotic_test',
+		name: 'mandacaru_test',
 		label: el( 'span', null, title ),
 		ariaLabel: title,
 		content: el( Content, null ),

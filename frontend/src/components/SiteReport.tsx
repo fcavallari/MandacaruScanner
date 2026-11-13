@@ -17,14 +17,14 @@ import { profileLabel } from '../lib/format';
 
 /**
  * The site survey report, layout A (spec §6): grouped by where the code lives.
- * The reader is a worried site owner, so the body is plain language — no ritual words.
+ * The reader is a worried site owner, so the body is plain language, no jargon.
  * Everything in a finding is page-supplied text: it is rendered as text nodes only.
  */
 
 /* ---------- verdict tone (shared with the list and the header) ---------- */
 
 const PILL: Record<'negative' | 'warning' | 'neutral' | 'positive', React.CSSProperties> = {
-  negative: { background: 'var(--pill-negative-bg)', color: 'var(--negative)' },
+  negative: { background: 'var(--negative-fill)', color: 'var(--text)' },
   warning: { background: 'var(--pill-warning-bg)', color: 'var(--warning)' },
   neutral: { background: 'var(--pill-neutral-bg)', color: 'var(--pill-neutral-ink)' },
   positive: { background: 'var(--pill-positive-bg)', color: 'var(--positive)' },
@@ -63,7 +63,7 @@ const ORIGINS: Record<string, string> = {
   runtime: 'Built and run by code on this page while it loaded',
 };
 
-/** The 404 probe (/pnakotic-<hex>/) is shown by what it is, with its URL under it. */
+/** The 404 probe (/mandacaru-<hex>/; reports from before the rename carry /pnakotic-) is shown by what it is, with its URL under it. */
 const PROBE_LABEL = "Your 'page not found' page";
 /** A WooCommerce store's checkout page, shown the same way. */
 const CHECKOUT_LABEL = 'Your checkout page';
@@ -415,7 +415,7 @@ function LoadLine({ taskId, load }: { taskId: string; load: SiteLoad }) {
       <span className={`${tone} min-w-0`}>{words}</span>
       {load.status != null ? <span className="font-mono num text-[12px] text-faint">{load.status}</span> : null}
       {load.screenshot ? (
-        <a href={artifactUrl(taskId, load.screenshot)} target="_blank" rel="noreferrer" className="text-[12px] text-muted hover:text-accent transition-colors ml-auto flex-none">
+        <a href={artifactUrl(taskId, load.screenshot)} target="_blank" rel="noreferrer" className="text-[12px] text-muted hover:text-accent-ink transition-colors ml-auto flex-none">
           Screenshot
         </a>
       ) : null}
@@ -668,9 +668,9 @@ export default function SiteReport({ taskId, result }: { taskId: string; result:
             href={result.cleanup_url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 mt-3 text-[14px] font-medium text-accent hover:text-accent/85 border-b border-accent/40 hover:border-accent transition-colors"
+            className="inline-flex items-center gap-1.5 mt-3 text-[14px] font-medium text-accent-ink hover:text-ink border-b border-accent/40 hover:border-accent transition-colors"
           >
-            {v.verdict === 'compromised' ? 'Clean it up with Elderward' : 'If you think this is a hack, Elderward can check and clean it'}
+            {v.verdict === 'compromised' ? 'Clean it up with Facheiro' : 'If you think this is a hack, Facheiro can check and clean it'}
             <span aria-hidden="true">→</span>
           </a>
         ) : null}

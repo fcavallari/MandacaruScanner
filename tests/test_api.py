@@ -425,7 +425,23 @@ def test_serialize_result_site_cleanup_url_defaults(monkeypatch):
     monkeypatch.delenv("CLEANUP_URL", raising=False)
     row = models.ScanResult(id="r", job_id="j", target_url="https://s.com/",
                             metadata_json={"kind": "site", "site": None})
-    assert main.serialize_result(row)["cleanup_url"] == "https://elderward.space.fast"
+    assert main.serialize_result(row)["cleanup_url"] == "https://facheiro.space.fast/"
+
+
+def test_api_title_and_404_messages(client, db):
+    from pnakotic.src.api import main
+    from pnakotic.src.database import models
+
+    assert main.app.title == "Mandacaru API"
+    resp = client.get("/tasks/no-such-id/status")
+    assert resp.status_code == 404 and resp.json()["detail"] == "Scan not found"
+    _, Session = db
+    s = Session()
+    s.add(models.ScanJob(id="unfinished", target_url="https://unfinished.example/", status="queued"))
+    s.commit()
+    s.close()
+    resp = client.get("/tasks/unfinished/results")
+    assert resp.status_code == 404 and resp.json()["detail"] == "No results for this scan yet"
 
 
 # ---------- artifacts ----------

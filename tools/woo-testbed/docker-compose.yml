@@ -1,6 +1,6 @@
 # Local WooCommerce testbed for the checkout-skimmer spike (throwaway-grade).
 # Fixed project name: nothing here may touch the user's other stacks.
-name: pnakotic-woo-testbed
+name: mandacaru-woo-testbed
 
 x-wp-env: &wp-env
   WORDPRESS_DB_HOST: db
@@ -13,7 +13,7 @@ x-wp-env: &wp-env
     define('WP_SITEURL', 'http://localhost:${WOO_PORT:-8188}');
     define('DISABLE_WP_CRON', true);
     define('AUTOMATIC_UPDATER_DISABLED', true);
-    define('WP_HTTP_BLOCK_EXTERNAL', getenv('PNAKOTIC_BLOCK_EXTERNAL') === '1');
+    define('WP_HTTP_BLOCK_EXTERNAL', getenv('MANDACARU_BLOCK_EXTERNAL') === '1');
     define('WP_ACCESSIBLE_HOSTS', 'localhost');
 
 services:
@@ -43,13 +43,13 @@ services:
       <<: *wp-env
       # The running store makes no outside requests (setup runs via wpcli, which
       # is not blocked, so it can download WordPress plugins).
-      PNAKOTIC_BLOCK_EXTERNAL: "1"
+      MANDACARU_BLOCK_EXTERNAL: "1"
       # Where the opt-in test skimmer sends what it reads (the browser's view). 127.0.0.1, not localhost: a different host string from the store.
-      PNAKOTIC_COLLECTOR_URL: "http://127.0.0.1:${COLLECTOR_PORT:-8199}/collect"
+      MANDACARU_COLLECTOR_URL: "http://127.0.0.1:${COLLECTOR_PORT:-8199}/collect"
     volumes:
       - wp_data:/var/www/html
       - ./mu-plugins:/var/www/html/wp-content/mu-plugins:ro
-      - ./plugins/pnakotic-test-gateway:/var/www/html/wp-content/plugins/pnakotic-test-gateway:ro
+      - ./plugins/mandacaru-test-gateway:/var/www/html/wp-content/plugins/mandacaru-test-gateway:ro
 
   # One-off wp-cli: docker compose run --rm wpcli <wp args>
   wpcli:
@@ -66,7 +66,7 @@ services:
     volumes:
       - wp_data:/var/www/html
       - ./mu-plugins:/var/www/html/wp-content/mu-plugins:ro
-      - ./plugins/pnakotic-test-gateway:/var/www/html/wp-content/plugins/pnakotic-test-gateway:ro
+      - ./plugins/mandacaru-test-gateway:/var/www/html/wp-content/plugins/mandacaru-test-gateway:ro
 
   collector:
     image: python:3.12-slim-bookworm

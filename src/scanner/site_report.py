@@ -241,13 +241,13 @@ def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool, find
 
 
 def _probe_index(loads: List[Load]) -> Optional[int]:
-    """The 404 probe: the page with the highest index whose path starts with /pnakotic-."""
+    """The 404 probe: the page with the highest index whose path starts with /mandacaru-."""
     for load in sorted(loads, key=lambda l: -l.page_index):
         try:
             path = urlsplit(load.page_url).path if isinstance(load.page_url, str) else ""
         except ValueError:
             continue
-        if path.startswith("/pnakotic-"):
+        if path.startswith("/mandacaru-"):
             return load.page_index
     return None
 

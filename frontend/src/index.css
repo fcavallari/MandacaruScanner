@@ -3,41 +3,53 @@
 @tailwind utilities;
 
 /*
-  data-terminal (dealt) with the abyssal face — .taste-skill/notes.md:
-  ground tinted from the product's world (the deep), keeping the dealt lightness
-  steps (cards darker than ground); phosphor teal in place of the dealt blue;
-  blood red and sickly amber kept from the deal. No navy, no slate, no glow.
+  data-terminal (dealt) with the Cosmic Sertão face — .taste-skill/notes.md:
+  charcoal ground warmed toward earth, keeping the dealt lightness steps (cards
+  darker than ground); oxidised rust as the one accent, bone for text, cactus
+  green for "fine", dried blood for "bad", sand for "watch". Woodcut / punk-zine
+  field-research mood: flat ink, a little paper grain on the ground. No navy,
+  no slate, no glow.
+  Rust is split in two on purpose: --accent (#A94B2A) is for lines, fills, focus
+  and icons; --accent-ink is its lighter reading twin for rust TEXT. The same goes
+  for --positive (text and marks) / --positive-fill (bars), and --negative
+  (text, marks, bars) / --negative-fill (a block behind bone text only).
 */
 :root {
   /* surfaces — ground lighter than cards (the style's move) */
-  --ground: #101714;   /* abyssal green-black */
-  --surface: #0b100e;  /* cards, darker than ground */
-  --raised: #17201b;   /* hover / raised step */
-  --active: #131a16;   /* selected fill, one step off surface */
-  --border: #2a3b34;   /* structural lines, ~1.55:1 on ground: panels read off the ground */
-  --rule: #1c2722;     /* row rules, one step off surface */
-  --control: #43574d;  /* interactive outlines, brighter than --border */
+  --ground: #171512;   /* charcoal, warmed */
+  --surface: #12100d;  /* cards, darker than ground */
+  --raised: #1f1c18;   /* hover / raised step */
+  --active: #1a1714;   /* selected fill, one step off surface */
+  --border: #3a342c;   /* structural lines, ~1.5:1 on ground: panels read off the ground */
+  --rule: #24201b;     /* row rules, one step off surface */
+  --control: #58514a;  /* interactive outlines, ~2.4:1 on surface, brighter than --border */
 
-  /* text — three tiers, all >= 4.5:1 on surface; muted and faint kept far apart */
-  --text: #e9f2ec;     /* green-tinted white */
-  --muted: #b3c4bb;    /* secondary, ~10.5:1 on surface */
-  --faint: #90a399;    /* meta / placeholders, ~7:1 on surface, 6.6:1 on --active */
+  /* text — three tiers, all >= 4.5:1 on surface/ground/raised/active; muted and faint kept far apart */
+  --text: #d8d0bd;     /* bone */
+  --muted: #b3aa96;    /* secondary, ~8.2:1 on surface */
+  --faint: #958d79;    /* meta / placeholders, ~5.8:1 on surface, 5.4:1 on --active */
 
-  /* the one accent — phosphor teal (bioluminescence / terminal neon) */
-  --accent: #40e0b4;
-  --positive: #40e0b4; /* green-accent rule: positive IS the accent */
-  --negative: #e5566f; /* blood red (horror) */
-  --warning: #d9a441;  /* sickly amber */
+  /* the one accent — oxidised rust. Lines, fills, focus, icons; rust text uses --accent-ink */
+  --accent: #a94b2a;
+  --accent-ink: #d2724f; /* rust as text, >= 4.5:1 on every surface step */
+  --button: #93401f;     /* filled-button ground, bone text on it >= 4.5:1 */
+  --positive: #8e9c70;      /* cactus green: text and marks */
+  --positive-fill: #65734b; /* cactus green: bars and gauge fills */
+  --negative: #c46a72;      /* text, marks, bars */
+  --negative-fill: #733b43; /* dried blood: a block behind bone text only, never text or a mark */
+  --warning: #c4a46a;       /* sand */
 
   /* pills — dark tint of the hue, ink one step up */
-  --pill-positive-bg: #12291f;
-  --pill-negative-bg: #2c1a20;
-  --pill-warning-bg: #2a2416;
-  --pill-neutral-bg: #17201b;
-  --pill-neutral-ink: #d3ded8;
+  --pill-positive-bg: #232819;
+  --pill-warning-bg: #2b2415;
+  --pill-neutral-bg: #26221d;
+  --pill-neutral-ink: #d8d0bd;
 
   /* charts */
-  --grid: #22312a;
+  --grid: #2a2621;     /* also the empty ground's dimmed strata */
+
+  /* the waiting scene (FieldScene.tsx): a trace the band has passed, and the empty ground's mark */
+  --trace-settled: #6b4a3a;
 
   /* type — dealt sizes, lifted one step for legibility (meta floor 12px) */
   --fs-title: 30px;
@@ -59,6 +71,8 @@ html {
 body {
   margin: 0;
   background-color: var(--ground);
+  /* paper grain: feTurbulence noise tinted bone, mean alpha ~5.5% (0.11 * noise); cards are opaque and cover it */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.847 0 0 0 0 0.816 0 0 0 0 0.741 0 0 0 0.11 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   color: var(--text);
   font-family: "Public Sans", Inter, system-ui, sans-serif;
   font-size: var(--fs-body);
@@ -78,10 +92,10 @@ body {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
-/* abyssal scrollbar */
+/* charcoal scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -104,4 +118,40 @@ body {
 }
 .pulse-dot {
   animation: pnk-pulse 1.6s ease-in-out infinite;
+}
+
+/*
+  The waiting scene (FieldScene.tsx), the one deliberate animation: the band sinks
+  through the strata in 7 s, and each trace flashes and shows its tag when the band's
+  line reaches it (its animation-delay is set inline from its depth). Queued: no band,
+  traces unlit, the whole scene dimmed. Reduced motion: one still frame, the band fixed
+  halfway and the traces above it lit and tagged.
+*/
+@keyframes field-sink {
+  from { transform: translateY(0); }
+  to { transform: translateY(132px); }
+}
+@keyframes field-catch {
+  0% { color: var(--accent-ink); opacity: 1; }
+  25% { color: var(--accent); opacity: 1; }
+  100% { color: var(--trace-settled); opacity: 0.75; }
+}
+@keyframes field-tag {
+  0%, 3% { opacity: 0; }
+  6%, 40% { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+.field-scene.is-queued { opacity: 0.55; }
+.field-trace { color: var(--control); }
+.field-tag { opacity: 0; }
+.field-scene.is-running .field-band { animation: field-sink 7s linear infinite; }
+.field-scene.is-running .field-trace { animation: field-catch 7s linear infinite; }
+.field-scene.is-running .field-tag { animation: field-tag 7s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .field-scene .field-band,
+  .field-scene .field-trace,
+  .field-scene .field-tag { animation: none !important; }
+  .field-scene.is-running .field-band { transform: translateY(66px); }
+  .field-scene.is-running .field-trace.is-above { color: var(--accent); }
+  .field-scene.is-running .field-tag.is-above { opacity: 1; }
 }

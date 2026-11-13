@@ -15,7 +15,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 }
 
 /** one-figure ranking: the row's fill is the bar (share of the largest) */
-function BarList({ rows }: { rows: Array<{ label: string; count: number; mark?: 'warning' | 'accent' }> }) {
+function BarList({ rows }: { rows: Array<{ label: string; count: number; mark?: 'warning' }> }) {
   const max = Math.max(...rows.map((r) => r.count), 1);
   return (
     <div className="space-y-1">
@@ -28,7 +28,6 @@ function BarList({ rows }: { rows: Array<{ label: string; count: number; mark?: 
           <div className="relative flex items-center justify-between h-full px-2.5">
             <span className={`text-[13px] truncate ${i === 0 ? 'text-ink' : 'text-muted'}`}>{r.label}</span>
             <span className="font-mono num text-[13px] text-muted flex items-center gap-1.5">
-              {r.mark === 'accent' ? <span aria-hidden="true" className="w-1.5 h-1.5 bg-accent flex-none" /> : null}
               {r.mark === 'warning' ? <span aria-hidden="true" className="w-1.5 h-1.5 bg-warning flex-none" /> : null}
               {r.count}
             </span>
@@ -63,7 +62,7 @@ export default function IntelPanel({ intel, phase, onRetry }: { intel: IntelAggr
           ))}
         </div>
       ) : phase === 'error' ? (
-        <ErrorNote message="Couldn't compute intel. The deep is silent." onRetry={onRetry} />
+        <ErrorNote message="Couldn't compute intel. No signal." onRetry={onRetry} />
       ) : (
         <>
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-x-8 gap-y-4">
@@ -79,7 +78,7 @@ export default function IntelPanel({ intel, phase, onRetry }: { intel: IntelAggr
           <div className="border-t border-rule pt-4 lg:border-t-0 lg:pt-0">
             <SectionTitle>Suspicious TLDs</SectionTitle>
             {intel.suspiciousTlds.length > 0 ? (
-              <BarList rows={intel.suspiciousTlds.map((t) => ({ label: `.${t.tld}`, count: t.count, mark: 'warning' as const }))} />
+              <BarList rows={intel.suspiciousTlds.map((t) => ({ label: `.${t.tld}`, count: t.count }))} />
             ) : (
               <Quiet>None observed.</Quiet>
             )}
@@ -88,7 +87,7 @@ export default function IntelPanel({ intel, phase, onRetry }: { intel: IntelAggr
           <div className="border-t border-rule pt-4 lg:border-t-0 lg:pt-0">
             <SectionTitle>Landing domains</SectionTitle>
             {intel.landings.length > 0 ? (
-              <BarList rows={intel.landings.map((l) => ({ label: l.apex, count: l.count, mark: (l.highValue ? 'accent' : undefined) as 'accent' | undefined }))} />
+              <BarList rows={intel.landings.map((l) => ({ label: l.apex, count: l.count, mark: (l.highValue ? 'warning' : undefined) as 'warning' | undefined }))} />
             ) : (
               <Quiet>No probes have landed yet.</Quiet>
             )}
@@ -97,7 +96,7 @@ export default function IntelPanel({ intel, phase, onRetry }: { intel: IntelAggr
           </div>
 
           <p className="text-[12px] text-faint m-0 pt-3 border-t border-rule">
-            <span aria-hidden="true" className="inline-block w-1.5 h-1.5 bg-accent mr-1.5 -mt-[2px]" />
+            <span aria-hidden="true" className="inline-block w-1.5 h-1.5 bg-warning mr-1.5 -mt-[2px]" />
             high-value landing after redirect
           </p>
         </>

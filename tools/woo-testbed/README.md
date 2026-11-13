@@ -13,9 +13,9 @@ live test. Throwaway-grade: weak passwords, no TLS, everything bound to `127.0.0
 | Collector | `python:3.12-slim-bookworm`, standard library only |
 | Store | `http://localhost:8188` (`WOO_PORT`) |
 | Collector | `http://127.0.0.1:8199` (`COLLECTOR_PORT`) |
-| Admin | `http://localhost:8188/wp-admin/`, user `admin`, password `pnakotic-testbed` (`WOO_ADMIN_PASSWORD`, first setup only) |
+| Admin | `http://localhost:8188/wp-admin/`, user `admin`, password `mandacaru-testbed` (`WOO_ADMIN_PASSWORD`, first setup only) |
 
-The compose project is named `pnakotic-woo-testbed`; it never touches other
+The compose project is named `mandacaru-woo-testbed`; it never touches other
 containers, networks or volumes. Ports are 8188/8199 because 8088 belongs to
 another stack on the dev machine.
 
@@ -25,6 +25,8 @@ another stack on the dev machine.
 cd tools/woo-testbed
 ./setup.sh          # starts the stack, then configures it; safe to run again
 ```
+
+Renamed from `pnakotic-woo-testbed`: run `docker compose -p pnakotic-woo-testbed down -v` once to drop the old project, then `./setup.sh`.
 
 First run takes a few minutes (image pulls, WooCommerce download). A re-run
 takes about a minute and changes nothing: products are looked up by SKU, pages by
@@ -41,8 +43,8 @@ python3 check_checkouts.py --skimmer  # same, and expects the collector to recei
 - Products: `PNK-DOLLAR` Test Dollar Item (1.00), `PNK-WIDGET` (12.50), `PNK-GADGET` (24.00), all simple and in stock; `PNK-SOLDOUT` (simple, out of stock; note the Store API still reports `is_purchasable: true` for it, so filter on `is_in_stock`); `PNK-TEE` (variable, sizes S and M, 15.00).
 - Pages: `/checkout/` has the block checkout (WooCommerce's default), `/checkout-classic/` has `[woocommerce_checkout]`.
 - Shipping: a flat rate of 5.00 for every address. Currency USD, store address in California.
-- Payment methods: only `pnakotic_test` is enabled, so order counts can only come from the always-failing gateway. It renders native `cc-number`, `cc-exp` and `cc-csc` inputs in the store's own page in both checkouts and always fails server-side (`process_payment` returns `failure`). A failed payment can still leave an order behind: a `pending` order in the classic checkout, a `checkout-draft` order in the block checkout. `./toggle.sh gateways extra on` enables Direct bank transfer and Cash on delivery as a positive control (they succeed and create real orders); `setup.sh` switches them off again.
-- No outside requests while running: `WP_HTTP_BLOCK_EXTERNAL` is on in the store container (not in wpcli, which needs it for setup), WP-Cron and updates are off, mail is short-circuited, and WooCommerce's marketplace suggestions, tracking, onboarding and WC Admin are switched off (`mu-plugins/pnakotic-offline.php`).
+- Payment methods: only `mandacaru_test` is enabled, so order counts can only come from the always-failing gateway. It renders native `cc-number`, `cc-exp` and `cc-csc` inputs in the store's own page in both checkouts and always fails server-side (`process_payment` returns `failure`). A failed payment can still leave an order behind: a `pending` order in the classic checkout, a `checkout-draft` order in the block checkout. `./toggle.sh gateways extra on` enables Direct bank transfer and Cash on delivery as a positive control (they succeed and create real orders); `setup.sh` switches them off again.
+- No outside requests while running: `WP_HTTP_BLOCK_EXTERNAL` is on in the store container (not in wpcli, which needs it for setup), WP-Cron and updates are off, mail is short-circuited, and WooCommerce's marketplace suggestions, tracking, onboarding and WC Admin are switched off (`mu-plugins/mandacaru-offline.php`).
 
 ## Toggles
 
@@ -50,7 +52,7 @@ python3 check_checkouts.py --skimmer  # same, and expects the collector to recei
 ./toggle.sh checkout classic    # the store's checkout page (woocommerce_checkout_page_id) becomes /checkout-classic/
 ./toggle.sh checkout block      # back to /checkout/
 ./toggle.sh gateways extra on|off # cod + bacs, default off (positive control that creates real orders)
-./toggle.sh skimmer on          # option pnakotic_test_skimmer = 1
+./toggle.sh skimmer on          # option mandacaru_test_skimmer = 1
 ./toggle.sh skimmer off
 ```
 
@@ -64,9 +66,9 @@ the toggle changes what WooCommerce links to (cart's Proceed to checkout, redire
 on, on the checkout (classic or block) it reads the card number field and, on
 that field's blur and on a Place Order click, sends it once as a `fetch` POST
 (`no-cors`, `text/plain`) and once as an image beacon (`GET /collect?t=<trigger>&c=<value>`)
-to `http://127.0.0.1:8199/collect` (`PNAKOTIC_COLLECTOR_URL` in `docker-compose.yml`,
-or the option `pnakotic_test_skimmer_url`). The store is at `localhost` and the collector at `127.0.0.1`: a different host string and origin, so it looks like third-party exfiltration (`registrable_domain('localhost')` is empty, so two `localhost` ports would not count as another site). From inside
-a container, `localhost` is not the host: if a Pnakotic worker is to scan the store,
+to `http://127.0.0.1:8199/collect` (`MANDACARU_COLLECTOR_URL` in `docker-compose.yml`,
+or the option `mandacaru_test_skimmer_url`). The store is at `localhost` and the collector at `127.0.0.1`: a different host string and origin, so it looks like third-party exfiltration (`registrable_domain('localhost')` is empty, so two `localhost` ports would not count as another site). From inside
+a container, `localhost` is not the host: if a Mandacaru worker is to scan the store,
 set the option to a name that both can reach.
 
 ## The collector
@@ -91,7 +93,7 @@ tail -f collector/requests.jsonl
 ## Orders and wp-cli
 
 ```bash
-W="docker compose -p pnakotic-woo-testbed run --rm wpcli"   # entrypoint is `wp`
+W="docker compose -p mandacaru-woo-testbed run --rm wpcli"   # entrypoint is `wp`
 $W wc shop_order list --status=any --fields=id,status --user=admin
 $W wc product list --user=admin --fields=id,sku,type,stock_status,price
 $W option get woocommerce_checkout_page_id
@@ -105,9 +107,9 @@ spike's questions (spec section 8, question 4).
 ## Stop and reset
 
 ```bash
-docker compose -p pnakotic-woo-testbed down        # stop, keep the data
-docker compose -p pnakotic-woo-testbed down -v     # stop and delete this project's volumes (then ./setup.sh again)
+docker compose -p mandacaru-woo-testbed down        # stop, keep the data
+docker compose -p mandacaru-woo-testbed down -v     # stop and delete this project's volumes (then ./setup.sh again)
 ```
 
-Only ever run these with the `-p pnakotic-woo-testbed` project; other stacks on the
+Only ever run these with the `-p mandacaru-woo-testbed` project; other stacks on the
 machine are not ours.

@@ -44,7 +44,7 @@ export default function KpiStrip({ kpis, phase, onRetry }: { kpis: Kpis; phase: 
         </>
       ) : phase === 'error' ? (
         <div className="col-span-2 lg:col-span-4">
-          <ErrorNote message="Couldn't reach the observatory. The deep is silent." onRetry={onRetry} />
+          <ErrorNote message="Couldn't reach the field station. No signal." onRetry={onRetry} />
         </div>
       ) : (
         <>

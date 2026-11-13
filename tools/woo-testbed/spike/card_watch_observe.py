@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Card-field watch on real WooCommerce checkouts (controller's extra observation).
 
-Attaches Pnakotic's CardWatcher and EvalCapture to a plain Playwright context the way
+Attaches Mandacaru's CardWatcher and EvalCapture to a plain Playwright context the way
 engine._scan_in_context does (watcher before new_page, eval capture on the page's CDP session
 before goto, served body and document charset read the engine's way), loads each checkout
 with a filled cart, and prints card_watch.summarize() with site_host="localhost" and the
@@ -39,7 +39,7 @@ async def observe(browser, kind: str, path: str, pid: int, type_card: bool) -> N
     evals = EvalCapture()
 
     async def warm_up():
-        await page.evaluate("'pnakotic' + '-warm-up'")
+        await page.evaluate("'mandacaru' + '-warm-up'")
     await evals.attach(cdp, warm_up=warm_up)
     served_resp = None
 
@@ -90,19 +90,19 @@ async def main() -> None:
         async with async_playwright() as p:
             browser = await launch(p)
             out("browser:", browser.version, "headless; site_host='localhost'; product", pid)
-            out("skimmer option =", option("pnakotic_test_skimmer"))
+            out("skimmer option =", option("mandacaru_test_skimmer"))
             for kind, path in CHECKOUTS:
                 out("\n== {} checkout {} , skimmer OFF ==".format(kind, path))
                 await observe(browser, kind, path, pid, type_card=False)
             toggle("skimmer", "on")
-            out("\nskimmer option =", option("pnakotic_test_skimmer"))
+            out("\nskimmer option =", option("mandacaru_test_skimmer"))
             for kind, path in CHECKOUTS:
                 out("\n== {} checkout {} , skimmer ON, test card typed and blurred ==".format(kind, path))
                 await observe(browser, kind, path, pid, type_card=True)
             await browser.close()
     finally:
         toggle("skimmer", "off")
-        out("\nskimmer option restored =", option("pnakotic_test_skimmer"))
+        out("\nskimmer option restored =", option("mandacaru_test_skimmer"))
 
 
 if __name__ == "__main__":

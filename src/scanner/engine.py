@@ -228,7 +228,7 @@ async def _document_charset(cdp: Any, frame_id: str) -> Optional[str]:
     """``document.characterSet`` of the main frame, read in a fresh isolated world, where the
     page's own scripts can't redefine the getter: how the browser decoded the served HTML.
     None when it can't be read."""
-    world = await cdp.send("Page.createIsolatedWorld", {"frameId": frame_id, "worldName": "pnakotic-charset"})
+    world = await cdp.send("Page.createIsolatedWorld", {"frameId": frame_id, "worldName": "mandacaru-charset"})
     context = world.get("executionContextId") if isinstance(world, dict) else None
     if not isinstance(context, int):
         return None
@@ -498,7 +498,7 @@ class PnakoticEngine:
             # parse its own main-world scripts now, so they are known and not mistaken for the page's.
             # Every main-world evaluate the engine makes later is run once here, so its payload is known by content.
             async def warm_up() -> None:
-                for expression in ("'pnakotic' + '-warm-up'", NEUTRAL_POINT_JS):
+                for expression in ("'mandacaru' + '-warm-up'", NEUTRAL_POINT_JS):
                     try:
                         await page.evaluate(expression)
                     except BROWSER_ERRORS:

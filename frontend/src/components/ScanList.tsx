@@ -21,15 +21,15 @@ function Status({ task }: { task: TaskState }) {
       return <span className="text-faint">Queued</span>;
     case 'running':
       return (
-        <span className="inline-flex items-center gap-1.5 text-accent">
+        <span className="inline-flex items-center gap-1.5 text-muted">
           <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-accent pulse-dot" />
           Probing
         </span>
       );
     case 'failed':
       return (
-        <span className="inline-flex items-center gap-1.5 text-negative">
-          <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-negative" />
+        <span className="inline-flex items-center gap-1.5 text-muted">
+          <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-faint" />
           Failed
         </span>
       );
@@ -200,10 +200,10 @@ export default function ScanList({
         </div>
       ) : phase === 'error' ? (
         <div className="px-5 py-4">
-          <ErrorNote message="Couldn't load recent probes. The deep is silent." onRetry={onRetry} />
+          <ErrorNote message="Couldn't load recent probes. No signal." onRetry={onRetry} />
         </div>
       ) : tasks.length === 0 ? (
-        <EmptyWell title="No probes yet. The deep is quiet." sub="Submit a URL above to start peering into the abyss." className="m-5 min-h-[120px] flex-1" />
+        <EmptyWell title="Nothing collected yet." sub="Looks empty. It rarely is. Submit a site above to look closer." className="m-5 min-h-[120px] flex-1" />
       ) : (
         <ul className="m-0 p-0 list-none">
           {visible.map((t) => (

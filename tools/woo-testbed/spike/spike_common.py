@@ -1,7 +1,7 @@
 """Shared helpers for the checkout spike (spec section 8). Throwaway-grade, testbed only.
 
-Plain async Playwright plus raw CDP, not Pnakotic's engine (its egress guard refuses
-localhost). Every docker command is scoped to the compose project pnakotic-woo-testbed.
+Plain async Playwright plus raw CDP, not Mandacaru's engine (its egress guard refuses
+localhost). Every docker command is scoped to the compose project mandacaru-woo-testbed.
 Python 3.9: no `X | Y` types, no `match`.
 """
 import asyncio
@@ -22,7 +22,7 @@ OUT = HERE / "out"
 STORE = "http://localhost:{}".format(os.environ.get("WOO_PORT", "8188"))
 COLLECTOR = "http://127.0.0.1:{}".format(os.environ.get("COLLECTOR_PORT", "8199"))
 COLLECTOR_LOG = TESTBED / "collector" / "requests.jsonl"
-PROJECT = "pnakotic-woo-testbed"
+PROJECT = "mandacaru-woo-testbed"
 
 # A published test number (Stripe's Visa debit), not 4111.../4242... (spec section 4.4).
 TEST_CARD = "4000056655665556"

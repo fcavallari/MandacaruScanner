@@ -211,6 +211,6 @@ def pick_pages(links: List[str], site_host: str, homepage_url: str, limit: int =
 
 
 def probe_url(homepage_url: str, token: str) -> str:
-    """The 404-template probe: ``<scheme>://<host[:port]>/pnakotic-<token>/``."""
+    """The 404-template probe: ``<scheme>://<host[:port]>/mandacaru-<token>/``."""
     parts = urlsplit(homepage_url)
-    return "{}://{}/pnakotic-{}/".format(parts.scheme, parts.netloc, token)
+    return "{}://{}/mandacaru-{}/".format(parts.scheme, parts.netloc, token)

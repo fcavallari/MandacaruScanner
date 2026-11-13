@@ -33,7 +33,7 @@ def main() -> None:
     toggle("checkout", "block")
     out("orders now:", orders_sql())
     out("reserved stock:", reserved_stock())
-    out("skimmer:", option("pnakotic_test_skimmer"), "| checkout page id:", option("woocommerce_checkout_page_id"))
+    out("skimmer:", option("mandacaru_test_skimmer"), "| checkout page id:", option("woocommerce_checkout_page_id"))
     out("gateways:", wp("wc", "payment_gateway", "list", "--fields=id,enabled", "--format=csv", "--user=admin").replace("\n", " "))
     out("product stock meta:", sql("select post_id, meta_key, meta_value from wp_postmeta where post_id in (11,12,13) "
                                     "and meta_key in ('_manage_stock','_stock') order by post_id, meta_key"))

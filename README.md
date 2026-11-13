@@ -1,8 +1,8 @@
-# Pnakotic
+# Mandacaru
 
-Pnakotic follows a URL to see where it really goes. It opens the URL in headless Chromium, records every redirect on the way, checks the landing page for redirect and obfuscation tricks, and gives the result a malvertising risk score from 0 to 1, with a screenshot of where the browser ended up.
+Mandacaru follows a URL to see where it really goes. It opens the URL in headless Chromium, records every redirect on the way, checks the landing page for redirect and obfuscation tricks, and gives the result a malvertising risk score from 0 to 1, with a screenshot of where the browser ended up.
 
-It has a second mode for site owners, the [site survey](#site-survey): type a domain and Pnakotic loads a handful of its pages as several kinds of visitor and reports where on the site any compromise lives, with the URL and a code snippet.
+It has a second mode for site owners, the [site survey](#site-survey): type a domain and Mandacaru loads a handful of its pages as several kinds of visitor and reports where on the site any compromise lives, with the URL and a code snippet.
 
 It is a proof of concept: a FastAPI service, Celery workers running Playwright, PostgreSQL, Redis, and a React dashboard.
 
@@ -134,7 +134,7 @@ Every page is loaded in a real browser, in a fresh context (no cookies or storag
 2. **Homepage.** The homepage is loaded in four profiles at once: `default`, `mobile-ios`, `googlebot` and `search-clicker`. If the `default` load fails with a network-level error (`net::ERR_…`) over https, all four are redone once over http and the report notes "Checked over http".
 3. **The site is one host.** It is the host that was entered. If the `default` homepage load is redirected to another host on the same registrable domain (`www.example.com` → `example.com`), that host becomes the site and the report says so. Domains are compared with the public suffix list bundled with `tldextract` (never fetched at run time), so `a.github.io` and `b.github.io` are different sites. If the homepage lands on a different domain instead, that is a Suspicious finding on `/` ("Your homepage sends desktop visitors to …"), and the site stays the entered host.
 4. **Pages.** Up to 5 internal pages are picked from the rendered links of the first homepage load that stayed on the site (`default`, then `mobile-ios`, `googlebot`, `search-clicker`). Only links on the site host (or its www/apex twin) that pass the egress check are kept. `wp-admin`, `wp-login.php`, `xmlrpc.php`, `wp-json`, feeds, logout and add-to-cart style URLs, `?replytocom=` and non-page files (images, PDF, archives, media, `.xml`, `.txt`, …) are dropped. One slot goes to each kind the site has, in this order: a post (a `/YYYY/MM/` path, `?p=N`, or the deepest path), a page (`/about/`), an archive (`/category/`, `/tag/`, `/author/`, `/page/2/`) and a contact page; the rest are filled in document order, preferring a first path segment not used yet. A homepage that left the site is never crawled: if no homepage load stayed on the site, only the 404 probe runs and the report says why.
-5. **404 probe.** `/pnakotic-<12 random hex>/` is loaded too, since hacks hide in 404 templates. The report shows it as "Your 'page not found' page" (`probe: true` on its page and its blocks).
+5. **404 probe.** `/mandacaru-<12 random hex>/` is loaded too, since hacks hide in 404 templates. The report shows it as "Your 'page not found' page" (`probe: true` on its page and its blocks).
 5a. **Checkout page.** If the homepage looks like a WooCommerce store (the plugin's path, its script variables, a `wc-block-` class or a `woocommerce` class on the page), the store's checkout page is loaded too, since card skimmers live there: the first on-site link ending in `/checkout`, else `/checkout/` at the site root. If it was already one of the picked pages it just keeps its three profiles; otherwise it is loaded as `default` only, before the probe. The report shows it as "Your checkout page" wherever it ends up (a checkout that redirects to the cart still counts). A site that doesn't look like WooCommerce gets no extra load, even with a `/checkout` link.
 6. **Other pages.** Each picked page and the probe are loaded as `default`, `mobile-ios` and `googlebot`: up to 23 loads in all with the homepage (22 without a separate checkout load). Screenshots are full-page for the homepage's `default` load and viewport-only for the rest. Each load goes through the same per-load pipeline as a URL probe (redirects, page behaviours, click probe, static analysis, YARA).
 7. Each load is scored (site-mode scoring, below), each page's profiles are folded together for cloaking, and the findings are rolled up into the report and a verdict.
@@ -216,7 +216,7 @@ For Compromised and Suspicious the report links to `CLEANUP_URL` right under the
 
 ### The report
 
-The report is grouped by where the code lives: finding blocks (one per page URL or script URL, each finding with its snippet, the match highlighted, the line number, how it was found, who saw it, the pages it was on and a collapsed Details), then **External scripts**, then **What was checked**. For a Clean site, What was checked comes first. The report body is plain language, not the dashboard's ritual vocabulary.
+The report is grouped by where the code lives: finding blocks (one per page URL or script URL, each finding with its snippet, the match highlighted, the line number, how it was found, who saw it, the pages it was on and a collapsed Details), then **External scripts**, then **What was checked**. For a Clean site, What was checked comes first. The report body is plain language, not the dashboard's field-station voice.
 
 - **External scripts.** Every script requested from a host other than the site host, grouped by host, with the pages and profiles that loaded it and whether it is in the page's HTML or added by a script (and by which). Other subdomains of the site's own domain are listed and marked "your domain". It is informational and never changes the verdict. At most 100 hosts and 500 URLs are listed; the rest are counted.
 - **What was checked.** Each page with its loads (profile, state, reason, landing, score, screenshot), clean pages folded into "N other pages clean", the number of YARA rule files, how many scripts and frames were scanned, and how many checks could not run.
@@ -255,11 +255,11 @@ The site survey is for internal use. It has no rate limit and no per-site cap. T
 | `VITE_API_BASE` | `http://localhost:8000` | Frontend, set at build time (`--build-arg`) |
 | `YARA_RULES_DIR` | unset (YARA off) | Worker; `/app/yara-rules` in compose |
 | `YARA_RULES_HOST_DIR` | `./yara-rules` | Compose only: the host directory mounted read-only at `/app/yara-rules` |
-| `CLEANUP_URL` | `https://elderward.space.fast` | API: the cleanup link in a Compromised or Suspicious site report. `docker-compose.yml` passes it to the `api` service from your shell or `.env` |
+| `CLEANUP_URL` | `https://facheiro.space.fast/` | API: the cleanup link in a Compromised or Suspicious site report. `docker-compose.yml` passes it to the `api` service from your shell or `.env` |
 
 ### YARA rules
 
-No rules ship with Pnakotic. Point the worker at a rules directory and it compiles them once per process:
+No rules ship with Mandacaru. Point the worker at a rules directory and it compiles them once per process:
 
 ```bash
 echo 'YARA_RULES_HOST_DIR=/path/to/your/yara/rules' >> .env
@@ -342,7 +342,7 @@ tests/              pytest suite
 
 ## Security notes
 
-Pnakotic opens untrusted URLs in a real browser, so the scanner limits what that browser can reach:
+Mandacaru opens untrusted URLs in a real browser, so the scanner limits what that browser can reach:
 
 - Chromium is launched with a per-scan local SOCKS5 proxy (`src/scanner/egress_proxy.py`) as its only route out, and its own DNS is disabled, so every connection it opens (HTTP, WebSocket, workers, iframes, redirect hops) reaches the proxy by hostname. The proxy resolves the name once, allows it only if every resolved address is public, and connects to one of those checked addresses, so a host cannot swap to a private address after the check (DNS rebinding).
 - CDP request interception (`EgressGuard`) runs as well, for precise per-URL blocking and `ERR_BLOCKED_BY_CLIENT` errors. Hosts blocked by either layer show up in the scan's findings.

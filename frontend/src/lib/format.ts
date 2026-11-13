@@ -219,7 +219,7 @@ export function computeKpis(tasks: TaskState[]): Kpis {
 /** The one finding: the fact in this data that most needs attention. */
 export function computeFinding(tasks: TaskState[]): string {
   const k = computeKpis(tasks);
-  if (k.scans === 0) return 'No probes yet. The deep is quiet.';
+  if (k.scans === 0) return 'Nothing collected yet.';
   const parts: string[] = [];
   if (k.highValueLandings > 0) {
     parts.push(
@@ -228,7 +228,7 @@ export function computeFinding(tasks: TaskState[]): string {
   }
   if (k.failed > 0) parts.push(`${k.failed} failed to load`);
   if (parts.length === 0) {
-    return k.completed > 0 ? 'No high-value landings, no failures. The deep is quiet.' : 'Probes in flight — the deep has not answered yet.';
+    return k.completed > 0 ? 'No high-value landings, no failures. Quiet, for now.' : 'Probes in the field. Nothing back yet.';
   }
   return parts.join(' · ');
 }
