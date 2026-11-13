@@ -76,7 +76,7 @@ earlier redesign's and did not change. Colour, mark, wordmark, scene, empty stat
     error text and error dots = negative.
   - Contrast: text >= 4.5:1; meaning-carrying graphics (verdict and status dots, bars, gauge fill,
     focus and selection lines, chain nodes and spine) >= 3:1. Card borders, row rules and control
-    outlines stay deliberately subtle (data-terminal's level, `--control` about 2:1 on surface, inputs also read by
+    outlines stay deliberately subtle (data-terminal's level, `--control` about 2.4:1 on surface, inputs also read by
     fill, placeholder and label); the dim scene art and unlit traces are decorative.
 - Type: Public Sans (dealt) for text; IBM Plex Mono for every figure, ID and URL (the style's
   decision); **Alfa Slab One carved** for the wordmark only: "MANDACARU" at 30px (26px on a phone),

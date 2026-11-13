@@ -137,7 +137,7 @@ function NodeRow({ node, depth, live, hasNext }: { node: GNode; depth: number; l
     <li className="relative grid grid-cols-[20px_minmax(0,1fr)] gap-x-2.5">
       {/* the spine runs from this marker down to the next */}
       {hasNext ? (
-        <span aria-hidden="true" className={`absolute left-[9.5px] top-[14px] bottom-0 w-px ${live ? 'bg-accent/60' : 'bg-control'}`} />
+        <span aria-hidden="true" className={`absolute left-[9.5px] top-[14px] bottom-0 w-px ${live ? 'bg-accent' : 'bg-control'}`} />
       ) : null}
       <span aria-hidden="true" className="flex justify-center pt-[5px]">
         <span className={`relative w-[9px] h-[9px] rounded-[2px] border ${marker}`} />
@@ -174,7 +174,7 @@ function NodeRow({ node, depth, live, hasNext }: { node: GNode; depth: number; l
 function EdgeRow({ edge, live }: { edge: GEdge; live: boolean }) {
   return (
     <li className="relative grid grid-cols-[20px_minmax(0,1fr)] gap-x-2.5">
-      <span aria-hidden="true" className={`absolute left-[9.5px] top-0 bottom-0 w-px ${live ? 'bg-accent/60' : 'bg-control'}`} />
+      <span aria-hidden="true" className={`absolute left-[9.5px] top-0 bottom-0 w-px ${live ? 'bg-accent' : 'bg-control'}`} />
       <span />
       <p className="text-[12px] leading-none text-faint m-0 py-2">
         {edge.status != null ? <span className="font-mono num text-muted">{edge.status}</span> : null}

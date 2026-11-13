@@ -84,7 +84,7 @@ function SiteForm({ onSubmit }: { onSubmit: (site: string) => Promise<string | n
     >
       <div className="flex flex-wrap sm:flex-nowrap gap-2.5 items-center">
         <div className="relative basis-full sm:basis-auto sm:flex-1 min-w-0">
-          <span aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 font-mono text-[14px] leading-none text-accent pointer-events-none select-none">
+          <span aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 font-mono text-[14px] leading-none text-accent-ink pointer-events-none select-none">
             &gt;
           </span>
           <input
@@ -191,7 +191,7 @@ function ProbeForm({
       <div className="flex flex-wrap sm:flex-nowrap gap-2.5 items-center">
         <div className="relative basis-full sm:basis-auto sm:flex-1 min-w-0">
           {/* a prompt, not a search: this field launches a probe */}
-          <span aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 font-mono text-[14px] leading-none text-accent pointer-events-none select-none">
+          <span aria-hidden="true" className="absolute left-3.5 top-1/2 -translate-y-1/2 font-mono text-[14px] leading-none text-accent-ink pointer-events-none select-none">
             &gt;
           </span>
           <input

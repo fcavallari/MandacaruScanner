@@ -78,7 +78,7 @@ export default function IntelPanel({ intel, phase, onRetry }: { intel: IntelAggr
           <div className="border-t border-rule pt-4 lg:border-t-0 lg:pt-0">
             <SectionTitle>Suspicious TLDs</SectionTitle>
             {intel.suspiciousTlds.length > 0 ? (
-              <BarList rows={intel.suspiciousTlds.map((t) => ({ label: `.${t.tld}`, count: t.count, mark: 'warning' as const }))} />
+              <BarList rows={intel.suspiciousTlds.map((t) => ({ label: `.${t.tld}`, count: t.count }))} />
             ) : (
               <Quiet>None observed.</Quiet>
             )}

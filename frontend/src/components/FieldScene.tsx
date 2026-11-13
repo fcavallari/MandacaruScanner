@@ -169,9 +169,10 @@ export default function FieldScene({ task }: { task: TaskState }) {
   const bandId = useSvgId('field-band');
   const { seeds, tokens } = useMemo(
     () => probeSeeds(task),
-    // the seeds are the probe's identity; a poll's fresh task object must not recompute them
+    // the seeds are the probe's identity (task_id only): a poll's fresh task object, or a refresh that swaps
+    // the optimistic raw URL for the normalised one, must not re-seed the scene mid-wait
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [task.task_id, task.target_url, task.kind, task.profile],
+    [task.task_id],
   );
   const [digests, setDigests] = useState(() => seeds.map(fnvHex));
   useEffect(() => {
@@ -196,6 +197,8 @@ export default function FieldScene({ task }: { task: TaskState }) {
       <div className="flex-1 flex items-center">
         <svg
           viewBox={`0 0 ${W} 270`}
+          // inert on purpose: the fixed-aspect class gives the box the viewBox's own ratio, and filling the slot
+          // with slice would crop the mark at narrow widths
           preserveAspectRatio="xMidYMid slice"
           aria-hidden="true"
           className={`field-scene ${running ? 'is-running' : 'is-queued'} ${SCENE_SVG}`}

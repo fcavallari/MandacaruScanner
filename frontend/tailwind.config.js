@@ -34,7 +34,7 @@ export default {
       },
       fontFamily: {
         // Public Sans for text; IBM Plex Mono for every figure/ID/URL (the style's
-        // decision); Alfa Slab One kept to the wordmark and display headings.
+        // decision); Alfa Slab One kept to the wordmark only.
         sans: ['"Public Sans"', "Inter", "system-ui", "sans-serif"],
         mono: ['"IBM Plex Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
         display: ['"Alfa Slab One"', "Rockwell", '"Roboto Slab"', "Georgia", "serif"],

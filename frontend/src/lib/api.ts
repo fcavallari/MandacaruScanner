@@ -129,7 +129,7 @@ export interface SiteLoad {
 export interface SiteCheckedPage {
   index: number; // 0 = the homepage
   url: string;
-  probe?: boolean; // the 404 probe (/pnakotic-<hex>/): the site's "page not found" page
+  probe?: boolean; // the 404 probe (/mandacaru-<hex>/; reports from before the rename carry /pnakotic-): the site's "page not found" page
   checkout?: boolean; // a WooCommerce store's checkout page (picked, or added), wherever it landed
   // src/scanner/site_report.py _checkout_landing: where the checkout page's first usable load ended (null when not the checkout page, or no usable load)
   checkout_state?: 'loaded' | 'redirected' | 'not_found' | null; // not_found: a 4xx; redirected: another path (an empty cart sends visitors to the cart)

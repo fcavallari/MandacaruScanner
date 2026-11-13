@@ -20,9 +20,9 @@
   --surface: #12100d;  /* cards, darker than ground */
   --raised: #1f1c18;   /* hover / raised step */
   --active: #1a1714;   /* selected fill, one step off surface */
-  --border: #332e27;   /* structural lines, ~1.35:1 on ground: panels read off the ground */
+  --border: #3a342c;   /* structural lines, ~1.5:1 on ground: panels read off the ground */
   --rule: #24201b;     /* row rules, one step off surface */
-  --control: #4a443a;  /* interactive outlines, brighter than --border */
+  --control: #58514a;  /* interactive outlines, ~2.4:1 on surface, brighter than --border */
 
   /* text — three tiers, all >= 4.5:1 on surface/ground/raised/active; muted and faint kept far apart */
   --text: #d8d0bd;     /* bone */
@@ -41,7 +41,6 @@
 
   /* pills — dark tint of the hue, ink one step up */
   --pill-positive-bg: #232819;
-  --pill-negative-bg: #241719;
   --pill-warning-bg: #2b2415;
   --pill-neutral-bg: #26221d;
   --pill-neutral-ink: #d8d0bd;
