@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import Mark from './Mark';
 import KpiStrip from './KpiStrip';
@@ -38,6 +38,8 @@ export default function Dashboard() {
   const [phase, setPhase] = useState<Phase>('loading');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // useId() yields colons or guillemets depending on the React version; url(#…) needs a plain id.
+  const carveId = `mandacaru-carve-${useId().replace(/[^A-Za-z0-9_-]/g, '')}`;
 
   /* ---------- data ---------- */
 
@@ -210,14 +212,26 @@ export default function Dashboard() {
     <div className="max-w-[1408px] mx-auto px-4 sm:px-8 pt-6 sm:pt-7 pb-12">
       {/* title row: the product is named, then a noun, then the finding */}
       <div className="flex items-start justify-between gap-4 mb-7">
-        {/* the lockup: the sigil and the wordmark are the title; the screen's noun sits beside it */}
+        {/* the lockup: the cactus and the wordmark are the title; the screen's noun sits beside it.
+            The wordmark stays real text; the carve filter roughens its outline like a gouge on wood. */}
         <div className="min-w-0 flex items-center gap-3.5 sm:gap-4">
           <Mark size={44} className="text-accent flex-none hidden sm:block" />
           <Mark size={36} className="text-accent flex-none sm:hidden" />
           <div className="min-w-0">
+            <svg width="0" height="0" aria-hidden="true" focusable="false" style={{ position: 'absolute' }}>
+              <filter id={carveId} x="-5%" y="-10%" width="110%" height="120%">
+                <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="n" />
+                <feDisplacementMap in="SourceGraphic" in2="n" scale="2.2" xChannelSelector="R" yChannelSelector="G" />
+              </filter>
+            </svg>
             <h1 className="m-0 flex items-baseline gap-x-3 gap-y-0.5 flex-wrap leading-none">
-              <span className="font-display text-[26px] sm:text-[30px] font-semibold tracking-[0.06em] text-ink">PNAKOTIC</span>
-              <span className="text-[17px] sm:text-[18px] font-medium text-muted">Observatory</span>
+              <span
+                className="font-display text-[26px] sm:text-[30px] tracking-[0.05em] text-ink"
+                style={{ filter: `url(#${carveId})` }}
+              >
+                MANDACARU
+              </span>
+              <span className="text-[17px] sm:text-[18px] font-medium text-muted">Field Station</span>
             </h1>
             {phase === 'ready' ? <FindingLine text={finding} /> : null}
           </div>
