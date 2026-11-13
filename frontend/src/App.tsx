@@ -17,16 +17,16 @@ function Rail() {
       aria-label="Primary"
       className="hidden md:flex fixed left-0 top-0 bottom-0 w-[56px] border-r border-line bg-ground flex-col items-center py-4 z-20"
     >
-      <a href="#" aria-label="Pnakotic" title="Pnakotic" className="text-accent block mb-6">
+      <a href="#" aria-label="Mandacaru" title="Mandacaru" className="text-accent block mb-6">
         <Mark size={32} />
       </a>
 
       {/* the one destination: this screen */}
       <button
         type="button"
-        aria-label="Observatory"
+        aria-label="Field Station"
         aria-current="page"
-        title="Observatory"
+        title="Field Station"
         className="relative w-9 h-9 flex items-center justify-center text-ink cursor-default"
       >
         {/* the move: a 1px accent line exactly as tall as the icon, on the rail's edge */}
