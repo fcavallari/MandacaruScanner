@@ -6,7 +6,7 @@ import { hostnameOf, profileLabel, shortHost, verdictOf } from '../lib/format';
 /**
  * Where each browser persona was sent. A cloaker shows its payload only to the visitor it
  * wants (a phone, a search click) and something harmless to everyone else, so a split here
- * is the tell. Rows that were steered off the common landing carry the accent line.
+ * is the tell. Rows that were steered off the common landing carry a warning line.
  */
 export default function ProfileSplit({
   taskId,
@@ -50,7 +50,7 @@ export default function ProfileSplit({
               const host = hostnameOf(v.final_url);
               const score = v.malicious_score ?? 0;
               return (
-                <tr key={v.profile} className={`border-t border-rule ${off ? 'shadow-[inset_1px_0_0_0_var(--accent)]' : ''}`}>
+                <tr key={v.profile} className={`border-t border-rule ${off ? 'shadow-[inset_1px_0_0_0_var(--warning)]' : ''}`}>
                   <td className="px-3 py-1.5 text-ink whitespace-nowrap">
                     {profileLabel(v.profile)}
                     {v.requested ? <span className="text-faint"> · requested</span> : null}
@@ -59,7 +59,7 @@ export default function ProfileSplit({
                     {v.error ? (
                       <span className="text-warning">did not load</span>
                     ) : (
-                      <span className={off ? 'text-accent' : 'text-muted'} title={v.final_url ?? ''}>
+                      <span className={off ? 'text-warning' : 'text-muted'} title={v.final_url ?? ''}>
                         {shortHost(host || '—', 34)}
                       </span>
                     )}

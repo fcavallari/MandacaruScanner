@@ -41,7 +41,7 @@ export function ErrorNote({ message, onRetry }: { message: string; onRetry?: () 
         <button
           type="button"
           onClick={onRetry}
-          className="text-[13px] font-medium text-accent bg-transparent border-0 p-0 cursor-pointer"
+          className="text-[13px] font-medium text-accent-ink bg-transparent border-0 p-0 cursor-pointer"
         >
           Retry
         </button>

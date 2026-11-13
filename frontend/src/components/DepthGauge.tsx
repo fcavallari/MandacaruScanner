@@ -9,13 +9,13 @@ const THRESHOLDS = [
 
 /**
  * The score as a gauge: a 0–1 track, the fill at its true ratio, notched at the two
- * verdict cut-offs so the pill beside the title can be read off the bar. The one hue
- * on the main data element; polarity colour only when it is bad.
+ * verdict cut-offs so the pill beside the title can be read off the bar. Cactus green
+ * while benign; warning and negative take over as the score climbs.
  */
 export default function DepthGauge({ score }: { score: number }) {
   const clamped = Math.min(1, Math.max(0, score));
   const tone = scoreTone(score);
-  const fillClass = tone === 'negative' ? 'bg-negative' : tone === 'warning' ? 'bg-warning' : 'bg-accent';
+  const fillClass = tone === 'negative' ? 'bg-negative' : tone === 'warning' ? 'bg-warning' : 'bg-positive-fill';
   const valueClass = tone === 'negative' ? 'text-negative' : tone === 'warning' ? 'text-warning' : 'text-ink';
 
   return (

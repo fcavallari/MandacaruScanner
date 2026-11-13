@@ -3,8 +3,8 @@ import type { Hop } from '../lib/api';
 import { REDIRECT_MECHANISMS, hopLabel, hostnameOf } from '../lib/format';
 
 /**
- * The signature element: the redirect chain as a descent. One row per distinct host
- * in visit order, origin at the top, each step one level deeper, the landing at the bottom; between rows, how the
+ * The signature element: the redirect chain as a trail. One row per distinct host
+ * in visit order, origin at the top, each step one stop further, the landing at the bottom; between rows, how the
  * browser got there in words ("302 · HTTP redirect"). Hosts print whole — the end of a
  * host (apex, TLD) is the telling part, so it is never truncated. A 1px accent spine
  * means the scorer called it a real chain.
@@ -154,7 +154,7 @@ function NodeRow({ node, depth, live, hasNext }: { node: GNode; depth: number; l
             {first ? (node.isLanding ? 'Origin · landed' : 'Origin') : (
               <>
                 {node.isLanding ? 'Landed · ' : null}
-                depth <span className="font-mono num">{depth}</span>
+                stop <span className="font-mono num">{depth}</span>
               </>
             )}
             {node.selfStatus != null ? <span className="font-mono num"> · {node.selfStatus} in place</span> : null}

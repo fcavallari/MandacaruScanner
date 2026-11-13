@@ -20,7 +20,7 @@ const control = 'h-[44px] sm:h-[40px] bg-ground border rounded-full outline-none
 
 /**
  * The job the screen exists for. Two kinds: Site survey (the default) quick-checks a whole
- * site from its homepage; URL probe is the single-URL descent. The chosen kind carries the
+ * site from its homepage; URL probe is the single-URL trace. The chosen kind carries the
  * 1px accent line exactly as wide as its label (the style's move). Each form clears its
  * field only once the job was accepted, so a rejected input can be fixed.
  */
@@ -111,7 +111,7 @@ function SiteForm({ onSubmit }: { onSubmit: (site: string) => Promise<string | n
           />
           {site ? null : <SlashHint />}
         </div>
-        <SummonButton busy={busy} className="basis-full sm:basis-auto" />
+        <InspectButton busy={busy} className="basis-full sm:basis-auto" />
       </div>
       {error ? <FormError error={error} /> : null}
     </form>
@@ -129,22 +129,22 @@ function SlashHint() {
   );
 }
 
-function SummonButton({ busy, className = '' }: { busy: boolean; className?: string }) {
+function InspectButton({ busy, className = '' }: { busy: boolean; className?: string }) {
   return (
     <button
       type="submit"
       disabled={busy}
       aria-busy={busy}
       className={`${className} h-[44px] sm:h-[40px] px-6 rounded-full text-[15px] font-semibold tracking-wide flex items-center justify-center gap-2 whitespace-nowrap transition-colors
-        ${busy ? 'bg-accent/60 text-ground cursor-wait' : 'bg-accent text-[#08120d] hover:bg-accent/85 active:bg-accent/75 cursor-pointer'}`}
+        bg-button text-ink hover:bg-button/85 active:bg-button/75 disabled:bg-button/60 ${busy ? 'cursor-wait' : 'cursor-pointer'}`}
     >
       {busy ? (
         <>
-          <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-ground pulse-dot" />
-          Summoning…
+          <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-ink pulse-dot" />
+          Inspecting…
         </>
       ) : (
-        'Summon'
+        'Inspect'
       )}
     </button>
   );
@@ -160,7 +160,7 @@ function FormError({ error }: { error: string }) {
 }
 
 /**
- * URL probe (today's form): paste a URL, pick a persona, summon.
+ * URL probe (today's form): paste a URL, pick a persona, inspect.
  * One row from sm up; on a phone the URL takes its own row and the controls
  * grow to 44px. `onSubmit` resolves to an error sentence, or null on success.
  */
@@ -240,7 +240,7 @@ function ProbeForm({
           </svg>
         </div>
 
-        <SummonButton busy={busy} />
+        <InspectButton busy={busy} />
       </div>
 
       {error ? <FormError error={error} /> : null}

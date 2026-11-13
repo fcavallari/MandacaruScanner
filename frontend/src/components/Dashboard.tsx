@@ -84,7 +84,7 @@ export default function Dashboard() {
             const result = await taskResults(task.task_id);
             setTasks((prev) => ({ ...prev, [task.task_id]: { ...prev[task.task_id], status: st.status, result } }));
           } else if (st.status === 'failed') {
-            setTasks((prev) => ({ ...prev, [task.task_id]: { ...prev[task.task_id], status: st.status, error: st.error || 'The probe failed' } }));
+            setTasks((prev) => ({ ...prev, [task.task_id]: { ...prev[task.task_id], status: st.status, error: st.error || 'Analysis interrupted' } }));
           } else {
             setTasks((prev) => ({ ...prev, [task.task_id]: { ...prev[task.task_id], status: st.status } }));
           }
@@ -109,10 +109,10 @@ export default function Dashboard() {
         ? (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
         : null;
       // 400/503 carry the API's sentence; 422 carries pydantic's list of field errors.
-      // The voice frames it, the real reason always follows.
-      if (typeof detail === 'string') return `The gate is sealed. ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
-      if (Array.isArray(detail)) return 'The gate is sealed. Only http(s) URLs can be probed.';
-      return `The observatory is unreachable. No answer from ${API_BASE}.`;
+      // A short phrase frames it, the real reason always follows.
+      if (typeof detail === 'string') return `Can't inspect that. ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
+      if (Array.isArray(detail)) return "Can't inspect that. Only http(s) URLs can be probed.";
+      return `No signal from the field station. No answer from ${API_BASE}.`;
     }
   };
 
@@ -128,14 +128,14 @@ export default function Dashboard() {
         ? (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
         : null;
       // 422 carries the normaliser's sentence (a string) or pydantic's list of field errors.
-      if (typeof detail === 'string') return `The gate is sealed. ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
+      if (typeof detail === 'string') return `Can't inspect that. ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
       if (Array.isArray(detail)) {
         const msgs = detail
           .map((d) => (d && typeof d === 'object' && typeof (d as { msg?: unknown }).msg === 'string' ? (d as { msg: string }).msg : ''))
           .filter(Boolean);
-        return `The gate is sealed. ${msgs.length ? `${msgs.join('; ')}.` : 'Enter a site such as example.com.'}`;
+        return `Can't inspect that. ${msgs.length ? `${msgs.join('; ')}.` : 'Enter a site such as example.com.'}`;
       }
-      return `The observatory is unreachable. No answer from ${API_BASE}.`;
+      return `No signal from the field station. No answer from ${API_BASE}.`;
     }
   };
 
@@ -153,7 +153,7 @@ export default function Dashboard() {
   const finding = useMemo(() => computeFinding(ordered), [ordered]);
   const intel = useMemo(() => computeIntel(ordered), [ordered]);
 
-  // the lead block: prefer a completed probe (the deepest one); else the newest
+  // the lead block: prefer a completed probe; else the newest
   const selected = useMemo(() => {
     if (selectedId && tasks[selectedId]) return tasks[selectedId];
     const completed = ordered.filter((t) => t.status === 'completed' && t.result);
