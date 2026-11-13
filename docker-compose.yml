@@ -32,7 +32,7 @@ services:
       DATABASE_URL: postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory
       REDIS_URL: redis://redis:6379/0
       ARTIFACTS_DIR: /app/artifacts
-      CLEANUP_URL: ${CLEANUP_URL:-https://elderward.space.fast}
+      CLEANUP_URL: ${CLEANUP_URL:-https://facheiro.space.fast/}
     ports:
       - "8000:8000"
     # seccomp_profile.json = Docker's current default profile (moby/profiles) plus an

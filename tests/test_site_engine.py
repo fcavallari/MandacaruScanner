@@ -18,10 +18,10 @@ async def test_site_scan_compromised_with_snippet_and_merged_footer(site_server,
     assert len(footer) == 1 and len(footer[0]["findings"][0]["pages"]) >= 3
     assert footer[0]["findings"][0]["snippet"]["line"] >= 1
     assert [p["index"] for p in r["checked"]["pages"]][-1] == len(r["checked"]["pages"]) - 1  # probe last
-    assert any("/pnakotic-" in p["url"] for p in r["checked"]["pages"])
+    assert any("/mandacaru-" in p["url"] for p in r["checked"]["pages"])
     # Homepage first, the probe last; the www-less loopback host is the site.
     pages = r["checked"]["pages"]
-    assert pages[0]["url"] == f"{site_server}/" and "/pnakotic-" in pages[-1]["url"]
+    assert pages[0]["url"] == f"{site_server}/" and "/mandacaru-" in pages[-1]["url"]
     assert [p["probe"] for p in pages] == [False] * (len(pages) - 1) + [True]
     assert [l["profile"] for l in pages[0]["loads"]] == ["default", "mobile-ios", "search-clicker", "googlebot"]
     assert all([l["profile"] for l in p["loads"]] == ["default", "mobile-ios", "googlebot"] for p in pages[1:])
@@ -89,7 +89,7 @@ async def test_site_scan_offsite_homepage_not_crawled(site_server, tmp_path):
     kinds = [f["kind"] for b in out.report["blocks"] for f in b["findings"]]
     assert "offsite_homepage" in kinds
     pages = [p["url"] for p in out.report["checked"]["pages"]]
-    assert len(pages) == 2 and "/pnakotic-" in pages[1]   # only the probe after the homepage
+    assert len(pages) == 2 and "/mandacaru-" in pages[1]   # only the probe after the homepage
     assert out.report["site"] == "127.0.0.1"
     assert out.report["notes"] == ["No pages could be picked because the homepage left the site"]
     assert out.redirect_chain is True

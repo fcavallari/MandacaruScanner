@@ -35,7 +35,7 @@ def test_extract_links_caps_and_filters():
 def test_probe_url():
     from pnakotic.src.scanner.page_picker import probe_url
 
-    assert probe_url("https://example.com:8443/", "a1b2c3d4e5f6") == "https://example.com:8443/pnakotic-a1b2c3d4e5f6/"
+    assert probe_url("https://example.com:8443/", "a1b2c3d4e5f6") == "https://example.com:8443/mandacaru-a1b2c3d4e5f6/"
 
 
 def test_extract_links_resolves_normalises_and_dedupes():

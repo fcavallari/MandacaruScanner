@@ -320,7 +320,7 @@ def test_the_checkout_page_is_flagged_by_index():
     from pnakotic.src.scanner.site_report import build_report
 
     loads = [_load(0, "https://s.com/", "default"), _load(1, "https://s.com/kassa/checkout/", "default"),
-             _load(2, "https://s.com/pnakotic-0123456789ab/", "default")]
+             _load(2, "https://s.com/mandacaru-0123456789ab/", "default")]
     r = build_report("s.com", "s.com", None, loads, 1, [], [], checkout_index=1)
     assert [p["checkout"] for p in r["checked"]["pages"]] == [False, True, False]
     assert [p["checkout"] for p in build_report("s.com", "s.com", None, loads, 1, [], [])["checked"]["pages"]] == [False] * 3
@@ -392,8 +392,8 @@ def test_the_404_probe_is_flagged_on_its_page_and_its_blocks():
     from _support import _load, _yara_hop
     from pnakotic.src.scanner.site_report import build_report
 
-    probe = "https://s.com/pnakotic-0123456789ab/"
-    own = "https://s.com/pnakotic-news/"  # an owner page with the same prefix: the probe is the last such page
+    probe = "https://s.com/mandacaru-0123456789ab/"
+    own = "https://s.com/mandacaru-news/"  # an owner page with the same prefix: the probe is the last such page
     loads = [_load(0, "https://s.com/", "default"),
              _load(1, own, "default", [_yara_hop("served", own, "r1", 3, False, 0, "A")]),
              _load(2, probe, "default", [_yara_hop("served", probe, "r2", 3, False, 0, "B")])]
@@ -469,7 +469,7 @@ def test_conditional_redirect_to_another_domain_is_suspicious_not_clean():
 
     home_profiles = ("default", "mobile-ios", "googlebot", "search-clicker")
     page_profiles = ("default", "mobile-ios", "googlebot")
-    probe = _redirect_page(2, "https://s.com/pnakotic-abc/", None, page_profiles)
+    probe = _redirect_page(2, "https://s.com/mandacaru-abc/", None, page_profiles)
     for steered in ("mobile-ios", "search-clicker"):
         home = _redirect_page(0, "https://s.com/", steered, home_profiles)
         about = _redirect_page(1, "https://s.com/about/", "mobile-ios", page_profiles)
