@@ -47,7 +47,10 @@
   --pill-neutral-ink: #d8d0bd;
 
   /* charts */
-  --grid: #2a2621;
+  --grid: #2a2621;     /* also the empty ground's dimmed strata */
+
+  /* the waiting scene (FieldScene.tsx): a trace the band has passed, and the empty ground's mark */
+  --trace-settled: #6b4a3a;
 
   /* type — dealt sizes, lifted one step for legibility (meta floor 12px) */
   --fs-title: 30px;
@@ -116,4 +119,40 @@ body {
 }
 .pulse-dot {
   animation: pnk-pulse 1.6s ease-in-out infinite;
+}
+
+/*
+  The waiting scene (FieldScene.tsx), the one deliberate animation: the band sinks
+  through the strata in 7 s, and each trace flashes and shows its tag when the band's
+  line reaches it (its animation-delay is set inline from its depth). Queued: no band,
+  traces unlit, the whole scene dimmed. Reduced motion: one still frame, the band fixed
+  halfway and the traces above it lit and tagged.
+*/
+@keyframes field-sink {
+  from { transform: translateY(0); }
+  to { transform: translateY(132px); }
+}
+@keyframes field-catch {
+  0% { color: var(--accent-ink); opacity: 1; }
+  25% { color: var(--accent); opacity: 1; }
+  100% { color: var(--trace-settled); opacity: 0.75; }
+}
+@keyframes field-tag {
+  0%, 3% { opacity: 0; }
+  6%, 40% { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+.field-scene.is-queued { opacity: 0.55; }
+.field-trace { color: var(--control); }
+.field-tag { opacity: 0; }
+.field-scene.is-running .field-band { animation: field-sink 7s linear infinite; }
+.field-scene.is-running .field-trace { animation: field-catch 7s linear infinite; }
+.field-scene.is-running .field-tag { animation: field-tag 7s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .field-scene .field-band,
+  .field-scene .field-trace,
+  .field-scene .field-tag { animation: none !important; }
+  .field-scene.is-running .field-band { transform: translateY(66px); }
+  .field-scene.is-running .field-trace.is-above { color: var(--accent); }
+  .field-scene.is-running .field-tag.is-above { opacity: 1; }
 }

@@ -3,11 +3,11 @@ import type { ArtifactEntry, TaskState } from '../lib/api';
 import { artifactUrl } from '../lib/api';
 import { hostnameOf, redirectCount, relativeTime, verdictOf } from '../lib/format';
 import DepthGauge from './DepthGauge';
-import ProbeRitual from './ProbeRitual';
+import FieldScene, { EmptyGround } from './FieldScene';
 import ProfileSplit from './ProfileSplit';
 import RedirectChain from './RedirectChain';
 import SiteReport, { SiteVerdictPill } from './SiteReport';
-import { Bar, EmptyWell, ErrorNote } from './states';
+import { Bar, ErrorNote } from './states';
 
 /**
  * The lead block: the selected probe. Answers the screen's one question —
@@ -147,13 +147,9 @@ export default function SelectedScan({ task, phase, onRetry, now = Date.now() }:
           </div>
         </div>
       ) : phase === 'error' ? null : !task ? (
-        <EmptyWell
-          title="Nothing collected yet."
-          sub="Looks empty. It rarely is. Submit a site above to look closer."
-          className="flex-1"
-        />
+        <EmptyGround />
       ) : task.status === 'queued' || task.status === 'running' ? (
-        <ProbeRitual task={task} />
+        <FieldScene key={task.task_id} task={task} />
       ) : task.status === 'failed' ? (
         <div className="flex-1 flex flex-col justify-center gap-2">
           <p className="text-[14px] text-negative m-0 break-all">{task.error || 'Analysis interrupted'}</p>
