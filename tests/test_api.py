@@ -16,9 +16,9 @@ def _jsonb_as_json_on_sqlite(_type, _compiler, **_kw):
 @pytest.fixture
 def db(tmp_path, monkeypatch):
     """Point the API module and the worker's session import at a fresh SQLite DB."""
-    from pnakotic.src.api import main
-    from pnakotic.src.database import session as db_session
-    from pnakotic.src.database.session import Base
+    from mandacaru.src.api import main
+    from mandacaru.src.database import session as db_session
+    from mandacaru.src.database.session import Base
 
     engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
@@ -32,7 +32,7 @@ def db(tmp_path, monkeypatch):
 
 
 def _add_job(Session, job_id, status, updated_at=None, created_at=None, kind="url"):
-    from pnakotic.src.database import models
+    from mandacaru.src.database import models
 
     s = Session()
     s.add(models.ScanJob(id=job_id, target_url=f"https://{job_id}.example/", status=status,
@@ -42,7 +42,7 @@ def _add_job(Session, job_id, status, updated_at=None, created_at=None, kind="ur
 
 
 def _job(Session, job_id):
-    from pnakotic.src.database import models
+    from mandacaru.src.database import models
 
     s = Session()
     try:
@@ -58,7 +58,7 @@ def _as_utc(dt):
 # ---------- sweeper ----------
 
 def test_sweeper_fails_stale_running_and_queued_jobs(db):
-    from pnakotic.src.api.main import sweep_stale_jobs
+    from mandacaru.src.api.main import sweep_stale_jobs
 
     _engine, Session = db
     now = datetime.now(timezone.utc)
@@ -81,7 +81,7 @@ def test_sweeper_fails_stale_running_and_queued_jobs(db):
 # ---------- worker ----------
 
 class _FakeEngine:
-    """Stands in for PnakoticEngine; `behaviour` decides what scan() does."""
+    """Stands in for MandacaruEngine; `behaviour` decides what scan() does."""
     behaviour = None
     calls = []
     compared = []
@@ -96,16 +96,16 @@ class _FakeEngine:
 
 @pytest.fixture
 def fake_engine(monkeypatch):
-    from pnakotic.src.scanner import engine as engine_mod
+    from mandacaru.src.scanner import engine as engine_mod
 
     _FakeEngine.calls = []
     _FakeEngine.compared = []
-    monkeypatch.setattr(engine_mod, "PnakoticEngine", _FakeEngine)
+    monkeypatch.setattr(engine_mod, "MandacaruEngine", _FakeEngine)
     return _FakeEngine
 
 
 def test_worker_redelivery_refreshes_updated_at(db, fake_engine):
-    from pnakotic.src.workers.celery_app import run_scan_worker
+    from mandacaru.src.workers.celery_app import run_scan_worker
 
     _engine, Session = db
     long_ago = datetime.now(timezone.utc) - timedelta(minutes=14)
@@ -128,9 +128,9 @@ def test_worker_redelivery_refreshes_updated_at(db, fake_engine):
 
 
 def test_worker_success_writes_result_and_replaces_stale_row(db, fake_engine):
-    from pnakotic.src.database import models
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
-    from pnakotic.src.workers.celery_app import run_scan_worker
+    from mandacaru.src.database import models
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.workers.celery_app import run_scan_worker
 
     _engine, Session = db
     _add_job(Session, "ok", "queued", datetime.now(timezone.utc))
@@ -164,9 +164,9 @@ def test_worker_success_writes_result_and_replaces_stale_row(db, fake_engine):
 
 @pytest.fixture
 def fake_site_scanner(monkeypatch):
-    from pnakotic.src.scanner import engine as engine_mod
-    from pnakotic.src.scanner import site_engine
-    from pnakotic.src.scanner.site_engine import SiteOutcome
+    from mandacaru.src.scanner import engine as engine_mod
+    from mandacaru.src.scanner import site_engine
+    from mandacaru.src.scanner.site_engine import SiteOutcome
 
     class _FakeSiteScanner:
         behaviour = None
@@ -185,14 +185,14 @@ def fake_site_scanner(monkeypatch):
     _FakeSiteScanner.behaviour = None
     _FakeSiteScanner.engines = []
     monkeypatch.setattr(site_engine, "SiteScanner", _FakeSiteScanner)
-    monkeypatch.setattr(engine_mod, "PnakoticEngine", _FakeEngine)
+    monkeypatch.setattr(engine_mod, "MandacaruEngine", _FakeEngine)
     _FakeEngine.calls = []
     return _FakeSiteScanner
 
 
 def test_site_worker_writes_report_and_is_idempotent(db, fake_site_scanner):
-    from pnakotic.src.database import models
-    from pnakotic.src.workers.celery_app import run_site_scan_worker
+    from mandacaru.src.database import models
+    from mandacaru.src.workers.celery_app import run_site_scan_worker
 
     _engine, Session = db
     _add_job(Session, "s1", "queued", kind="site")
@@ -216,7 +216,7 @@ def test_site_worker_writes_report_and_is_idempotent(db, fake_site_scanner):
 
 
 def test_site_worker_failure_marks_job_failed_with_truncated_error(db, fake_site_scanner):
-    from pnakotic.src.workers.celery_app import run_site_scan_worker
+    from mandacaru.src.workers.celery_app import run_site_scan_worker
 
     _engine, Session = db
     long_ago = datetime.now(timezone.utc) - timedelta(minutes=14)
@@ -232,13 +232,13 @@ def test_site_worker_failure_marks_job_failed_with_truncated_error(db, fake_site
 
 
 def test_site_task_is_routed_to_site_queue():
-    from pnakotic.src.workers.celery_app import celery_app
+    from mandacaru.src.workers.celery_app import celery_app
 
-    assert celery_app.conf.task_routes["pnakotic.site_scan"] == {"queue": "site"}
+    assert celery_app.conf.task_routes["mandacaru.site_scan"] == {"queue": "site"}
 
 
 def test_scan_job_kind_defaults_to_url(db):
-    from pnakotic.src.database import models
+    from mandacaru.src.database import models
 
     _engine, Session = db
     s = Session()
@@ -253,13 +253,13 @@ def test_scan_job_kind_defaults_to_url(db):
 @pytest.fixture
 def client(db):
     from fastapi.testclient import TestClient
-    from pnakotic.src.api import main
+    from mandacaru.src.api import main
 
     return TestClient(main.app)  # no `with`: skip lifespan (real DB init + sweeper)
 
 
 def test_scan_dispatches_without_task_folder(client, monkeypatch):
-    from pnakotic.src.api import main
+    from mandacaru.src.api import main
 
     sent = []
 
@@ -279,7 +279,7 @@ def test_scan_dispatches_without_task_folder(client, monkeypatch):
 
 
 def test_scan_defaults_to_https_without_scheme(client, monkeypatch):
-    from pnakotic.src.api import main
+    from mandacaru.src.api import main
 
     sent = []
 
@@ -310,7 +310,7 @@ def test_scan_rejects_internal_host(client):
 
 
 def test_task_list_is_one_query_and_matches_results_shape(client, db):
-    from pnakotic.src.database import models
+    from mandacaru.src.database import models
 
     engine, Session = db
     now = datetime.now(timezone.utc)
@@ -346,7 +346,7 @@ def test_task_list_is_one_query_and_matches_results_shape(client, db):
 # ---------- site quick check ----------
 
 def test_site_scan_dispatches_and_lists_kind(client, monkeypatch):
-    from pnakotic.src.api import main
+    from mandacaru.src.api import main
 
     sent = []
 
@@ -379,7 +379,7 @@ def test_site_scan_rejects_bad_input_and_internal_host(client):
 
 
 def test_site_scan_marks_job_failed_when_dispatch_fails(client, db, monkeypatch):
-    from pnakotic.src.api import main
+    from mandacaru.src.api import main
 
     class BrokenTask:
         @staticmethod
@@ -405,8 +405,8 @@ def test_tasks_lists_url_jobs_as_kind_url(client, db):
 
 
 def test_serialize_result_site_fields(monkeypatch):
-    from pnakotic.src.api import main
-    from pnakotic.src.database import models
+    from mandacaru.src.api import main
+    from mandacaru.src.database import models
 
     monkeypatch.setenv("CLEANUP_URL", "https://clean.example/")
     row = models.ScanResult(id="r", job_id="j", target_url="https://s.com/",
@@ -419,8 +419,8 @@ def test_serialize_result_site_fields(monkeypatch):
 
 
 def test_serialize_result_site_cleanup_url_defaults(monkeypatch):
-    from pnakotic.src.api import main
-    from pnakotic.src.database import models
+    from mandacaru.src.api import main
+    from mandacaru.src.database import models
 
     monkeypatch.delenv("CLEANUP_URL", raising=False)
     row = models.ScanResult(id="r", job_id="j", target_url="https://s.com/",
@@ -429,8 +429,8 @@ def test_serialize_result_site_cleanup_url_defaults(monkeypatch):
 
 
 def test_api_title_and_404_messages(client, db):
-    from pnakotic.src.api import main
-    from pnakotic.src.database import models
+    from mandacaru.src.api import main
+    from mandacaru.src.database import models
 
     assert main.app.title == "Mandacaru API"
     resp = client.get("/tasks/no-such-id/status")
@@ -447,7 +447,7 @@ def test_api_title_and_404_messages(client, db):
 # ---------- artifacts ----------
 
 def test_artifact_paths_share_one_validator(tmp_path):
-    from pnakotic.src.scanner.artifacts import ArtifactManager, resolve_task_folder
+    from mandacaru.src.scanner.artifacts import ArtifactManager, resolve_task_folder
 
     am = ArtifactManager(base_dir=str(tmp_path))
     with pytest.raises(ValueError):

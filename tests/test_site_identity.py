@@ -2,7 +2,7 @@ import pytest
 
 
 def test_registrable_domain_uses_private_psl():
-    from pnakotic.src.scanner.site_identity import registrable_domain
+    from mandacaru.src.scanner.site_identity import registrable_domain
 
     assert registrable_domain("a.github.io") == "a.github.io"
     assert registrable_domain("www.example.co.uk") == "example.co.uk"
@@ -10,7 +10,7 @@ def test_registrable_domain_uses_private_psl():
 
 
 def test_same_domain_and_on_site():
-    from pnakotic.src.scanner.site_identity import on_site, same_domain
+    from mandacaru.src.scanner.site_identity import on_site, same_domain
 
     assert same_domain("www.example.com", "shop.example.com")
     assert not same_domain("a.github.io", "b.github.io")
@@ -20,7 +20,7 @@ def test_same_domain_and_on_site():
 
 
 def test_same_domain_and_on_site_ignore_a_trailing_dot():
-    from pnakotic.src.scanner.site_identity import on_site, same_domain
+    from mandacaru.src.scanner.site_identity import on_site, same_domain
 
     assert on_site("example.com.", "example.com") and on_site("example.com", "example.com.")
     assert on_site("www.example.com.", "example.com") and on_site("example.com.", "www.example.com.")
@@ -30,7 +30,7 @@ def test_same_domain_and_on_site_ignore_a_trailing_dot():
 
 
 def test_normalize_site_input_messy():
-    from pnakotic.src.scanner.site_identity import normalize_site_input
+    from mandacaru.src.scanner.site_identity import normalize_site_input
 
     assert normalize_site_input("Example.COM/blog?x=1") == "https://example.com/"
     assert normalize_site_input("http://example.com:8443/a") == "https://example.com:8443/"
@@ -41,7 +41,7 @@ def test_normalize_site_input_messy():
 
 
 def test_resolve_site_host_chain():
-    from pnakotic.src.scanner.site_identity import resolve_site_host
+    from mandacaru.src.scanner.site_identity import resolve_site_host
 
     assert resolve_site_host("www.x.co.uk", "https://shop.x.co.uk/") == ("shop.x.co.uk", None)
     assert resolve_site_host("example.com", "https://example.com/home") == ("example.com", None)

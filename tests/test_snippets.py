@@ -1,5 +1,5 @@
 def test_cut_snippet_window_offsets_and_line():
-    from pnakotic.src.scanner.snippets import cut_snippet
+    from mandacaru.src.scanner.snippets import cut_snippet
 
     data = b"line1\nline2\n" + b"a" * 300 + b"EVIL" + b"b" * 300
     s = cut_snippet(data, 312, 316)
@@ -9,7 +9,7 @@ def test_cut_snippet_window_offsets_and_line():
 
 
 def test_cut_snippet_edges_cap_and_bad_utf8():
-    from pnakotic.src.scanner.snippets import cut_snippet
+    from mandacaru.src.scanner.snippets import cut_snippet
 
     s = cut_snippet(b"EVIL\x00tail", 0, 4)
     assert s["match_start"] == 0 and "\x00" not in s["text"]

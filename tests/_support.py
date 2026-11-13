@@ -67,8 +67,8 @@ def _rules_dir(tmp_path):
                                      production=str(production).lower(), marker=marker,
                                      description=f"Synthetic {name}"))
 
-    rule(root / "raw" / "js_skimmer_test_001.yara", "js_skimmer_test_001", "PNAKOTIC_TEST_SKIMMER", 5)
-    rule(root / "html" / "html_adframe_test_001.yara", "html_adframe_test_001", "PNAKOTIC_TEST_ADFRAME", 4,
+    rule(root / "raw" / "js_skimmer_test_001.yara", "js_skimmer_test_001", "MANDACARU_TEST_SKIMMER", 5)
+    rule(root / "html" / "html_adframe_test_001.yara", "html_adframe_test_001", "MANDACARU_TEST_ADFRAME", 4,
          production=False)
     rule(root / "raw" / "php_ignored_test_001.yara", "php_ignored_test_001", "shop", 5)
     rule(root / "php" / "php_backdoor_test_001.yara", "php_backdoor_test_001", "news", 5)
@@ -77,7 +77,7 @@ def _rules_dir(tmp_path):
     (root / "raw" / "js_runtime_test_001.yara").write_text(
         'rule js_runtime_test_001 : production {\n  meta:\n    signatureId = 42000100\n    production = true\n'
         '    severity = 5\n    description = "Synthetic js_runtime_test_001"\n    targetLanguage = "raw"\n'
-        '  strings:\n    $a = "PNAKOTIC_TEST_EVAL"\n  condition:\n    $a and filename matches /\\.js$/\n}\n')
+        '  strings:\n    $a = "MANDACARU_TEST_EVAL"\n  condition:\n    $a and filename matches /\\.js$/\n}\n')
     (root / "raw" / "js_broken_test_001.yara").write_text("rule js_broken_test_001 { condition: nope(")
     return root
 
@@ -94,13 +94,13 @@ def yara_rules_dir(tmp_path, monkeypatch):
 def _site_engine(tmp_path):
     """Engine whose egress policy allows only 127.0.0.1 and localhost (two hosts, so a
     script on `localhost` is on another site than a page on `127.0.0.1`)."""
-    from pnakotic.src.scanner.artifacts import ArtifactManager
-    from pnakotic.src.scanner.engine import PnakoticEngine
+    from mandacaru.src.scanner.artifacts import ArtifactManager
+    from mandacaru.src.scanner.engine import MandacaruEngine
 
     async def loopback_names(host):
         return host in ("127.0.0.1", "localhost")
 
-    engine = PnakoticEngine(task_id="site-job", timeout_ms=10000, host_allowed=loopback_names)
+    engine = MandacaruEngine(task_id="site-job", timeout_ms=10000, host_allowed=loopback_names)
     engine.artifacts = ArtifactManager(base_dir=str(tmp_path))
     return engine
 
@@ -390,7 +390,7 @@ def site_server():
     # The same footer on several pages: the filler on both sides is longer than the YARA
     # snippet window (240 bytes), so the snippet, and with it the finding, is identical.
     filler = "<p>" + "Thanks for reading. " * 15 + "</p>"
-    footer = f"<footer>{filler}<script>/*PNAKOTIC_TEST_SKIMMER*/</script>{filler}</footer></body></html>"
+    footer = f"<footer>{filler}<script>/*MANDACARU_TEST_SKIMMER*/</script>{filler}</footer></body></html>"
     obf = ("function _0x34e5(){var _0x18b8=['a','b'];_0x34e5=function(){return _0x18b8;};return _0x34e5();}"
            "(function(_0x44e7,_0x5d16){var _0x7eb7=_0x44e7();while(!![]){try{break;}catch(_0x1){"
            "_0x7eb7['push'](_0x7eb7['shift']());}}}(_0x34e5,0x1));")
@@ -473,31 +473,31 @@ def site_server():
                            "/eval-stackless", "/eval-string-hook", "/eval-dataurl", "/eval-crowd",
                            "/hooks-only"):
                 scripts = {  # code the page builds at runtime (Task 2: eval_capture)
-                    "/eval-stage": 'new Function("/*PNAKOTIC_TEST_EVAL*/ return 1")(); eval(' + json.dumps(obf) + ');',
-                    "/eval-sourceurl": 'eval("/*PNAKOTIC_TEST_EVAL*/\\n//# sourceURL=https://example.com/jquery.js");',
+                    "/eval-stage": 'new Function("/*MANDACARU_TEST_EVAL*/ return 1")(); eval(' + json.dumps(obf) + ');',
+                    "/eval-sourceurl": 'eval("/*MANDACARU_TEST_EVAL*/\\n//# sourceURL=https://example.com/jquery.js");',
                     "/eval-template": 'for (var i = 0; i < 3; i++) { new Function("obj", "return obj.a")({a: i}); }',
                     "/eval-flood": 'for (var i = 0; i < 500; i++) { new Function("return " + i); }',
                     # built from a timer or a promise: no JS frame on the stack, so no caller
-                    "/eval-stackless": 'setTimeout("/*PNAKOTIC_TEST_EVAL*/ 1", 0); setTimeout(eval, 0, "2 + 2"); '
+                    "/eval-stackless": 'setTimeout("/*MANDACARU_TEST_EVAL*/ 1", 0); setTimeout(eval, 0, "2 + 2"); '
                                        'Promise.resolve("3 + 3").then(eval);',
                     # a page that only trips the behavior hooks (each report is a binding call into Playwright)
                     "/hooks-only": 'document.execCommand("copy"); '
                                    'document.body.requestFullscreen && document.body.requestFullscreen();',
                     # a page that points String at eval and lets the behavior hooks call it (execCommand)
-                    "/eval-string-hook": 'String = eval; document.execCommand("/*PNAKOTIC_TEST_EVAL*/ 1 + 1");',
+                    "/eval-string-hook": 'String = eval; document.execCommand("/*MANDACARU_TEST_EVAL*/ 1 + 1");',
                     # scripts made from a data: and a blob: URL: a URL, no sourceURL, no stack
                     "/eval-dataurl": ('var s = document.createElement("script"); '
-                                      's.src = "data:text/javascript,/*PNAKOTIC_TEST_EVAL_DATA*/ var a = 1;"; '
+                                      's.src = "data:text/javascript,/*MANDACARU_TEST_EVAL_DATA*/ var a = 1;"; '
                                       'document.head.appendChild(s); '
-                                      'var u = URL.createObjectURL(new Blob(["/*PNAKOTIC_TEST_EVAL_BLOB*/ var b = 2;"], '
+                                      'var u = URL.createObjectURL(new Blob(["/*MANDACARU_TEST_EVAL_BLOB*/ var b = 2;"], '
                                       '{type: "text/javascript"})); var t = document.createElement("script"); '
                                       't.src = u; document.head.appendChild(t);'),
                     # 25 distinct throwaway stages, a 26th repeated ten times, then the one that matters
                     "/eval-crowd": ('for (var i = 0; i < 25; i++) { new Function("return " + i); } '
                                     'for (var j = 0; j < 10; j++) { new Function("return 99"); } '
-                                    'eval("/*PNAKOTIC_TEST_EVAL*/" + ' + json.dumps(obf) + ');'),
+                                    'eval("/*MANDACARU_TEST_EVAL*/" + ' + json.dumps(obf) + ');'),
                     "/eval-debugger": 'setInterval(function () { debugger; }, 10); '
-                                      'new Function("/*PNAKOTIC_TEST_EVAL*/")();',
+                                      'new Function("/*MANDACARU_TEST_EVAL*/")();',
                 }
                 self._send(200, "text/html", (f"<html><head><title>Eval</title></head><body><h1>Eval</h1><iframe srcdoc='<p>hi</p>'></iframe>"
                                               f"<script>{scripts[self.path]}</script></body></html>").encode())
@@ -511,7 +511,7 @@ def site_server():
             elif self.path in DYNAMIC_PAGES:
                 self._send(200, "text/html", DYNAMIC_PAGES[self.path].encode())
             elif self.path == "/payload.js":
-                self._send(200, "text/javascript", b"var PNAKOTIC_TEST_SKIMMER = 1;")
+                self._send(200, "text/javascript", b"var MANDACARU_TEST_SKIMMER = 1;")
             elif self.path == "/challenge":
                 self._send(403, "text/html", b"<html><head><title>One more step</title></head><body>"
                                              b"<script src=\"/cdn-cgi/challenge-platform/h/b\"></script>"
@@ -559,8 +559,8 @@ def _yara_hop(source, url, rule, sev, production, offset, text):
     """A per-buffer `yara_match` hop as a site-mode load records it."""
     import json
 
-    from pnakotic.src.scanner.models import RedirectHop
-    from pnakotic.src.scanner.yara_scan import YARA_MECHANISM
+    from mandacaru.src.scanner.models import RedirectHop
+    from mandacaru.src.scanner.yara_scan import YARA_MECHANISM
 
     return RedirectHop(url=url, mechanism=YARA_MECHANISM, evidence=json.dumps({
         "id": "yara_match", "rule": rule, "signature_id": 1, "severity": sev, "production": production,
@@ -580,8 +580,8 @@ def _eval_stage(text="OBFUSCATED", caller="", markers=("string_array_rotation",)
 def _load(page_index, page_url, profile, hops=(), injections=(), state="checked", reason=None, final_url=None,
           script_requests=(), score=0.0, eval_stages=(), card_inputs=None):
     """A site-check Load around a hand-built ScanResult."""
-    from pnakotic.src.scanner.models import ScanResult
-    from pnakotic.src.scanner.site_findings import Load
+    from mandacaru.src.scanner.models import ScanResult
+    from mandacaru.src.scanner.site_findings import Load
 
     result = ScanResult(target_url=page_url, final_url=final_url or page_url, hops=list(hops), malicious_score=score)
     result.metadata = {
@@ -612,7 +612,7 @@ def _cards(*inserted, present=None):
 
 def _result(**metadata):
     """A ScanResult carrying just the given metadata (plus a page title, default "x")."""
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.scanner.models import ScanResult
 
     signals = {"title": metadata.pop("title", "x")}
     return ScanResult(target_url="https://s.com/", final_url="https://s.com/",

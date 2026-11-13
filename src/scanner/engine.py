@@ -15,7 +15,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from .models import RedirectHop, ScanResult, REDIRECT_MECHANISMS
-from ..intelligence.scorer import PnakoticScorer
+from ..intelligence.scorer import MandacaruScorer
 from .profiles import PROFILES
 from .static_analyzer import StaticAnalyst, SIGNATURE_MECHANISMS, MAX_CONTENT_CHARS
 from .artifacts import ArtifactManager
@@ -259,12 +259,12 @@ async def _served_body(resp: Response) -> Optional[bytes]:
         return None
 
 
-class PnakoticEngine:
+class MandacaruEngine:
     def __init__(self, max_hops=10, timeout_ms=30000, task_id="default",
                  host_allowed: Optional[HostCheck] = None):
         self.max_hops = max_hops
         self.timeout_ms = timeout_ms
-        self.scorer = PnakoticScorer()
+        self.scorer = MandacaruScorer()
         self.analyst = StaticAnalyst()
         self.artifacts = ArtifactManager()
         # Root artifact folder injected via task_id in constructor or runner
@@ -279,7 +279,7 @@ class PnakoticEngine:
         With compare=True every other profile loads the URL too, each in its own browser
         context (own cookies and storage) in the same browser, all in parallel so the job
         takes about as long as one scan. The scorer then compares where each profile landed
-        (cloaking, see PnakoticScorer.combine). The requested profile stays the job's chain;
+        (cloaking, see MandacaruScorer.combine). The requested profile stays the job's chain;
         the others are summarized in metadata["variants"]. Contexts share one egress IP, so
         only user-agent, viewport and referrer cloaking can show up, not IP or geo cloaking.
         """

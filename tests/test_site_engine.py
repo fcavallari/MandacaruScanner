@@ -9,7 +9,7 @@ from _support import _site_engine, requires_browser, requires_yara, site_server,
 @requires_yara
 @pytest.mark.asyncio
 async def test_site_scan_compromised_with_snippet_and_merged_footer(site_server, tmp_path, yara_rules_dir):
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     out = await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/")
     r = out.report
@@ -35,7 +35,7 @@ async def test_site_scan_compromised_with_snippet_and_merged_footer(site_server,
 @requires_yara
 @pytest.mark.asyncio
 async def test_site_scan_googlebot_only_visitor(site_server, tmp_path, yara_rules_dir):
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     out = await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/g/")
     f = out.report["blocks"][0]["findings"][0]
@@ -45,7 +45,7 @@ async def test_site_scan_googlebot_only_visitor(site_server, tmp_path, yara_rule
 @requires_browser
 @pytest.mark.asyncio
 async def test_site_scan_obfuscated_injector_is_suspicious_plain_loader_is_clean(site_server, tmp_path):
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     assert (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/obf/")).report["verdict"]["verdict"] == "suspicious"
     assert (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/plain/")).report["verdict"]["verdict"] == "clean"
@@ -54,7 +54,7 @@ async def test_site_scan_obfuscated_injector_is_suspicious_plain_loader_is_clean
 @requires_browser
 @pytest.mark.asyncio
 async def test_site_scan_phone_only_redirect_to_another_site_is_suspicious(site_server, tmp_path):
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     out = await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/m/")
     r = out.report
@@ -69,7 +69,7 @@ async def test_site_scan_phone_only_redirect_to_another_site_is_suspicious(site_
 @pytest.mark.asyncio
 async def test_site_scan_budget_marks_not_checked(site_server, tmp_path):
     import time
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     started = time.monotonic()
     out = await SiteScanner(_site_engine(tmp_path), budget_s=8, grace_s=1).scan(f"{site_server}/hang/")
@@ -83,7 +83,7 @@ async def test_site_scan_budget_marks_not_checked(site_server, tmp_path):
 @requires_browser
 @pytest.mark.asyncio
 async def test_site_scan_offsite_homepage_not_crawled(site_server, tmp_path):
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     out = await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/to-other/")
     kinds = [f["kind"] for b in out.report["blocks"] for f in b["findings"]]
@@ -98,7 +98,7 @@ async def test_site_scan_offsite_homepage_not_crawled(site_server, tmp_path):
 @requires_browser
 @pytest.mark.asyncio
 async def test_site_scan_falls_back_to_http_and_drops_the_https_set(site_server, tmp_path):
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     https = site_server.replace("http://", "https://")  # the server speaks plain HTTP: TLS fails
     out = await SiteScanner(_site_engine(tmp_path)).scan(f"{https}/plain/")
@@ -120,7 +120,7 @@ def _checkout_pages(report):
 @requires_browser
 @pytest.mark.asyncio
 async def test_site_scan_loads_an_unpicked_woocommerce_checkout_once_before_the_probe(site_server, tmp_path):
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     report = (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/woo/")).report
     checkout = _checkout_pages(report)
@@ -138,7 +138,7 @@ async def test_site_scan_loads_an_unpicked_woocommerce_checkout_once_before_the_
 @requires_browser
 @pytest.mark.asyncio
 async def test_site_scan_a_picked_checkout_keeps_its_three_profiles(site_server, tmp_path):
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     woo = (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/woo-linked/")).report
     [checkout] = _checkout_pages(woo)
@@ -154,7 +154,7 @@ async def test_site_scan_a_picked_checkout_keeps_its_three_profiles(site_server,
 @requires_browser
 @pytest.mark.asyncio
 async def test_site_scan_without_the_marker_a_checkout_link_is_nothing_special(site_server, tmp_path):
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     report = (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/plainshop/")).report
     assert _checkout_pages(report) == []
@@ -164,7 +164,7 @@ async def test_site_scan_without_the_marker_a_checkout_link_is_nothing_special(s
 @requires_browser
 @pytest.mark.asyncio
 async def test_site_scan_a_checkout_that_redirects_to_the_cart_is_still_the_checkout_page(site_server, tmp_path):
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     report = (await SiteScanner(_site_engine(tmp_path)).scan(f"{site_server}/woo-redirect/")).report
     [checkout] = _checkout_pages(report)

@@ -12,7 +12,7 @@ from _support import _site_engine, requires_browser, requires_yara, site_server,
 @requires_yara
 @pytest.mark.asyncio
 async def test_site_load_captures_served_links_scripts_and_injection(site_server, tmp_path, yara_rules_dir):
-    from pnakotic.src.scanner.engine import LoadOptions
+    from mandacaru.src.scanner.engine import LoadOptions
 
     engine = _site_engine(tmp_path)   # host_allowed: 127.0.0.1 and localhost
     async with engine.browser_session() as (browser, _proxy):
@@ -37,7 +37,7 @@ async def test_site_load_captures_served_links_scripts_and_injection(site_server
 @requires_browser
 @pytest.mark.asyncio
 async def test_site_load_flags_challenge(site_server, tmp_path):
-    from pnakotic.src.scanner.engine import LoadOptions
+    from mandacaru.src.scanner.engine import LoadOptions
 
     engine = _site_engine(tmp_path)
     async with engine.browser_session() as (browser, _):
@@ -52,8 +52,8 @@ async def test_site_load_flags_challenge(site_server, tmp_path):
 async def test_site_load_finishes_when_the_main_document_never_ends(site_server, tmp_path, monkeypatch):
     import asyncio
     import time
-    from pnakotic.src.scanner import engine as engine_mod
-    from pnakotic.src.scanner.engine import LoadOptions
+    from mandacaru.src.scanner import engine as engine_mod
+    from mandacaru.src.scanner.engine import LoadOptions
 
     # Short waits elsewhere (the screenshot also waits on a still-loading document) keep this
     # test fast; the served-body bound itself stays at its real 5 s.
@@ -88,7 +88,7 @@ async def test_probe_load_without_options_has_no_site_metadata(site_server, tmp_
 
 
 def test_looks_like_challenge():
-    from pnakotic.src.scanner.challenge import looks_like_challenge
+    from mandacaru.src.scanner.challenge import looks_like_challenge
 
     assert looks_like_challenge(403, "Just a moment...", "<html>")
     # Cloudflare injects challenge-platform scripts into ordinary pages: only a small 403/503 counts
@@ -104,7 +104,7 @@ def test_looks_like_challenge():
 
 
 def test_challenge_vendor_names_who_showed_the_check():
-    from pnakotic.src.scanner.challenge import challenge_vendor
+    from mandacaru.src.scanner.challenge import challenge_vendor
 
     assert challenge_vendor("Just a moment...", "<html>") == "cloudflare"
     assert challenge_vendor("Attention Required! | Cloudflare", "") == "cloudflare"
@@ -119,7 +119,7 @@ def test_challenge_vendor_names_who_showed_the_check():
 @requires_browser
 @pytest.mark.asyncio
 async def test_site_load_records_a_script_blocked_as_malware_by_the_cdn(site_server, tmp_path):
-    from pnakotic.src.scanner.engine import LoadOptions
+    from mandacaru.src.scanner.engine import LoadOptions
 
     engine = _site_engine(tmp_path)
     async with engine.browser_session() as (browser, _proxy):
@@ -136,7 +136,7 @@ async def test_site_load_records_a_script_blocked_as_malware_by_the_cdn(site_ser
 @pytest.mark.asyncio
 async def test_site_survey_of_a_page_with_a_cdn_blocked_script_is_suspicious(site_server, tmp_path):
     """End to end: the roll-up a site owner reads flips from Clean to Suspicious."""
-    from pnakotic.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.scanner.site_engine import SiteScanner
 
     outcome = await SiteScanner(_site_engine(tmp_path), budget_s=60).scan(f"{site_server}/flagged/")
     report = outcome.report
@@ -183,7 +183,7 @@ async def test_url_probe_scores_a_plain_loader_fetching_an_obfuscated_script(sit
 # ---------- code the page builds at runtime (eval_capture.py) ----------
 
 async def _site_load(engine, url, shot="pages/0/default"):
-    from pnakotic.src.scanner.engine import LoadOptions
+    from mandacaru.src.scanner.engine import LoadOptions
 
     async with engine.browser_session() as (browser, _proxy):
         return await engine._scan_in_context(browser, url, "default", engine.artifacts.create_task_folder("j"),
@@ -219,13 +219,13 @@ async def test_runtime_code_disguised_with_a_source_url_is_still_a_stage(site_se
 @requires_browser
 @pytest.mark.asyncio
 async def test_runtime_templates_are_captured_but_quiet(site_server, tmp_path):
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
 
     r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-template")
     # three identical templates are one stage: the repeats take no slot, they are counted
     assert len(r.metadata["eval_stages"]) == 1 and r.metadata["eval_stages_repeated"] == 2
     assert not any(s["markers"] for s in r.metadata["eval_stages"])
-    PnakoticScorer().score(r, site_host="127.0.0.1")
+    MandacaruScorer().score(r, site_host="127.0.0.1")
     assert not any("built at runtime" in f for f in r.metadata["scoring_findings"])
 
 
@@ -302,7 +302,7 @@ async def test_a_copy_of_the_harness_utility_script_does_not_hide_what_it_runs(s
     assert utility is not None, "this Playwright version keeps its utility script elsewhere: update the test"
     _support.DYNAMIC_PAGES["/eval-launder"] = (
         "<html><body><script>var src = " + json.dumps(utility) + "; var u = eval(src); "
-        "u.evaluate(false, true, '/*PNAKOTIC_TEST_EVAL*/ 1');</script></body></html>")
+        "u.evaluate(false, true, '/*MANDACARU_TEST_EVAL*/ 1');</script></body></html>")
     r = await _site_load(_site_engine(tmp_path), f"{site_server}/eval-launder")
     assert any(s["yara_matched"] for s in r.metadata["eval_stages"])
 
@@ -640,8 +640,8 @@ async def test_url_probe_has_no_card_inputs(site_server, tmp_path):
 async def test_hooks_stay_invisible_with_both_init_scripts(site_server):
     from playwright.async_api import async_playwright
 
-    from pnakotic.src.scanner.behavior import BehaviorRecorder
-    from pnakotic.src.scanner.card_watch import CardWatcher
+    from mandacaru.src.scanner.behavior import BehaviorRecorder
+    from mandacaru.src.scanner.card_watch import CardWatcher
 
     async with async_playwright() as p:
         browser = await p.chromium.launch()

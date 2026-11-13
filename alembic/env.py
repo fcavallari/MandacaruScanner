@@ -5,12 +5,12 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-# Make `pnakotic.src...` importable no matter where alembic is invoked from:
+# Make `mandacaru.src...` importable no matter where alembic is invoked from:
 # this file lives at <repo>/alembic/env.py, so the repo's PARENT must be on sys.path
 # (file -> alembic/ -> repo root -> parent).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from pnakotic.src.database import models  # noqa: E402
+from mandacaru.src.database import models  # noqa: E402
 
 config = context.config
 
@@ -20,7 +20,7 @@ if config is not None:
         "sqlalchemy.url",
         os.getenv(
             "DATABASE_URL",
-            "postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory",
+            "postgresql+psycopg2://mandacaru_admin:caatinga-dev-password@db:5432/mandacaru_memory",
         ),
     )
     if config.config_file_name is not None:

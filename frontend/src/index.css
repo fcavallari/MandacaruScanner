@@ -112,12 +112,12 @@ body {
 }
 
 /* running status = a pulsing dot (feedback, not entrance) */
-@keyframes pnk-pulse {
+@keyframes mandacaru-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
 .pulse-dot {
-  animation: pnk-pulse 1.6s ease-in-out infinite;
+  animation: mandacaru-pulse 1.6s ease-in-out infinite;
 }
 
 /*

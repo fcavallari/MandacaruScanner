@@ -1,14 +1,19 @@
+# Pinned so the project (and its volume names: mandacaru_postgres_data, mandacaru_redis_data,
+# mandacaru_artifacts_data) does not depend on the checkout folder's name. Stacks started
+# before the package rename ran as project "pnakotic"; README, "Upgrading from pnakotic".
+name: mandacaru
+
 services:
   db:
     image: postgres:15-alpine
     environment:
-      POSTGRES_USER: pnakotic_admin
-      POSTGRES_PASSWORD: dark-matter-password
-      POSTGRES_DB: pnakotic_memory
+      POSTGRES_USER: mandacaru_admin
+      POSTGRES_PASSWORD: caatinga-dev-password
+      POSTGRES_DB: mandacaru_memory
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pnakotic_admin"]
+      test: ["CMD-SHELL", "pg_isready -U mandacaru_admin"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -27,9 +32,9 @@ services:
         # set BROWSER_CHANNEL=chromium in .env or the shell; Chrome has no arm64 build.
         BROWSER_CHANNEL: ${BROWSER_CHANNEL:-chrome}
     # Apply migrations, then serve. (The API also runs an idempotent create_all at startup.)
-    command: sh -c "alembic -c pnakotic/alembic.ini upgrade head && uvicorn pnakotic.src.api.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "alembic -c mandacaru/alembic.ini upgrade head && uvicorn mandacaru.src.api.main:app --host 0.0.0.0 --port 8000"
     environment:
-      DATABASE_URL: postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory
+      DATABASE_URL: postgresql+psycopg2://mandacaru_admin:caatinga-dev-password@db:5432/mandacaru_memory
       REDIS_URL: redis://redis:6379/0
       ARTIFACTS_DIR: /app/artifacts
       CLEANUP_URL: ${CLEANUP_URL:-https://facheiro.space.fast/}
@@ -61,9 +66,9 @@ services:
         # set BROWSER_CHANNEL=chromium in .env or the shell; Chrome has no arm64 build.
         BROWSER_CHANNEL: ${BROWSER_CHANNEL:-chrome}
     # -Q celery: only the default queue, so this worker never takes site-check tasks.
-    command: celery -A pnakotic.src.workers.celery_app worker -Q celery --loglevel=info
+    command: celery -A mandacaru.src.workers.celery_app worker -Q celery --loglevel=info
     environment:
-      DATABASE_URL: postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory
+      DATABASE_URL: postgresql+psycopg2://mandacaru_admin:caatinga-dev-password@db:5432/mandacaru_memory
       REDIS_URL: redis://redis:6379/0
       ARTIFACTS_DIR: /app/artifacts
       # Empty or missing directory = YARA scanning off (see src/scanner/yara_scan.py).
@@ -93,9 +98,9 @@ services:
       dockerfile: Dockerfile
       args:
         BROWSER_CHANNEL: ${BROWSER_CHANNEL:-chrome}
-    command: celery -A pnakotic.src.workers.celery_app worker -Q site --concurrency 1 --loglevel=info
+    command: celery -A mandacaru.src.workers.celery_app worker -Q site --concurrency 1 --loglevel=info
     environment:
-      DATABASE_URL: postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory
+      DATABASE_URL: postgresql+psycopg2://mandacaru_admin:caatinga-dev-password@db:5432/mandacaru_memory
       REDIS_URL: redis://redis:6379/0
       ARTIFACTS_DIR: /app/artifacts
       YARA_RULES_DIR: /app/yara-rules

