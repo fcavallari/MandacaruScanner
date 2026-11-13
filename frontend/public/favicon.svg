@@ -1,27 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
-  <!-- The Mandacaru mark (src/components/Mark.tsx) on charcoal; strokes thickened so it holds at 16px. Ribs are cut by a mask. -->
-  <defs>
-    <mask id="ribs" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
-      <rect width="64" height="64" fill="white"/>
-      <g stroke="black" stroke-width="2" stroke-linecap="round">
-        <path d="M29.6 13V24M29.6 28V44M29.6 48V58M34.4 11V20M34.4 24V38M34.4 42V58M17 21V33M47 14V26"/>
-      </g>
-    </mask>
-  </defs>
+  <!-- The Mandacaru mark (src/components/Mark.tsx), redrawn for 16px: no ribs, tip and edge spines only, a clear gap between each arm and the trunk. -->
   <rect width="24" height="24" rx="5" fill="#12100d"/>
-  <g transform="translate(1.12 1.12) scale(0.34)" stroke="#A94B2A" stroke-linecap="round" stroke-linejoin="round">
-    <g mask="url(#ribs)">
-      <path d="M32 66V10" stroke-width="11.5"/>
-      <path d="M32 40H21Q17 40 17 36V20" stroke-width="8.5"/>
-      <path d="M32 33H43Q47 33 47 29V13" stroke-width="8.5"/>
+  <g stroke="#A94B2A" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 21V5.4" stroke-width="4"/>
+    <path d="M12 15.2H7.6Q5.6 15.2 5.6 13.2V8.4" stroke-width="3"/>
+    <path d="M12 12H16.4Q18.4 12 18.4 10V6.4" stroke-width="3"/>
+    <g stroke-width="1.5">
+      <path d="M12 3.8V1.5M10 4.6L8.6 2.9M14 4.6L15.4 2.9"/>
+      <path d="M5.6 7V4.6M4.6 9L2.4 7.6M4.6 12.4L2.4 11"/>
+      <path d="M18.4 5.2V3M19.6 7.4L21.8 6M19.6 10.6L21.8 9.2"/>
     </g>
-    <g stroke-width="2.4">
-      <path d="M26.5 14l-4-3M26.5 22l-4-3M26.5 50l-4-3M26.5 56l-4-3"/>
-      <path d="M37.5 16l4-3M37.5 24l4-3M37.5 44l4-3M37.5 52l4-3"/>
-      <path d="M32 4V0.5M28 6l-2.5-3M36 6l2.5-3"/>
-      <path d="M13 23l-4-3M13 29l-4-3M13 35l-4-3M17 16V12.5M14 17.5l-2.5-3M20 17.5l2.5-3M22 44l-2 3.5"/>
-      <path d="M51 17l4-3M51 23l4-3M51 29l4-3M47 9V5.5M44 10.5l-2.5-3M50 10.5l2.5-3M42 37l2 3.5"/>
-    </g>
-    <path d="M3 60.5H61M15 60.5l2 3.5M45 60.5l-2.5 3.5" stroke-width="3"/>
+    <path d="M3 21.5H21" stroke-width="1.8"/>
   </g>
 </svg>
