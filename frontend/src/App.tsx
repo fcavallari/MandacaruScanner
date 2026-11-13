@@ -39,7 +39,7 @@ function Rail() {
 
 export default function App() {
   return (
-    <div className="min-h-screen bg-ground text-ink">
+    <div className="min-h-screen text-ink">
       <Rail />
       <main className="md:pl-[57px]">
         <Dashboard />
