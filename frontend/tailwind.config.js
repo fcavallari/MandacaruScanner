@@ -7,9 +7,11 @@ export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
-      // data-terminal tokens with the abyssal face (see .taste-skill/notes.md):
-      // ground tinted from the product's world (the deep), cards darker than ground,
-      // phosphor teal in place of the dealt blue. Values live in src/index.css :root.
+      // data-terminal tokens with the Cosmic Sertão face (see .taste-skill/notes.md):
+      // charcoal ground, cards darker than ground, rust as the one accent, bone text,
+      // cactus green / dried blood / sand for fine / bad / watch. Values live in
+      // src/index.css :root. accent is for lines, fills, focus and icons; accent-ink is
+      // rust as text; positive-fill / negative-fill are bars and blocks (bone text on them).
       colors: {
         ground: a("--ground"),
         surface: a("--surface"),
@@ -22,16 +24,20 @@ export default {
         muted: a("--muted"),
         faint: a("--faint"),
         accent: a("--accent"),
+        "accent-ink": a("--accent-ink"),
+        button: a("--button"),
         positive: a("--positive"),
+        "positive-fill": a("--positive-fill"),
         negative: a("--negative"),
+        "negative-fill": a("--negative-fill"),
         warning: a("--warning"),
       },
       fontFamily: {
         // Public Sans for text; IBM Plex Mono for every figure/ID/URL (the style's
-        // decision); Chakra Petch kept to the wordmark.
+        // decision); Alfa Slab One kept to the wordmark and display headings.
         sans: ['"Public Sans"', "Inter", "system-ui", "sans-serif"],
         mono: ['"IBM Plex Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
-        display: ['"Chakra Petch"', '"Public Sans"', "sans-serif"],
+        display: ['"Alfa Slab One"', "Rockwell", '"Roboto Slab"', "Georgia", "serif"],
       },
       borderRadius: {
         card: "6px", // dealt radius.card
