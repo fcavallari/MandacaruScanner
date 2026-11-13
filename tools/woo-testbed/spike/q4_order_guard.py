@@ -4,11 +4,11 @@ is held, and whether the order guard keeps every order out of existence (5 runs 
 
 Per checkout (block /checkout/, classic /checkout-classic/), each run in a fresh context with
 its own billing email (spike-q4-<run>@checkout-check.invalid):
-  observe   guard off, pnakotic_test: every non-GET request, with order snapshots after each
+  observe   guard off, mandacaru_test: every non-GET request, with order snapshots after each
             phase (cart, checkout load, fill, click). Shows the gateway's server-side failure.
   control   guard off, cash on delivery (toggle.sh gateways extra on, then off): an order really
             gets created when nothing blocks the click (positive control). One per checkout.
-  guard x5  pnakotic_test, the guard armed after the form settled, then a mouse click on Place
+  guard x5  mandacaru_test, the guard armed after the form settled, then a mouse click on Place
             Order and 5 s of waiting. The guard is CDP Fetch at the Request stage on the page
             session (as EgressGuard is attached today; q5 covers frames and workers): every
             non-GET request is recorded and failed with BlockedByClient.
@@ -119,7 +119,7 @@ async def run(browser, kind: str, path: str, label: str, gateway: str, guard_on:
         await fill_classic(page, email)
     await select_gateway(page, gateway)
     await settle(page)
-    if gateway == "pnakotic_test":
+    if gateway == "mandacaru_test":
         await fill_card(page)
     await settle(page, 2000)  # let the pre-click POSTs finish before arming
     snaps.append(("after fill", orders_sql()))
@@ -187,9 +187,9 @@ async def main() -> None:
             for kind, path in CHECKOUTS:
                 out("\n==================== {} checkout ({}) ====================".format(kind, path))
 
-                out("\n[{}] observe: guard OFF, pnakotic_test (the gateway's server-side failure)".format(kind))
+                out("\n[{}] observe: guard OFF, mandacaru_test (the gateway's server-side failure)".format(kind))
                 before = orders_wpcli()
-                res = await run(browser, kind, path, "{}-observe".format(kind), "pnakotic_test", False, pid)
+                res = await run(browser, kind, path, "{}-observe".format(kind), "mandacaru_test", False, pid)
                 show(res, verbose=True)
                 out("    reserved stock now:", reserved_stock())
                 out("    before:", wpcli_line(before))
@@ -209,9 +209,9 @@ async def main() -> None:
                     out("    ", toggle("gateways", "extra", "off"))
 
                 for i in range(1, RUNS + 1):
-                    out("\n[{}] guard run {}/{}: guard ON, pnakotic_test".format(kind, i, RUNS))
+                    out("\n[{}] guard run {}/{}: guard ON, mandacaru_test".format(kind, i, RUNS))
                     before_cli = orders_wpcli()
-                    res = await run(browser, kind, path, "{}-guard-{}".format(kind, i), "pnakotic_test", True, pid)
+                    res = await run(browser, kind, path, "{}-guard-{}".format(kind, i), "mandacaru_test", True, pid)
                     show(res, verbose=(i == 1))
                     after_cli = orders_wpcli()
                     out("    before:", wpcli_line(before_cli))

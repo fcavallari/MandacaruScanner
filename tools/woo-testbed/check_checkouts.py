@@ -2,7 +2,7 @@
 """Headless check that both checkouts show the test gateway's card fields.
 
 Adds an in-stock product to the cart, loads /checkout/ (block) and
-/checkout-classic/ (classic), asserts the pnakotic_test card inputs are
+/checkout-classic/ (classic), asserts the mandacaru_test card inputs are
 visible, and saves a screenshot of each into out/ (git-ignored).
 
 With --skimmer it also types a card number into each checkout, blurs the field
@@ -51,7 +51,7 @@ def check(page, path: str, label: str, skimmer: bool) -> bool:
     ok = True
     try:
         # Test gateway is the first method, so it is the selected one; click it to be sure.
-        radio = page.locator('input[value="pnakotic_test"]')
+        radio = page.locator('input[value="mandacaru_test"]')
         if radio.count():
             radio.first.check(force=True)
         page.locator(CARD).first.wait_for(state="visible", timeout=20000)

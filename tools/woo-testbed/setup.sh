@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Idempotent setup of the Pnakotic WooCommerce testbed. Safe to run twice.
+# Idempotent setup of the Mandacaru WooCommerce testbed. Safe to run twice.
 # Usage: ./setup.sh        (starts the stack if needed, then configures it)
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -9,10 +9,10 @@ export COLLECTOR_PORT="${COLLECTOR_PORT:-8199}"
 WOO_URL="http://localhost:${WOO_PORT}"
 WOO_VERSION="11.2.2"
 ADMIN_USER="admin"
-ADMIN_PASSWORD="${WOO_ADMIN_PASSWORD:-pnakotic-testbed}"
+ADMIN_PASSWORD="${WOO_ADMIN_PASSWORD:-mandacaru-testbed}"
 
 # Every compose command targets the testbed's own project.
-dc() { docker compose -p pnakotic-woo-testbed "$@"; }
+dc() { docker compose -p mandacaru-woo-testbed "$@"; }
 wp() { dc run --rm -T wpcli "$@"; }
 log() { printf '==> %s\n' "$*"; }
 
@@ -28,7 +28,7 @@ done
 
 log "WordPress core"
 if ! wp core is-installed >/dev/null 2>&1; then
-  wp core install --url="$WOO_URL" --title="Pnakotic Test Store" \
+  wp core install --url="$WOO_URL" --title="Mandacaru Test Store" \
     --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASSWORD" \
     --admin_email="admin@checkout-check.invalid" --skip-email
 fi
@@ -41,7 +41,7 @@ log "WooCommerce $WOO_VERSION and the test gateway"
 if ! wp plugin is-installed woocommerce >/dev/null 2>&1; then
   wp plugin install woocommerce --version="$WOO_VERSION"
 fi
-wp plugin activate woocommerce pnakotic-test-gateway
+wp plugin activate woocommerce mandacaru-test-gateway
 
 log "Store settings"
 wp option update woocommerce_store_address "1 Test Street" >/dev/null
@@ -85,10 +85,10 @@ fi
 log "Payment gateways"
 # Only the always-failing gateway by default, so order counts can only come from it.
 # ./toggle.sh gateways extra on  enables cod and bacs (a positive control that does create orders).
-wp wc payment_gateway update pnakotic_test --enabled=true --user="$ADMIN_USER" >/dev/null
+wp wc payment_gateway update mandacaru_test --enabled=true --user="$ADMIN_USER" >/dev/null
 wp wc payment_gateway update cod --enabled=false --user="$ADMIN_USER" >/dev/null
 wp wc payment_gateway update bacs --enabled=false --user="$ADMIN_USER" >/dev/null
-wp option update woocommerce_gateway_order '{"pnakotic_test":0,"bacs":1,"cod":2}' --format=json >/dev/null
+wp option update woocommerce_gateway_order '{"mandacaru_test":0,"bacs":1,"cod":2}' --format=json >/dev/null
 
 log "Shipping (flat rate for every address)"
 # Zone 0 ("locations not covered") through PHP: its REST update/delete routes 404.

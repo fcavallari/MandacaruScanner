@@ -41,7 +41,7 @@ async def guarded(browser, kind: str, path: str, pid: int) -> None:
         await fill_block(page, "spike-skimmer-{}@checkout-check.invalid".format(kind))
     else:
         await fill_classic(page, "spike-skimmer-{}@checkout-check.invalid".format(kind))
-    await select_gateway(page, "pnakotic_test")
+    await select_gateway(page, "mandacaru_test")
     await settle(page)
     n0 = len(collector_lines())
     await fill_card(page)  # types the number and tabs out: blur
@@ -104,7 +104,7 @@ async def main() -> None:
     pid = int(cheapest_product()["id"])
     try:
         toggle("skimmer", "on")
-        out("skimmer option =", option("pnakotic_test_skimmer"), "| checkout page id =", option("woocommerce_checkout_page_id"))
+        out("skimmer option =", option("mandacaru_test_skimmer"), "| checkout page id =", option("woocommerce_checkout_page_id"))
         async with async_playwright() as p:
             browser = await launch(p)
             out("browser:", browser.version, "headless")
@@ -119,7 +119,7 @@ async def main() -> None:
     finally:
         toggle("checkout", "block")
         toggle("skimmer", "off")
-        out("\nrestored: checkout page id =", option("woocommerce_checkout_page_id"), "| skimmer =", option("pnakotic_test_skimmer"))
+        out("\nrestored: checkout page id =", option("woocommerce_checkout_page_id"), "| skimmer =", option("mandacaru_test_skimmer"))
 
 
 if __name__ == "__main__":

