@@ -32,7 +32,7 @@ class FakeCdp:
 
 
 async def _capture(cdp):
-    from pnakotic.src.scanner.eval_capture import EvalCapture
+    from mandacaru.src.scanner.eval_capture import EvalCapture
 
     capture = EvalCapture()
     await capture.attach(cdp)
@@ -41,7 +41,7 @@ async def _capture(cdp):
 
 @pytest.mark.asyncio
 async def test_a_script_is_skipped_only_by_its_own_content_hash():
-    from pnakotic.src.scanner.eval_capture import EvalCapture
+    from mandacaru.src.scanner.eval_capture import EvalCapture
 
     cdp = FakeCdp({})
     capture = EvalCapture()
@@ -81,8 +81,8 @@ async def test_repeats_take_no_slot_and_no_fetch():
 
 @pytest.mark.asyncio
 async def test_an_oversized_script_is_recorded_but_never_fetched():
-    from pnakotic.src.scanner.eval_capture import MAX_STAGE_FETCH_CHARS
-    from pnakotic.src.scanner.engine import _eval_stage_entry
+    from mandacaru.src.scanner.eval_capture import MAX_STAGE_FETCH_CHARS
+    from mandacaru.src.scanner.engine import _eval_stage_entry
 
     cdp = FakeCdp({})
     capture = await _capture(cdp)
@@ -98,7 +98,7 @@ async def test_an_oversized_script_is_recorded_but_never_fetched():
 
 @pytest.mark.asyncio
 async def test_at_most_100_sources_are_read_and_the_rest_counted():
-    from pnakotic.src.scanner.eval_capture import MAX_STAGE_FETCHES, MAX_STAGES
+    from mandacaru.src.scanner.eval_capture import MAX_STAGE_FETCHES, MAX_STAGES
 
     cdp = FakeCdp({})
     capture = await _capture(cdp)
@@ -111,7 +111,7 @@ async def test_at_most_100_sources_are_read_and_the_rest_counted():
 
 @pytest.mark.asyncio
 async def test_a_marked_stage_replaces_an_unmarked_one_when_full_and_an_unmarked_one_does_not():
-    from pnakotic.src.scanner.eval_capture import MAX_STAGES
+    from mandacaru.src.scanner.eval_capture import MAX_STAGES
 
     cdp = FakeCdp({})
     capture = await _capture(cdp)
@@ -142,7 +142,7 @@ async def test_a_stage_that_cannot_be_read_is_counted():
 async def test_parse_positions_are_none_when_they_cannot_be_trusted():
     """positions_at: the start of every page-world script with a URL, by hash; None when the
     record overflowed or the debugger domain never came on (then no page-URL frame can be checked)."""
-    from pnakotic.src.scanner.eval_capture import MAX_POSITIONS, EvalCapture
+    from mandacaru.src.scanner.eval_capture import MAX_POSITIONS, EvalCapture
 
     cdp = FakeCdp({})
     capture = await _capture(cdp)
@@ -229,7 +229,7 @@ async def test_sources_are_read_only_within_a_per_load_character_budget():
     """Six hostile loads at once each reading 100 sources of 2 000 000 characters took the worker
     past 1 GB: the characters read per load are budgeted by each event's ``length``, before the
     read. A stage over the budget is counted and not read; a smaller later one can still fit."""
-    from pnakotic.src.scanner.eval_capture import MAX_STAGE_FETCH_CHARS, MAX_STAGE_FETCH_TOTAL_CHARS
+    from mandacaru.src.scanner.eval_capture import MAX_STAGE_FETCH_CHARS, MAX_STAGE_FETCH_TOTAL_CHARS
 
     assert MAX_STAGE_FETCH_TOTAL_CHARS == 10_000_000
     cdp = FakeCdp({})
@@ -282,7 +282,7 @@ class SlowCdp(FakeCdp):
 async def test_at_most_4_sources_are_read_at_once():
     import asyncio
 
-    from pnakotic.src.scanner.eval_capture import MAX_FETCHES_IN_FLIGHT
+    from mandacaru.src.scanner.eval_capture import MAX_FETCHES_IN_FLIGHT
 
     assert MAX_FETCHES_IN_FLIGHT == 4
     cdp = SlowCdp({})

@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 # Dev fallback; docker-compose (and any deployment) injects the real URL via env.
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+psycopg2://pnakotic_admin:dark-matter-password@db:5432/pnakotic_memory",
+    "postgresql+psycopg2://mandacaru_admin:caatinga-dev-password@db:5432/mandacaru_memory",
 )
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)

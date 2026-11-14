@@ -9,10 +9,10 @@ both pages below should print owner=store."""
 import asyncio, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # the directory that holds pnakotic/
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # the directory that holds mandacaru/
 from playwright.async_api import async_playwright
-from pnakotic.src.scanner.card_watch import CARD_SELECTOR, CardWatcher, summarize
-from pnakotic.src.scanner.eval_capture import EvalCapture
+from mandacaru.src.scanner.card_watch import CARD_SELECTOR, CardWatcher, summarize
+from mandacaru.src.scanner.eval_capture import EvalCapture
 
 ADD = "var i=document.createElement('input');i.setAttribute('autocomplete','cc-number');document.body.appendChild(i);"
 PAGES = {

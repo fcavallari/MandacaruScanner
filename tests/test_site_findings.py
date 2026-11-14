@@ -3,7 +3,7 @@
 
 def test_served_hit_is_one_block_per_page_with_snippet():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     blocks = build_blocks([_load(0, "https://s.com/", "default", [_yara_hop("served", "https://s.com/", "r1", 5, True, 40, "EVIL")])], "s.com", None)
     [b] = blocks
@@ -15,7 +15,7 @@ def test_served_hit_is_one_block_per_page_with_snippet():
 
 def test_rendered_only_hit_says_added_by_script():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     [b] = build_blocks([_load(0, "https://s.com/", "default", [_yara_hop("page", "https://s.com/", "r1", 3, True, 10, "X")])], "s.com", None)
     assert b["findings"][0]["origin"] == "rendered" and b["findings"][0]["severity"] == "suspicious"
@@ -23,7 +23,7 @@ def test_rendered_only_hit_says_added_by_script():
 
 def test_rendered_hit_is_dropped_when_the_served_html_has_the_same_rule():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     hops = [_yara_hop("served", "https://s.com/", "r1", 5, True, 3, "A"), _yara_hop("page", "https://s.com/", "r1", 5, True, 9, "A2")]
     [b] = build_blocks([_load(0, "https://s.com/", "default", hops)], "s.com", None)
@@ -32,7 +32,7 @@ def test_rendered_hit_is_dropped_when_the_served_html_has_the_same_rule():
 
 def test_frame_hit_sits_under_the_page():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     [b] = build_blocks([_load(0, "https://s.com/", "default", [_yara_hop("frame", "https://ads.net/f", "r1", 2, False, 0, "Q")])], "s.com", None)
     assert b["location"] == "https://s.com/" and b["findings"][0]["origin"] == "frame"
@@ -42,7 +42,7 @@ def test_yara_rule_without_description_uses_the_generic_line():
     import json
 
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import MESSAGES, build_blocks
+    from mandacaru.src.scanner.site_findings import MESSAGES, build_blocks
 
     hop = _yara_hop("served", "https://s.com/", "r1", 5, True, 0, "E")
     hop.evidence = json.dumps({**json.loads(hop.evidence), "description": ""})
@@ -52,7 +52,7 @@ def test_yara_rule_without_description_uses_the_generic_line():
 
 def test_same_footer_on_every_page_merges_into_one_block():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     loads = [_load(i, f"https://s.com/p{i}/", "default", [_yara_hop("served", f"https://s.com/p{i}/", "r1", 5, True, 5, "FOOT")]) for i in range(4)]
     [b] = build_blocks(loads, "s.com", None)
@@ -62,7 +62,7 @@ def test_same_footer_on_every_page_merges_into_one_block():
 
 def test_different_snippets_of_one_rule_stay_apart():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     loads = [_load(i, f"https://s.com/p{i}/", "default", [_yara_hop("served", f"https://s.com/p{i}/", "r1", 5, True, 5, f"T{i}")]) for i in range(2)]
     assert [b["location"] for b in build_blocks(loads, "s.com", None)] == ["https://s.com/p0/", "https://s.com/p1/"]
@@ -70,7 +70,7 @@ def test_different_snippets_of_one_rule_stay_apart():
 
 def test_script_match_lands_under_script_url_with_loaded_by():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     loads = [_load(i, f"https://s.com/p{i}/", "default", [_yara_hop("script", "https://s.com/wp-content/x.js", "r2", 5, True, 0, "Z")]) for i in range(2)]
     [b] = build_blocks(loads, "s.com", None)
@@ -81,7 +81,7 @@ def test_script_match_lands_under_script_url_with_loaded_by():
 
 def test_injection_ties_only_inside_block():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     hop = _yara_hop("served", "https://s.com/", "r1", 5, True, 120, "LOADER")
     inj = {"requested_url": "https://bad.org/x.js", "initiator_kind": "inline", "initiator_url": "https://s.com/",
@@ -95,7 +95,7 @@ def test_injection_ties_only_inside_block():
 
 def test_injection_tie_end_is_exclusive_and_a_tied_obfuscated_injector_is_not_repeated():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     inj = {"requested_url": "https://bad.org/x.js", "initiator_kind": "inline", "initiator_url": "https://s.com/",
            "block": {"start": 100, "end": 120}, "markers": ["string_array_rotation"], "context": None}
@@ -109,7 +109,7 @@ def test_injection_tie_end_is_exclusive_and_a_tied_obfuscated_injector_is_not_re
 
 def test_matched_script_names_the_code_that_loaded_it():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     inline = {"requested_url": "https://bad.org/x.js", "initiator_kind": "inline", "initiator_url": "https://s.com/",
               "block": None, "markers": ["string_array_rotation"], "context": None}
@@ -124,7 +124,7 @@ def test_matched_script_names_the_code_that_loaded_it():
 
 def test_matched_injecting_file_gains_what_it_loaded():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     inj = {"requested_url": "https://bad.org/x.js", "initiator_kind": "script", "initiator_url": "https://s.com/loader.js",
            "block": None, "markers": [], "context": None}
@@ -135,7 +135,7 @@ def test_matched_injecting_file_gains_what_it_loaded():
 
 def test_obfuscated_untied_injection_is_suspicious_and_plain_one_is_nothing():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     inj = {"requested_url": "https://bad.org/x.js", "initiator_kind": "inline", "initiator_url": "https://s.com/",
            "block": {"start": 0, "end": 50}, "markers": ["string_array_rotation"], "context": {"text": "…", "match_start": 0, "match_end": 1, "line": 1}}
@@ -147,7 +147,7 @@ def test_obfuscated_untied_injection_is_suspicious_and_plain_one_is_nothing():
 
 def test_obfuscated_injecting_file_counts_only_when_it_is_on_the_site():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     inj = {"requested_url": "https://bad.org/x.js", "initiator_kind": "script", "initiator_url": "https://www.s.com/t.js",
            "block": None, "markers": ["hex_identifier_density"], "context": None}
@@ -159,7 +159,7 @@ def test_obfuscated_injecting_file_counts_only_when_it_is_on_the_site():
 
 def test_code_on_an_offsite_landing_sits_at_the_landing_not_the_owners_page():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     inj = {"requested_url": "https://bad.org/x.js", "initiator_kind": "inline", "initiator_url": "https://evil.net/land",
            "block": {"start": 0, "end": 50}, "markers": ["string_array_rotation"], "context": {"text": "obf", "match_start": 0, "match_end": 3, "line": 1}}
@@ -185,7 +185,7 @@ def test_code_on_an_offsite_landing_sits_at_the_landing_not_the_owners_page():
 
 def test_all_visitors_is_false_without_checked_profiles():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     # The default homepage load decided the off-site domain but isn't usable: nothing to compare.
     [b] = build_blocks([_load(0, "https://s.com/", "default", state="not_checked", reason="timeout")], "s.com", "elsewhere.net")
@@ -194,7 +194,7 @@ def test_all_visitors_is_false_without_checked_profiles():
 
 def test_visitors_subset_and_all():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     hop = _yara_hop("served", "https://s.com/", "r1", 5, True, 1, "G")
     loads = [_load(0, "https://s.com/", p, [hop] if p == "googlebot" else []) for p in ("default", "mobile-ios", "googlebot")]
@@ -204,7 +204,7 @@ def test_visitors_subset_and_all():
 
 def test_blocks_caps_and_single_block_for_shared_script():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     loads = [_load(i, f"https://s.com/p{i}/", p, [_yara_hop("script", "https://s.com/f.js", "r", 5, True, 0, "F")])
              for i in range(30) for p in ("default", "mobile-ios", "googlebot")]
@@ -216,7 +216,7 @@ def test_blocks_caps_and_single_block_for_shared_script():
 
 def test_blocks_are_capped_compromised_first():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import MAX_BLOCKS, build_blocks
+    from mandacaru.src.scanner.site_findings import MAX_BLOCKS, build_blocks
 
     loads = [_load(i, f"https://s.com/p{i:02d}/", "default",
                    [_yara_hop("served", f"https://s.com/p{i:02d}/", "r", 5 if i >= 40 else 2, True, 0, f"E{i}")])
@@ -229,7 +229,7 @@ def test_blocks_are_capped_compromised_first():
 
 def test_overflow_counts_the_blocks_past_the_cap():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks, build_blocks_and_overflow
+    from mandacaru.src.scanner.site_findings import build_blocks, build_blocks_and_overflow
 
     loads = [_load(i, f"https://s.com/p{i:02d}/", "default", [_yara_hop("served", f"https://s.com/p{i:02d}/", "r", 2, True, 0, f"E{i}")])
              for i in range(57)]
@@ -240,7 +240,7 @@ def test_overflow_counts_the_blocks_past_the_cap():
 
 def test_a_block_keeps_twenty_findings_compromised_first():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     hops = [_yara_hop("frame", f"https://ads{i}.net/", f"r{i:02d}", 2, True, 0, f"F{i}") for i in range(24)]
     hops.append(_yara_hop("served", "https://s.com/", "zz", 5, True, 0, "BAD"))
@@ -252,7 +252,7 @@ def test_a_block_keeps_twenty_findings_compromised_first():
 
 def test_long_urls_are_cut_to_300_characters_and_still_merge():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     long_js = "https://s.com/" + "a" * 1000 + ".js"
     long_page = "https://s.com/" + "p" * 1000
@@ -275,8 +275,8 @@ def test_behaviour_findings_are_compromised():
     import json
 
     from _support import _load
-    from pnakotic.src.scanner.models import RedirectHop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.models import RedirectHop
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     def ev(**e):
         return RedirectHop(url="https://s.com/", mechanism="page_behavior", evidence=json.dumps(e))
@@ -294,7 +294,7 @@ def test_behaviour_findings_are_compromised():
 
 def test_decisive_cloaking_on_the_default_load():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     home = _load(0, "https://s.com/", "default")
     home.result.metadata["cloaking"] = {"landings": {"default": "s.com", "mobile-ios": "evil.net"}, "common": "s.com",
@@ -321,7 +321,7 @@ def test_decisive_cloaking_on_the_default_load():
 
 def test_offsite_homepage_finding():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     [b] = build_blocks([_load(0, "https://s.com/", "default", [], final_url="https://elsewhere.net/")], "s.com", "elsewhere.net")
     assert b["findings"][0]["kind"] == "offsite_homepage" and "elsewhere.net" in b["findings"][0]["message"]
@@ -329,7 +329,7 @@ def test_offsite_homepage_finding():
 
 def test_offsite_homepage_wording_and_upgrade():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     def homepage(cloaked):
         home = _load(0, "https://s.com/", "default", final_url="https://www.elsewhere.net/")
@@ -349,7 +349,7 @@ def test_offsite_homepage_wording_and_upgrade():
 
 def test_page_score_finding_only_without_a_compromised_finding():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     load = _load(1, "https://s.com/a/", "default", score=0.5)
     load.result.metadata["scoring_findings"] = ["Credential form"]
@@ -364,7 +364,7 @@ def test_page_score_finding_only_without_a_compromised_finding():
 
 def test_page_score_uses_the_default_loads_own_score_after_combine():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     home = _load(0, "https://s.com/", "default", score=0.6)  # combine() folded mobile-ios's 0.6 in
     home.result.metadata["variants"] = [{"profile": "default", "requested": True, "malicious_score": 0.1},
@@ -388,7 +388,7 @@ def test_page_score_uses_the_default_loads_own_score_after_combine():
 
 def test_not_checked_and_challenge_loads_add_nothing():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     assert build_blocks([_load(0, "https://s.com/", "default", [_yara_hop("served", "https://s.com/", "r", 5, True, 0, "E")], state="not_checked")], "s.com", None) == []
     challenged = _load(0, "https://s.com/", "default", [_yara_hop("served", "https://s.com/", "r", 5, True, 0, "E")], score=1.0)
@@ -398,7 +398,7 @@ def test_not_checked_and_challenge_loads_add_nothing():
 
 def test_partial_load_findings_count():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     [b] = build_blocks([_load(0, "https://s.com/", "default", [_yara_hop("served", "https://s.com/", "r", 5, True, 0, "E")], state="partial")], "s.com", None)
     assert b["findings"][0]["severity"] == "compromised"
@@ -406,7 +406,7 @@ def test_partial_load_findings_count():
 
 def test_public_helpers_usable_load_and_own_score():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import own_score, usable_load
+    from mandacaru.src.scanner.site_findings import own_score, usable_load
 
     assert usable_load(_load(0, "https://s.com/", "default"))
     assert not usable_load(_load(0, "https://s.com/", "default", state="not_checked", reason="timeout"))
@@ -418,7 +418,7 @@ def test_public_helpers_usable_load_and_own_score():
 
 def test_untied_injection_of_an_obfuscated_script_is_suspicious_even_with_a_plain_loader():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import MESSAGES, build_blocks
+    from mandacaru.src.scanner.site_findings import MESSAGES, build_blocks
 
     # The abacashi.com shape: a plain inline loader (URL built at runtime, block not found)
     # fetching obfuscator.io output from another site.
@@ -446,7 +446,7 @@ def test_untied_injection_of_an_obfuscated_script_is_suspicious_even_with_a_plai
 
 def test_script_blocked_as_malware_by_the_cdn_is_a_suspicious_script_block():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import MESSAGES, build_blocks
+    from mandacaru.src.scanner.site_findings import MESSAGES, build_blocks
 
     url = "https://r1.example/donation"
     inj = {"requested_url": url, "initiator_kind": "inline", "initiator_url": "https://s.com/p",
@@ -472,7 +472,7 @@ def test_script_blocked_as_malware_by_the_cdn_is_a_suspicious_script_block():
 
 def test_runtime_yara_hit_sits_on_the_page_as_runtime():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     [b] = build_blocks([_load(0, "https://s.com/", "default", [_yara_hop("eval", "https://s.com/", "r1", 5, True, 0, "EVIL")])], "s.com", None)
     [f] = b["findings"]
@@ -483,7 +483,7 @@ def test_runtime_yara_hit_sits_on_the_page_as_runtime():
 
 def test_runtime_yara_hit_names_the_code_that_built_it_without_moving_the_finding():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     # The caller is whatever the page's code says it is (a //# sourceURL can forge it): never the location.
     hop = _yara_hop("eval", "https://example.com/jquery.js", "r1", 2, True, 0, "EVIL")
@@ -496,7 +496,7 @@ def test_runtime_yara_hit_names_the_code_that_built_it_without_moving_the_findin
 
 def test_runtime_yara_hit_with_the_landing_url_is_not_an_initiator():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     hop = _yara_hop("eval", "https://s.com/landed", "r1", 5, True, 0, "EVIL")
     [b] = build_blocks([_load(0, "https://s.com/", "default", [hop], final_url="https://s.com/landed")], "s.com", None)
@@ -505,7 +505,7 @@ def test_runtime_yara_hit_with_the_landing_url_is_not_an_initiator():
 
 def test_runtime_yara_hit_stays_apart_from_a_page_hit_with_the_same_text():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     hops = [_yara_hop("served", "https://s.com/", "r1", 5, True, 0, "EVIL"), _yara_hop("eval", "https://s.com/", "r1", 5, True, 0, "EVIL")]
     [b] = build_blocks([_load(0, "https://s.com/", "default", hops)], "s.com", None)
@@ -514,7 +514,7 @@ def test_runtime_yara_hit_stays_apart_from_a_page_hit_with_the_same_text():
 
 def test_offsite_runtime_yara_hit_sits_at_the_landing_page():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     hop = _yara_hop("eval", "https://evil.net/", "r1", 5, True, 0, "EVIL")
     [b] = build_blocks([_load(0, "https://s.com/", "default", [hop], final_url="https://evil.net/")], "s.com", None)
@@ -524,7 +524,7 @@ def test_offsite_runtime_yara_hit_sits_at_the_landing_page():
 
 def test_obfuscated_runtime_stage_is_suspicious_and_merges_across_pages():
     from _support import _eval_stage, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     loads = [_load(i, f"https://s.com/p{i}/", "default", eval_stages=[_eval_stage("SCRAMBLED", "https://s.com/a.js")])
              for i in range(2)]
@@ -539,7 +539,7 @@ def test_obfuscated_runtime_stage_is_suspicious_and_merges_across_pages():
 
 def test_obfuscated_runtime_stage_without_a_caller_has_no_initiator():
     from _support import _eval_stage, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     [b] = build_blocks([_load(0, "https://s.com/", "default", eval_stages=[_eval_stage()])], "s.com", None)
     assert b["findings"][0]["details"]["initiator"] is None
@@ -547,7 +547,7 @@ def test_obfuscated_runtime_stage_without_a_caller_has_no_initiator():
 
 def test_runtime_stage_already_matched_by_yara_is_not_repeated():
     from _support import _eval_stage, _load, _yara_hop
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     load = _load(0, "https://s.com/", "default", [_yara_hop("eval", "https://s.com/", "r1", 5, True, 0, "EVIL")],
                  eval_stages=[_eval_stage("EVIL", yara_matched=True)])
@@ -557,14 +557,14 @@ def test_runtime_stage_already_matched_by_yara_is_not_repeated():
 
 def test_runtime_stage_without_markers_is_nothing():
     from _support import _eval_stage, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     assert build_blocks([_load(0, "https://s.com/", "default", eval_stages=[_eval_stage(markers=())])], "s.com", None) == []
 
 
 def test_oversized_runtime_stage_is_nothing():
     from _support import _eval_stage, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     load = _load(0, "https://s.com/", "default", eval_stages=[_eval_stage(oversized=True)])
     assert build_blocks([load], "s.com", None) == []
@@ -572,7 +572,7 @@ def test_oversized_runtime_stage_is_nothing():
 
 def test_runtime_stage_on_an_offsite_landing_is_skipped():
     from _support import _eval_stage, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     load = _load(0, "https://s.com/", "default", final_url="https://evil.net/", eval_stages=[_eval_stage()])
     assert build_blocks([load], "s.com", None) == []
@@ -580,7 +580,7 @@ def test_runtime_stage_on_an_offsite_landing_is_skipped():
 
 def test_runtime_stage_with_a_forged_long_caller_is_cut():
     from _support import _eval_stage, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     caller = "https://example.com/" + "a" * 400
     [b] = build_blocks([_load(0, "https://s.com/", "default", eval_stages=[_eval_stage(caller=caller)])], "s.com", None)
@@ -594,8 +594,8 @@ SKIM = ["https://evil.example/s.js", "https://s.com/wp-includes/js/jquery/jquery
 
 def test_card_inputs_inserted_by_unknown_code_are_one_suspicious_finding_at_the_page():
     from _support import _card, _cards, _load
-    from pnakotic.src.scanner.site_findings import MESSAGES, build_blocks
-    from pnakotic.src.scanner.site_report import site_verdict
+    from mandacaru.src.scanner.site_findings import MESSAGES, build_blocks
+    from mandacaru.src.scanner.site_report import site_verdict
 
     load = _load(0, "https://s.com/checkout/", "default",
                  card_inputs=_cards(_card(frames=SKIM, via="innerHTML"), _card(frames=["https://evil.example/t.js"])))
@@ -612,7 +612,7 @@ def test_card_inputs_inserted_by_unknown_code_are_one_suspicious_finding_at_the_
 
 def test_card_inputs_of_the_same_skimmer_merge_across_visitors_and_frames_are_bounded():
     from _support import _card, _cards, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     many = ["https://evil.example/{}.js".format("x" * 400)] + ["https://evil.example/{}.js".format(i) for i in range(15)]
     loads = [_load(0, "https://s.com/checkout/", p, card_inputs=_cards(_card(frames=many, first_unknown=many[0])))
@@ -627,7 +627,7 @@ def test_card_inputs_of_the_same_skimmer_merge_across_visitors_and_frames_are_bo
 
 def test_card_inputs_are_one_finding_per_page_whatever_the_first_frame():
     from _support import _card, _cards, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     page = "https://s.com/checkout/"
     loads = [_load(0, page, "default", card_inputs=_cards(_card(frames=["https://evil.example/a.js"]))),
@@ -655,7 +655,7 @@ def test_card_inputs_are_one_finding_per_page_whatever_the_first_frame():
 
 def test_card_inputs_keep_the_first_unknown_frame_when_it_is_not_among_the_kept_frames():
     from _support import _card, _cards, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     store = ["https://s.com/wp-content/plugins/p/{}.js".format(i) for i in range(10)]
     load = _load(0, "https://s.com/checkout/", "default",
@@ -668,7 +668,7 @@ def test_card_inputs_keep_the_first_unknown_frame_when_it_is_not_among_the_kept_
 
 def test_store_vendor_and_provider_insertions_are_not_findings():
     from _support import _card, _cards, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     for card in (_card("store", ["https://s.com/wp-content/plugins/pay/form.js"]),
                  _card("vendor", ["https://static.hotjar.com/c/hotjar.js"], vendors=["Hotjar"]),
@@ -683,7 +683,7 @@ def test_an_unverifiable_page_url_insertion_is_not_a_finding_but_a_cross_site_on
     """Card-field ownership the scanner couldn't check (no parse record, no script hash, a charset
     it can't read) is not outside code; a frame from another site on that same load still is."""
     from _support import _card, _cards, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     page = "https://s.com/checkout/"
     unchecked = _card(frames=[page], verified=False)
@@ -696,7 +696,7 @@ def test_an_unverifiable_page_url_insertion_is_not_a_finding_but_a_cross_site_on
 
 def test_an_empty_stack_an_unseen_insertion_and_a_missing_verified_flag_are_findings():
     from _support import _card, _cards, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     page = "https://s.com/checkout/"
     empty = _card(frames=[])
@@ -709,7 +709,7 @@ def test_an_empty_stack_an_unseen_insertion_and_a_missing_verified_flag_are_find
 
 def test_card_inputs_on_an_offsite_landing_and_hostile_metadata_add_nothing():
     from _support import _card, _cards, _load
-    from pnakotic.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_findings import build_blocks
 
     offsite = _load(0, "https://s.com/", "default", final_url="https://evil.net/",
                     card_inputs=_cards(_card(frames=["https://evil.net/s.js"])))

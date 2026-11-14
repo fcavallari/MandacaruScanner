@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
-from .engine import BROWSER_ERRORS, LoadOptions, PnakoticEngine
+from .engine import BROWSER_ERRORS, LoadOptions, MandacaruEngine
 from .models import ScanResult
 from .page_picker import pick_pages, probe_url
 from .site_findings import Load
@@ -120,7 +120,7 @@ def _raise_bugs(tasks) -> None:
 
 
 class SiteScanner:
-    def __init__(self, engine: PnakoticEngine, budget_s: float = 150.0, concurrency: int = 6,
+    def __init__(self, engine: MandacaruEngine, budget_s: float = 150.0, concurrency: int = 6,
                  grace_s: float = 10.0, page_limit: int = 5):
         self.engine = engine
         self.budget_s = budget_s

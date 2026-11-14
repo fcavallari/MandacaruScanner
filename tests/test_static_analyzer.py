@@ -6,7 +6,7 @@ def _ids(findings):
 
 
 def test_adversarial_atob_is_fast():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     html = ("atob('" + "x" * 494) * 4000  # ~2 MB, no closing quote
     start = time.perf_counter()
@@ -15,7 +15,7 @@ def test_adversarial_atob_is_fast():
 
 
 def test_adversarial_meta_is_fast():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     html = ("<meta " + "x" * 494) * 4000  # ~2 MB, no closing '>'
     start = time.perf_counter()
@@ -24,7 +24,7 @@ def test_adversarial_meta_is_fast():
 
 
 def test_atob_still_matches_normal_and_multiline():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     a = StaticAnalyst()
     assert "js_atob" in _ids(a.analyze_content("<script>atob('aGVsbG8=')</script>"))
@@ -33,7 +33,7 @@ def test_atob_still_matches_normal_and_multiline():
 
 
 def test_meta_refresh_still_matches_both_attribute_orders():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     a = StaticAnalyst()
     first = '<meta http-equiv="refresh" content="0;url=/x">'
@@ -43,7 +43,7 @@ def test_meta_refresh_still_matches_both_attribute_orders():
 
 
 def test_oversized_content_is_truncated_with_finding():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst, MAX_CONTENT_CHARS
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst, MAX_CONTENT_CHARS
 
     a = StaticAnalyst()
 
@@ -66,7 +66,7 @@ def test_oversized_content_is_truncated_with_finding():
 
 
 def test_small_content_has_no_truncation_finding():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     findings = StaticAnalyst().analyze_content("<html>atob('x')</html>")
     assert "content_truncated" not in _ids(findings)
@@ -74,7 +74,7 @@ def test_small_content_has_no_truncation_finding():
 
 
 def test_adversarial_clickfix_is_fast():
-    from pnakotic.src.scanner.static_analyzer import MAX_CONTENT_CHARS, StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import MAX_CONTENT_CHARS, StaticAnalyst
 
     html = ("windows key + " * (MAX_CONTENT_CHARS // 14))[:MAX_CONTENT_CHARS]
     start = time.perf_counter()
@@ -83,7 +83,7 @@ def test_adversarial_clickfix_is_fast():
 
 
 def test_clickfix_lure_needs_run_and_paste():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     analyst = StaticAnalyst()
     lure = "<p>1. Press Windows Key + R</p><p>2. Press CTRL + V</p><p>3. Press Enter</p>"
@@ -95,7 +95,7 @@ def test_clickfix_lure_needs_run_and_paste():
 
 
 def test_meta_refresh_without_url_is_a_reload_timer():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     a = StaticAnalyst()
     assert "meta_refresh" not in _ids(a.analyze_content('<meta http-equiv="refresh" content="360">'))
@@ -104,7 +104,7 @@ def test_meta_refresh_without_url_is_a_reload_timer():
 
 
 def test_b64_payload_ignores_data_uris_but_not_bare_blobs():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     a = StaticAnalyst()
     blob = "AbCd+fGh/jKlMnOpQrStUvWxYz0123456789" * 3  # > 60 chars, has + and /
@@ -117,7 +117,7 @@ def test_b64_payload_ignores_data_uris_but_not_bare_blobs():
 
 
 def test_adversarial_data_uri_openers_are_fast():
-    from pnakotic.src.scanner.static_analyzer import StaticAnalyst
+    from mandacaru.src.scanner.static_analyzer import StaticAnalyst
 
     html = ("data:" + "a" * 78 + ";") * 20000  # ~1.6 MB of unterminated data URI openers
     start = time.perf_counter()

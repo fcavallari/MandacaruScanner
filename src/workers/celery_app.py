@@ -8,7 +8,7 @@ from celery import Celery
 # Initialize Redis Connection
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-celery_app = Celery("pnakotic", broker=REDIS_URL, backend=REDIS_URL)
+celery_app = Celery("mandacaru", broker=REDIS_URL, backend=REDIS_URL)
 celery_app.conf.update(
     # A scan takes tens of seconds; don't ack until it's done so a dead worker re-queues it.
     task_acks_late=True,
@@ -18,7 +18,7 @@ celery_app.conf.update(
     task_soft_time_limit=240,
     # Site quick checks open many browser contexts at once, so they get their own queue and a
     # dedicated single-concurrency worker. Everything else stays on the default "celery" queue.
-    task_routes={"pnakotic.site_scan": {"queue": "site"}},
+    task_routes={"mandacaru.site_scan": {"queue": "site"}},
 )
 
 
@@ -32,7 +32,7 @@ def run_async(coro):
         loop.close()
 
 
-@celery_app.task(name="pnakotic.scan")
+@celery_app.task(name="mandacaru.scan")
 def run_scan_worker(job_id: str, url: str, profile: str, task_folder: Optional[str] = None,
                     compare: bool = False):
     """The actual scan execution logic called by the API.
@@ -43,10 +43,10 @@ def run_scan_worker(job_id: str, url: str, profile: str, task_folder: Optional[s
     defaults to off so those older messages keep their meaning.
     """
     # Import INSIDE task to prevent serialization errors in Celery workers
-    from pnakotic.src.scanner.engine import PnakoticEngine
-    from pnakotic.src.database.session import SessionLocal
-    from pnakotic.src.database import models, ScanResult
-    from pnakotic.src.database.models import utcnow
+    from mandacaru.src.scanner.engine import MandacaruEngine
+    from mandacaru.src.database.session import SessionLocal
+    from mandacaru.src.database import models, ScanResult
+    from mandacaru.src.database.models import utcnow
 
     db = SessionLocal()
     job = None
@@ -67,7 +67,7 @@ def run_scan_worker(job_id: str, url: str, profile: str, task_folder: Optional[s
         job.updated_at = utcnow()
         db.commit()
 
-        engine = PnakoticEngine(task_id=job_id)  # artifacts land in ARTIFACTS_DIR/<job_id>
+        engine = MandacaruEngine(task_id=job_id)  # artifacts land in ARTIFACTS_DIR/<job_id>
 
         # EXECUTION: Bridge Sync Celery -> Async Playwright
         result = run_async(engine.scan(url, profile, compare=bool(compare)))
@@ -118,15 +118,15 @@ def run_scan_worker(job_id: str, url: str, profile: str, task_folder: Optional[s
         db.close()
 
 
-@celery_app.task(name="pnakotic.site_scan", soft_time_limit=240, time_limit=300)
+@celery_app.task(name="mandacaru.site_scan", soft_time_limit=240, time_limit=300)
 def run_site_scan_worker(job_id: str, homepage_url: str):
     """Quick-check a whole site from its homepage; same lifecycle and idempotency as run_scan_worker."""
     # Import INSIDE task to prevent serialization errors in Celery workers
-    from pnakotic.src.scanner.engine import PnakoticEngine
-    from pnakotic.src.scanner.site_engine import SiteScanner
-    from pnakotic.src.database.session import SessionLocal
-    from pnakotic.src.database import models, ScanResult
-    from pnakotic.src.database.models import utcnow
+    from mandacaru.src.scanner.engine import MandacaruEngine
+    from mandacaru.src.scanner.site_engine import SiteScanner
+    from mandacaru.src.database.session import SessionLocal
+    from mandacaru.src.database import models, ScanResult
+    from mandacaru.src.database.models import utcnow
 
     db = SessionLocal()
     job = None
@@ -143,7 +143,7 @@ def run_site_scan_worker(job_id: str, homepage_url: str):
         job.updated_at = utcnow()
         db.commit()
 
-        engine = PnakoticEngine(task_id=job_id)  # artifacts land in ARTIFACTS_DIR/<job_id>
+        engine = MandacaruEngine(task_id=job_id)  # artifacts land in ARTIFACTS_DIR/<job_id>
         outcome = run_async(SiteScanner(engine).scan(homepage_url))
 
         # Delete any stale row first so a re-queued message (acks_late) can't collide on the PK.

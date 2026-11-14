@@ -8,8 +8,8 @@ with a filled cart, and prints card_watch.summarize() with site_host="localhost"
 checkout URL as landing_url. Skimmer OFF first; then once with the skimmer ON (typing the
 test card and blurring the field, which the testbed skimmer reads and sends).
 
-Needs PYTHONPATH set to the directory that holds the pnakotic checkout, e.g.
-  PYTHONPATH=/path/to/parent-of-pnakotic python3 card_watch_observe.py
+Needs PYTHONPATH set to the directory that holds the mandacaru checkout, e.g.
+  PYTHONPATH=/path/to/parent-of-mandacaru python3 card_watch_observe.py
 """
 import asyncio
 import sys
@@ -18,9 +18,9 @@ from playwright.async_api import async_playwright
 
 from spike_common import STORE, Out, cheapest_product, fill_card, launch, option, settle, toggle
 
-from pnakotic.src.scanner.card_watch import CARD_SELECTOR, CardWatcher, html_has_card_input, summarize
-from pnakotic.src.scanner.engine import _document_charset, _served_body
-from pnakotic.src.scanner.eval_capture import EvalCapture
+from mandacaru.src.scanner.card_watch import CARD_SELECTOR, CardWatcher, html_has_card_input, summarize
+from mandacaru.src.scanner.engine import _document_charset, _served_body
+from mandacaru.src.scanner.eval_capture import EvalCapture
 
 out = Out("card_watch_observe")
 CHECKOUTS = (("block", "/checkout/"), ("classic", "/checkout-classic/"))

@@ -24,7 +24,7 @@ STORE_STACK = "Error\n    at https://shop.example/wp-content/plugins/pay/form.js
 
 
 def test_card_html_re_matches_card_fields_only():
-    from pnakotic.src.scanner.card_watch import CARD_HTML_RE
+    from mandacaru.src.scanner.card_watch import CARD_HTML_RE
 
     for html in CARD_FIELDS:
         assert CARD_HTML_RE.search(f"<p>x</p>{html}<p>y</p>"), html
@@ -35,7 +35,7 @@ def test_card_html_re_matches_card_fields_only():
 def test_card_html_re_is_fast_on_hostile_markup():
     import time
 
-    from pnakotic.src.scanner.card_watch import CARD_HTML_RE, MAX_HTML_CHARS
+    from mandacaru.src.scanner.card_watch import CARD_HTML_RE, MAX_HTML_CHARS
 
     hostile = [
         ("<input " + "name=id=" * 130 + " ") * 400,
@@ -52,8 +52,8 @@ def test_card_html_re_is_fast_on_hostile_markup():
 def test_served_html_check_agrees_and_is_linear_on_a_whole_body():
     import time
 
-    from pnakotic.src.scanner.card_watch import html_has_card_input
-    from pnakotic.src.scanner.yara_scan import MAX_BUFFER_BYTES
+    from mandacaru.src.scanner.card_watch import html_has_card_input
+    from mandacaru.src.scanner.yara_scan import MAX_BUFFER_BYTES
 
     for html in CARD_FIELDS:
         assert html_has_card_input(f"<p>x</p>{html}<p>y</p>"), html
@@ -76,7 +76,7 @@ def test_served_html_check_agrees_and_is_linear_on_a_whole_body():
 
 
 def test_summarize_owner_of_each_insertion():
-    from pnakotic.src.scanner.card_watch import summarize
+    from mandacaru.src.scanner.card_watch import summarize
 
     events = [{"via": "innerHTML", "stack": SKIMMER}, {"via": "appendChild", "stack": ""},
               {"via": "appendChild", "stack": STORE_STACK}]
@@ -93,7 +93,7 @@ def test_summarize_owner_of_each_insertion():
 
 
 def test_summarize_reads_the_page_frame_against_the_served_inline_block_hashes():
-    from pnakotic.src.scanner.card_watch import summarize
+    from mandacaru.src.scanner.card_watch import summarize
 
     import hashlib
 
@@ -113,7 +113,7 @@ def test_summarize_reads_the_page_frame_against_the_served_inline_block_hashes()
 
 
 def test_summarize_bounds_frames_and_marks_a_cut_stack():
-    from pnakotic.src.scanner.card_watch import summarize
+    from mandacaru.src.scanner.card_watch import summarize
 
     long_url = STORE + "/" + "a" * 400 + ".js"
     deep = "Error\n" + "".join(f"    at https://shop.example/{i}.js:1:1\n" for i in range(31))
@@ -128,7 +128,7 @@ def test_summarize_bounds_frames_and_marks_a_cut_stack():
 
 
 def test_summarize_fails_closed_when_inputs_appeared_unseen():
-    from pnakotic.src.scanner.card_watch import summarize
+    from mandacaru.src.scanner.card_watch import summarize
 
     unseen = {"via": "unseen", "owner": "unknown", "vendors": [], "frames": [], "cut": False, "verified": True,
               "first_unknown": ""}
@@ -158,7 +158,7 @@ def test_summarize_marks_page_url_frames_it_could_not_check():
     """`verified` is false only when every frame that made the owner unknown is at the page URL and
     page-URL frames couldn't be checked on that load: no parse record (the debugger domain failed or
     the record overflowed), no served HTML, or no script hash in this browser."""
-    from pnakotic.src.scanner.card_watch import summarize
+    from mandacaru.src.scanner.card_watch import summarize
 
     served = b"<html><head><script>var a = 1;</script></head><body></body></html>"
     # a runtime handler at the page URL on a load that could check page frames: unknown, and verified
@@ -179,7 +179,7 @@ def test_summarize_marks_page_url_frames_it_could_not_check():
     # no served HTML to hash the inline blocks of, or only its first MAX_BUFFER_BYTES
     none = summarize([HANDLER_ONLY], 1, "shop.example", PAGE, None, parsed={})
     assert none["unverifiable"] == "served_html" and none["inserted"][0]["verified"] is False
-    from pnakotic.src.scanner.yara_scan import MAX_BUFFER_BYTES
+    from mandacaru.src.scanner.yara_scan import MAX_BUFFER_BYTES
 
     cut = (served + b" " * MAX_BUFFER_BYTES)[:MAX_BUFFER_BYTES]
     out = summarize([HANDLER_ONLY, CROSS_SITE], 1, "shop.example", PAGE, cut, parsed={_hash("var a = 1;"): {(0, 20)}})
@@ -197,7 +197,7 @@ def test_summarize_marks_page_url_frames_it_could_not_check():
 
 
 def test_summarize_cannot_check_page_frames_in_a_charset_it_does_not_read():
-    from pnakotic.src.scanner.card_watch import summarize
+    from mandacaru.src.scanner.card_watch import summarize
 
     page_frame = dict(HANDLER_ONLY)
     ascii_page = b"<html><head><script>var a = 1;</script></head><body></body></html>"
@@ -221,7 +221,7 @@ def test_summarize_cannot_check_page_frames_in_a_charset_it_does_not_read():
 
 
 def test_watcher_records_a_browser_without_script_hashes():
-    from pnakotic.src.scanner.card_watch import CardWatcher
+    from mandacaru.src.scanner.card_watch import CardWatcher
 
     w = CardWatcher()
     w._on_page_event(_source(), {"via": "append", "stack": STORE_STACK, "no_hash": 1})
@@ -240,7 +240,7 @@ def _source(main=True):
 
 
 def test_watcher_keeps_bounded_events_from_the_main_frame_only():
-    from pnakotic.src.scanner.card_watch import MAX_EVENTS, CardWatcher
+    from mandacaru.src.scanner.card_watch import MAX_EVENTS, CardWatcher
 
     w = CardWatcher()
     assert w.binding.startswith("__") and len(w.binding) == 18
@@ -262,7 +262,7 @@ def test_watcher_keeps_bounded_events_from_the_main_frame_only():
 
 
 def test_init_script_carries_its_values():
-    from pnakotic.src.scanner.card_watch import CARD_HTML_PATTERN, CARD_SELECTOR, _init_script
+    from mandacaru.src.scanner.card_watch import CARD_HTML_PATTERN, CARD_SELECTOR, _init_script
 
     script = _init_script("__abc")
     assert '"__abc"' in script and "__NAME__" not in script and "__SELECTOR__" not in script
@@ -277,7 +277,7 @@ async def test_card_selector_in_a_real_dom():
     """CARD_SELECTOR in Chromium (the hook's matches) and in Playwright's locator (the count)."""
     from playwright.async_api import async_playwright
 
-    from pnakotic.src.scanner.card_watch import CARD_HTML_PATTERN, CARD_SELECTOR
+    from mandacaru.src.scanner.card_watch import CARD_HTML_PATTERN, CARD_SELECTOR
 
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -295,7 +295,7 @@ async def test_card_selector_in_a_real_dom():
 
 
 def test_summarize_names_the_first_unknown_frame_even_past_the_10_kept_frames():
-    from pnakotic.src.scanner.card_watch import summarize
+    from mandacaru.src.scanner.card_watch import summarize
 
     store = "".join(f"    at https://shop.example/wp-content/plugins/p/{i}.js:1:1\n" for i in range(12))
     stack = "Error\n" + store + "    at https://evil.example/late.js:1:1\n"

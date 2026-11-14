@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
-from ..intelligence.scorer import PnakoticScorer
+from ..intelligence.scorer import MandacaruScorer
 from .behavior import LOCK_BEHAVIORS, behavior_events, evidence_of
 from .models import ScanResult
 from .profiles import PROFILES
@@ -226,7 +226,7 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
         rule = str(hit.get("rule") or "")
         snippet = _snippet(hit.get("context"))
         common = dict(
-            severity="compromised" if PnakoticScorer._yara_tier(hit) == "decisive" else "suspicious",
+            severity="compromised" if MandacaruScorer._yara_tier(hit) == "decisive" else "suspicious",
             kind="yara", message=hit.get("description") or MESSAGES["yara"], snippet=snippet,
             mechanism=YARA_MECHANISM, rule=rule, signature_id=hit.get("signature_id"),
         )
@@ -394,7 +394,7 @@ def _behaviour(c: _Collector, load: Load) -> None:
         "browser_lock": [e for e in events if e.get("id") in LOCK_BEHAVIORS],
     }
     for kind, subset in groups.items():
-        decisive = PnakoticScorer._decisive(subset)  # each subset can only meet its own rule
+        decisive = MandacaruScorer._decisive(subset)  # each subset can only meet its own rule
         if decisive:
             finding = c.add(load, (kind, load.page_url), severity="compromised", kind=kind, message=MESSAGES[kind],
                             snippet=None, origin=None, location=load.page_url, location_kind="page",

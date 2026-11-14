@@ -122,7 +122,7 @@ def brands_in(text: str):
     return found
 
 
-class PnakoticScorer:
+class MandacaruScorer:
     def __init__(self):
         self.SUSPICIOUS_TLDS = {
             "xyz", "top", "icu", "gq", "tk", "ml",

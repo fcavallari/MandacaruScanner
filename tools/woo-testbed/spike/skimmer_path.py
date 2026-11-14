@@ -35,7 +35,7 @@ async def guarded(browser, kind: str, path: str, pid: int) -> None:
     await page.goto(STORE + "/?add-to-cart={}".format(pid), wait_until="load")
     await page.goto(STORE + path, wait_until="load")
     await settle(page)
-    has_skimmer = await page.locator("script#pnakotic-test-skimmer").count()
+    has_skimmer = await page.locator("script#mandacaru-test-skimmer").count()
     await page.locator('input[autocomplete="cc-number"]').first.wait_for(state="visible", timeout=15000)
     if kind == "block":
         await fill_block(page, "spike-skimmer-{}@checkout-check.invalid".format(kind))
@@ -86,7 +86,7 @@ async def blur_only(browser, path: str, pid: int) -> None:
     await page.goto(STORE + "/?add-to-cart={}".format(pid), wait_until="load")
     await page.goto(STORE + path, wait_until="load")
     await settle(page)
-    has_skimmer = await page.locator("script#pnakotic-test-skimmer").count()
+    has_skimmer = await page.locator("script#mandacaru-test-skimmer").count()
     n0 = len(collector_lines())
     try:
         await page.locator('input[autocomplete="cc-number"]').first.wait_for(state="visible", timeout=15000)

@@ -15,14 +15,14 @@ def _rec(**kw):
 
 
 def test_obfuscator_markers():
-    from pnakotic.src.scanner.obfuscation import obfuscator_markers
+    from mandacaru.src.scanner.obfuscation import obfuscator_markers
     assert "string_array_rotation" in obfuscator_markers(OBF)
     assert obfuscator_markers(LOADER) == []
     assert obfuscator_markers("!function(e,t){'use strict';var n=[],r=Object.getPrototypeOf;}(window)") == []
 
 
 def test_obfuscator_markers_hex_density_and_alt_rotation():
-    from pnakotic.src.scanner.obfuscation import obfuscator_markers
+    from mandacaru.src.scanner.obfuscation import obfuscator_markers
     dense = " ".join("_0x%04x" % (0x1000 + i) for i in range(40))
     assert obfuscator_markers(dense) == ["hex_identifier_density"]
     sparse = dense + " " * 20000
@@ -37,7 +37,7 @@ def test_obfuscator_markers_hex_density_and_alt_rotation():
 
 
 def test_obfuscator_markers_caps_input_and_stays_fast():
-    from pnakotic.src.scanner.obfuscation import obfuscator_markers
+    from mandacaru.src.scanner.obfuscation import obfuscator_markers
     # the marker sits past the 200 000 character cap, so it is not seen
     assert obfuscator_markers("x" * 200000 + OBF) == []
     for hostile in ["function a" + " " * 190000, "function " * 22000, "function a(){var b" + " " * 190000,
@@ -48,7 +48,7 @@ def test_obfuscator_markers_caps_input_and_stays_fast():
 
 
 def test_find_injections_resolves_inline_block_by_position():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     rec = {"url": "https://content-website-analytics.com/script.js", "main_frame": True, "frame_url": "https://s.com/",
            "initiator": "script", "initiator_url": "https://s.com/", "line": 0, "column": 30}
     [inj] = find_injections([rec], "https://s.com/", LOADER.encode(), {})
@@ -60,7 +60,7 @@ def test_find_injections_resolves_inline_block_by_position():
 
 
 def test_find_injections_falls_back_to_block_containing_target_host():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     rec = {"url": "https://content-website-analytics.com/script.js", "main_frame": True, "frame_url": "https://s.com/",
            "initiator": "script", "initiator_url": "https://s.com/", "line": None, "column": None}
     [inj] = find_injections([rec], "https://s.com/", LOADER.encode(), {})
@@ -68,7 +68,7 @@ def test_find_injections_falls_back_to_block_containing_target_host():
 
 
 def test_find_injections_ignores_same_domain_and_parser_requests():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     recs = [{"url": "https://cdn.s.com/a.js", "initiator": "script", "initiator_url": "https://s.com/",
              "line": 0, "column": 0, "main_frame": True, "frame_url": "https://s.com/"},
             {"url": "https://x.com/a.js", "initiator": "parser", "initiator_url": "https://s.com/",
@@ -77,7 +77,7 @@ def test_find_injections_ignores_same_domain_and_parser_requests():
 
 
 def test_find_injections_without_served_html():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     rec = {"url": "https://x.com/a.js", "initiator": "script", "initiator_url": "https://s.com/404/",
            "line": 3, "column": 1, "main_frame": True, "frame_url": "https://s.com/404/"}
     [inj] = find_injections([rec], "https://s.com/404/", None, {})
@@ -85,7 +85,7 @@ def test_find_injections_without_served_html():
 
 
 def test_find_injections_inline_ignores_fragment_and_picks_block_by_line_and_column():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     html = ("<html>\n<script>var a=1;</script>\n<p>x</p>\n"
             "<script>/* é */ document.body.appendChild(s); load('https://evil.example/x.js')</script>\n</html>")
     data = html.encode()
@@ -101,7 +101,7 @@ def test_find_injections_inline_ignores_fragment_and_picks_block_by_line_and_col
 
 
 def test_find_injections_script_initiator_uses_file_body_for_markers_and_context():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     body = ("\n" * 5 + OBF).encode()
     rec = _rec(initiator_url="https://s.com/app.js", line=5, column=3)
     [inj] = find_injections([rec], "https://s.com/", LOADER.encode(), {"https://s.com/app.js": body})
@@ -114,7 +114,7 @@ def test_find_injections_script_initiator_uses_file_body_for_markers_and_context
 
 
 def test_find_injections_caps_at_50_and_skips_non_http_targets():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     recs = [_rec(url="https://h%d.example/a.js" % i) for i in range(80)]
     recs.insert(0, _rec(url="data:text/javascript,1"))
     out = find_injections(recs, "https://s.com/", LOADER.encode(), {})
@@ -122,7 +122,7 @@ def test_find_injections_caps_at_50_and_skips_non_http_targets():
 
 
 def test_find_injections_hostile_html_is_fast_and_capped():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     rec = _rec(url="https://x.example/a.js", line=0, column=5)
     for html in [b"<script" * 150000, b"<script>" * 150000, b"<script src=a></script>" * 40000,
                  b"<script " + b"a" * 400000, b"<script>x</script>" * 100000 + b"\n" * 1000]:
@@ -137,7 +137,7 @@ def test_find_injections_hostile_html_is_fast_and_capped():
 
 
 def test_find_injections_many_newlines_many_records_is_fast():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     html = b"\n" * 2000000 + b"<script>load('https://h0.example/a.js')</script>"
     recs = [_rec(url="https://h%d.example/a.js" % i, line=1999990, column=3) for i in range(60)]
     body = b"\n" * 2000000 + b"x"
@@ -153,7 +153,7 @@ def test_find_injections_many_newlines_many_records_is_fast():
 
 
 def test_find_injections_block_matching_is_case_insensitive():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     html = b"<P>x</P><SCRIPT type='text/javascript'>load('HTTPS://X.EXAMPLE/a.js')</SCRIPT >"
     [inj] = find_injections([_rec(url="https://x.example/a.js", line=0, column=0)], "https://s.com/", html, {})
     assert inj["block"] is not None
@@ -161,7 +161,7 @@ def test_find_injections_block_matching_is_case_insensitive():
 
 
 def test_record_from_event_maps_initiators():
-    from pnakotic.src.scanner.script_trace import record_from_event
+    from mandacaru.src.scanner.script_trace import record_from_event
     ev = {"type": "Script", "frameId": "F", "documentURL": "https://s.com/", "request": {"url": "https://x.com/a.js"},
           "initiator": {"type": "script", "stack": {"callFrames": [{"url": "https://s.com/", "lineNumber": 4, "columnNumber": 9}]}}}
     assert record_from_event(ev, "F") == {"url": "https://x.com/a.js", "main_frame": True, "frame_url": "https://s.com/",
@@ -170,7 +170,7 @@ def test_record_from_event_maps_initiators():
 
 
 def test_record_from_event_parser_other_parent_and_truncation():
-    from pnakotic.src.scanner.script_trace import record_from_event
+    from mandacaru.src.scanner.script_trace import record_from_event
     base = {"type": "Script", "frameId": "G", "documentURL": "https://s.com/p", "request": {"url": "https://x.com/" + "a" * 400}}
     parser = record_from_event({**base, "initiator": {"type": "parser", "url": "https://s.com/p", "lineNumber": 7}}, "F")
     assert parser["initiator"] == "parser" and parser["initiator_url"] == "https://s.com/p"
@@ -188,7 +188,7 @@ def test_record_from_event_parser_other_parent_and_truncation():
 
 
 def test_record_from_event_skips_redirect_hops():
-    from pnakotic.src.scanner.script_trace import record_from_event
+    from mandacaru.src.scanner.script_trace import record_from_event
     ev = {"type": "Script", "frameId": "F", "documentURL": "https://s.com/", "request": {"url": "https://x.com/b.js"},
           "initiator": {"type": "parser", "url": "https://s.com/", "lineNumber": 1},
           "redirectResponse": {"url": "https://x.com/a.js", "status": 302}}
@@ -210,7 +210,7 @@ class _FakeCDP:
 
 
 def test_script_tracer_collects_script_requests_and_caps_at_200():
-    from pnakotic.src.scanner.script_trace import ScriptTracer
+    from mandacaru.src.scanner.script_trace import ScriptTracer
     cdp = _FakeCDP()
     tracer = ScriptTracer()
     assert tracer.records == []
@@ -229,7 +229,7 @@ def test_script_tracer_collects_script_requests_and_caps_at_200():
 
 
 def test_find_injections_reports_markers_of_the_requested_script_body():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     # A plain loader fetching obfuscator.io output: the loader has no markers, the body does.
     rec = _rec(line=None, column=None)
     [inj] = find_injections([rec], "https://s.com/", LOADER.encode(), {rec["url"]: OBF.encode()})
@@ -240,7 +240,7 @@ def test_find_injections_reports_markers_of_the_requested_script_body():
 
 
 def test_find_injections_one_line_document_with_a_runtime_built_url_still_sees_the_body():
-    from pnakotic.src.scanner.script_trace import find_injections
+    from mandacaru.src.scanner.script_trace import find_injections
     # The abacashi.com shape: a one-line document, an inline initiator at line 0, and a target
     # URL assembled at runtime (String.fromCharCode), so neither the URL nor its host is in
     # the served HTML. The block can't be found, but the loaded script can still be judged.
@@ -254,7 +254,7 @@ def test_find_injections_one_line_document_with_a_runtime_built_url_still_sees_t
 
 
 def test_blocked_script_reason_recognises_cloudflares_malware_interstitial():
-    from pnakotic.src.scanner.script_trace import blocked_script_reason
+    from mandacaru.src.scanner.script_trace import blocked_script_reason
     page = (b"<!DOCTYPE html><html><head><title>Suspected Malware | Cloudflare</title></head><body>"
             b"<h1>Warning</h1><h2>Suspected Malware</h2><p>This website has been reported for potentially "
             b"distributing malware.</p></body></html>")
@@ -268,7 +268,7 @@ def test_blocked_script_reason_recognises_cloudflares_malware_interstitial():
 
 def test_record_passes_over_frames_of_the_harness_scripts():
     """Our card hooks wrap appendChild / insertBefore, so a loader's call has our frame on top."""
-    from pnakotic.src.scanner.script_trace import record_from_event
+    from mandacaru.src.scanner.script_trace import record_from_event
 
     event = {"type": "Script", "request": {"url": "https://evil.example/x.js"}, "frameId": "F",
              "initiator": {"type": "script", "stack": {"callFrames": [

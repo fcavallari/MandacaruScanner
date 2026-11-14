@@ -31,7 +31,7 @@ BROWSER_CHANNEL=chromium docker compose up --build
 The API and worker containers run as a non-root user (uid 1001). If you have an `artifacts_data` volume created by an earlier root-based image, give it to that user once before starting:
 
 ```bash
-docker run --rm -v pnakotic_artifacts_data:/a alpine chown -R 1001:1001 /a
+docker run --rm -v mandacaru_artifacts_data:/a alpine chown -R 1001:1001 /a
 ```
 
 Start a scan from the dashboard, or with curl:
@@ -45,6 +45,70 @@ or check a whole site:
 ```bash
 curl -s -X POST localhost:8000/site-scan -H 'content-type: application/json' -d '{"site": "example.com"}'
 ```
+
+### Upgrading a stack from before the package rename
+
+Until the package rename, the stack ran as Compose project `pnakotic`: volumes `pnakotic_postgres_data`, `pnakotic_redis_data` and `pnakotic_artifacts_data`, Postgres role `pnakotic_admin` and database `pnakotic_memory`, and Celery tasks `pnakotic.scan` and `pnakotic.site_scan`. `docker-compose.yml` now pins the project name to `mandacaru`. After the rename, `docker compose up` starts on new, empty volumes and leaves the old ones untouched. Changing `POSTGRES_USER` / `POSTGRES_DB` has no effect on a data directory that already exists, so the old volume can't simply be renamed. Move the data over once, in this order. Every old-stack command names the project with `-p pnakotic`, so they work whichever version of the code is checked out.
+
+1. Stop new jobs and let the queues drain. The new workers only know `mandacaru.*` task names and start with an empty Redis volume, so any message still queued under `pnakotic.*` would be dropped. Repeat the count until it is 0:
+
+   ```bash
+   docker compose -p pnakotic stop api frontend
+   ```
+
+   ```bash
+   docker compose -p pnakotic exec db psql -U pnakotic_admin -d pnakotic_memory -c "select count(*) from scan_jobs where status in ('queued', 'running')"
+   ```
+
+   If you skip this step, nothing hangs. The API's sweeper marks a job still `queued` as failed after `QUEUED_JOB_TIMEOUT_MINUTES` (60 by default).
+
+2. Dump the database, then take the old stack down. Leave out `-v`, so the old volumes stay as a fallback:
+
+   ```bash
+   docker compose -p pnakotic exec -T db pg_dump -U pnakotic_admin -d pnakotic_memory -Fc --no-owner --no-privileges > mandacaru-db.dump
+   ```
+
+   ```bash
+   docker compose -p pnakotic down
+   ```
+
+3. Rename the checkout folder to `mandacaru` (see [Development](#development)) and update to the renamed code. From inside the folder, create the new project's containers and volumes without starting them:
+
+   ```bash
+   docker compose up --build --no-start
+   ```
+
+4. Copy the artifacts. The new image runs as the same uid (1001), so ownership carries over:
+
+   ```bash
+   docker run --rm -v pnakotic_artifacts_data:/from:ro -v mandacaru_artifacts_data:/to alpine cp -a /from/. /to/
+   ```
+
+5. Start only the database and restore into it. Do the restore before the API starts: on startup the API runs Alembic and `create_all`, and a restore into existing tables fails.
+
+   ```bash
+   docker compose up -d --wait db
+   ```
+
+   ```bash
+   docker compose exec -T db pg_restore -U mandacaru_admin -d mandacaru_memory --no-owner --no-privileges < mandacaru-db.dump
+   ```
+
+6. Start the rest. Once old reports and screenshots open in the dashboard, remove the old volumes and images:
+
+   ```bash
+   docker compose up -d
+   ```
+
+   ```bash
+   docker volume rm pnakotic_postgres_data pnakotic_redis_data pnakotic_artifacts_data
+   ```
+
+   ```bash
+   docker image rm pnakotic-api pnakotic-worker pnakotic-site-worker pnakotic-frontend
+   ```
+
+Redis is not copied: once the queues are drained, it holds only Celery result entries that are no longer needed.
 
 ## How a scan works
 
@@ -130,7 +194,7 @@ Every page is loaded in a real browser, in a fresh context (no cookies or storag
 
 ### How a site survey works
 
-1. `POST /site-scan` normalises the input to `https://<host>[:port]/` (any path, query and fragment are dropped), rejects a non-public host, creates a job of kind `site` in `queued`, and puts it on the `site` queue. One Celery task (`pnakotic.site_scan`) does the whole check with one browser and one egress proxy, under the same SSRF guard as the URL probe.
+1. `POST /site-scan` normalises the input to `https://<host>[:port]/` (any path, query and fragment are dropped), rejects a non-public host, creates a job of kind `site` in `queued`, and puts it on the `site` queue. One Celery task (`mandacaru.site_scan`) does the whole check with one browser and one egress proxy, under the same SSRF guard as the URL probe.
 2. **Homepage.** The homepage is loaded in four profiles at once: `default`, `mobile-ios`, `googlebot` and `search-clicker`. If the `default` load fails with a network-level error (`net::ERR_…`) over https, all four are redone once over http and the report notes "Checked over http".
 3. **The site is one host.** It is the host that was entered. If the `default` homepage load is redirected to another host on the same registrable domain (`www.example.com` → `example.com`), that host becomes the site and the report says so. Domains are compared with the public suffix list bundled with `tldextract` (never fetched at run time), so `a.github.io` and `b.github.io` are different sites. If the homepage lands on a different domain instead, that is a Suspicious finding on `/` ("Your homepage sends desktop visitors to …"), and the site stays the entered host.
 4. **Pages.** Up to 5 internal pages are picked from the rendered links of the first homepage load that stayed on the site (`default`, then `mobile-ios`, `googlebot`, `search-clicker`). Only links on the site host (or its www/apex twin) that pass the egress check are kept. `wp-admin`, `wp-login.php`, `xmlrpc.php`, `wp-json`, feeds, logout and add-to-cart style URLs, `?replytocom=` and non-page files (images, PDF, archives, media, `.xml`, `.txt`, …) are dropped. One slot goes to each kind the site has, in this order: a post (a `/YYYY/MM/` path, `?p=N`, or the deepest path), a page (`/about/`), an archive (`/category/`, `/tag/`, `/author/`, `/page/2/`) and a contact page; the rest are filled in document order, preferring a first path segment not used yet. A homepage that left the site is never crawled: if no homepage load stayed on the site, only the 404 probe runs and the report says why.
@@ -190,7 +254,7 @@ A bot-check page is the CDN's, not the site's, so its content is never scanned a
 
 ### Site-mode scoring
 
-The same `PnakoticScorer.score()` is used, with its weights unchanged. When a load lands on the owner's own site (the site host or its www twin), these identity signals are skipped, because they describe an unknown landing site, not a site the owner already runs:
+The same `MandacaruScorer.score()` is used, with its weights unchanged. When a load lands on the owner's own site (the site host or its www twin), these identity signals are skipped, because they describe an unknown landing site, not a site the owner already runs:
 
 | Skipped for an on-site landing | Why |
 |--------------------------------|-----|
@@ -245,7 +309,7 @@ The site survey is for internal use. It has no rate limit and no per-site cap. T
 
 | Variable | Default | Used by |
 |----------|---------|---------|
-| `DATABASE_URL` | `postgresql+psycopg2://pnakotic_admin:…@db:5432/pnakotic_memory` | API, worker, Alembic |
+| `DATABASE_URL` | `postgresql+psycopg2://mandacaru_admin:…@db:5432/mandacaru_memory` | API, worker, Alembic |
 | `REDIS_URL` | `redis://localhost:6379/0` | API, worker |
 | `ARTIFACTS_DIR` | `./artifacts` | API, worker (must be shared between them) |
 | `CORS_ORIGINS` | `*` | API (comma-separated list) |
@@ -270,10 +334,10 @@ For a rules tree split by target (`html/`, `raw/`, `php/`, …) the worker uses 
 
 ## Development
 
-The Python code is imported as the package `pnakotic.src…`, so this folder must be named `pnakotic`. Run the API and worker from its **parent** folder:
+The Python code is imported as the package `mandacaru.src…`, so this folder must be named `mandacaru`. A checkout made before the package rename is still called `pnakotic`; rename it once (`mv pnakotic mandacaru` from the parent folder) and update anything outside the repository that points into it, such as the parent folder's `.claude/launch.json` (`npm --prefix mandacaru/frontend`). Run the API and worker from its **parent** folder:
 
 ```bash
-pip install -r pnakotic/requirements-dev.txt
+pip install -r mandacaru/requirements-dev.txt
 ```
 
 ```bash
@@ -281,11 +345,11 @@ playwright install chromium
 ```
 
 ```bash
-uvicorn pnakotic.src.api.main:app --reload
+uvicorn mandacaru.src.api.main:app --reload
 ```
 
 ```bash
-celery -A pnakotic.src.workers.celery_app worker -Q celery,site --loglevel=info
+celery -A mandacaru.src.workers.celery_app worker -Q celery,site --loglevel=info
 ```
 
 `-Q celery,site` makes this one worker take both URL probes (the default queue, `celery`) and site surveys (routed to `site`). Without `site` in `-Q`, a site survey stays queued. To mirror Docker instead, run one worker with `-Q celery` and a second with `-Q site --concurrency 1`.
@@ -295,7 +359,7 @@ Both need PostgreSQL and Redis. `docker-compose.yml` doesn't publish their ports
 Apply migrations with:
 
 ```bash
-alembic -c pnakotic/alembic.ini upgrade head
+alembic -c mandacaru/alembic.ini upgrade head
 ```
 
 The dashboard lives in `frontend/`:
