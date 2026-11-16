@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
-from ..intelligence.scorer import PnakoticScorer
+from ..intelligence.scorer import MandacaruScorer
 from .behavior import LOCK_BEHAVIORS, behavior_events, evidence_of
 from .models import ScanResult
 from .profiles import PROFILES
@@ -29,6 +29,7 @@ MAX_PAGES = 20         # pages listed per finding; the rest are counted in pages
 MAX_URLS = 20          # URLs in loaded_by / loaded; the rest in loaded_by_more / loaded_more
 MAX_DETAIL_ITEMS = 20  # screenshots and scoring strings kept in a finding's details
 MAX_DETAIL_TEXT = 300  # characters kept from a scoring string
+MAX_CARD_FRAMES = 10   # frame URLs kept in a card_inputs finding's details (card_watch keeps 10 too)
 
 SUSPICIOUS_SCORE = 0.4
 
@@ -42,6 +43,8 @@ MESSAGES: Dict[str, str] = {
     "injection": "Hidden code loads a script from another website into your page",
     "injection_obfuscated": "Code on this page loads an obfuscated script from another website",
     "flagged_script": "A script this page loads is blocked by {vendor} as suspected malware",
+    "runtime_obfuscated": "Code on this page builds and runs hidden, scrambled code",
+    "card_inputs": "Code from outside your site adds card payment fields to this page",
     "page_score": "This page does things malicious pages do",
 }
 MOVED_SITE = "If you moved your site, check the new domain"
@@ -82,6 +85,8 @@ class _Finding:
         self.signature_id = signature_id
         self.initiator = initiator
         self.offsite = offsite  # code on the page a visitor was sent to on another site
+        self.frames: Optional[List[str]] = None  # card_inputs: the inserting call's frame URLs
+        self.first_unknown = ""  # card_inputs: the first unknown frame's URL among them
         self.visitors: List[str] = []
         self.pages: List[str] = []
         self.loaded_by: List[str] = []
@@ -118,6 +123,7 @@ class _Finding:
                 "scoring": self.scoring[:MAX_DETAIL_ITEMS],
                 "initiator": self.initiator,
                 "offsite": self.offsite,
+                **({"frames": self.frames, "first_unknown": self.first_unknown} if self.frames is not None else {}),
             },
         }
 
@@ -220,7 +226,7 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
         rule = str(hit.get("rule") or "")
         snippet = _snippet(hit.get("context"))
         common = dict(
-            severity="compromised" if PnakoticScorer._yara_tier(hit) == "decisive" else "suspicious",
+            severity="compromised" if MandacaruScorer._yara_tier(hit) == "decisive" else "suspicious",
             kind="yara", message=hit.get("description") or MESSAGES["yara"], snippet=snippet,
             mechanism=YARA_MECHANISM, rule=rule, signature_id=hit.get("signature_id"),
         )
@@ -235,6 +241,10 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
                 text = snippet.get("text", "") if snippet else ""
                 c.add(load, ("yara", rule, text, "offsite", landing), origin=None, location=landing,
                       location_kind="page", offsite=True, **common)
+            elif source == "eval":  # code that page built at runtime
+                text = snippet.get("text", "") if snippet else ""
+                c.add(load, ("yara", rule, text, "offsite", landing, "runtime"), origin=None, location=landing,
+                      location_kind="page", offsite=True, **common)
             continue
         if source == "script":
             url = _url(hit.get("url"))
@@ -248,6 +258,15 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
                 if inj.get("initiator_kind") == "script" and _url(inj.get("initiator_url")) == url:
                     tied.add(i)  # this script injected another one
                     _append(finding.loaded, _url(inj["requested_url"]))
+        elif source == "eval":
+            # Code the page built and ran (eval, new Function, an inserted script). The finding is the page's.
+            # The hit's url is the code that built it, as that code names itself (a //# sourceURL can forge
+            # it), so it is only ever shown as that, never as where the finding lives.
+            caller = _url(hit.get("url"))
+            text = snippet.get("text", "") if snippet else ""
+            builder = None if caller in (load.page_url, landing) else caller
+            c.add(load, ("yara", rule, text, "runtime"), origin="runtime", location=load.page_url,
+                  location_kind="page", initiator=builder, **common)
         elif source in _HTML_ORIGINS:
             if source == "page" and rule in served_rules:
                 continue  # already reported from the HTML the server sent
@@ -314,6 +333,59 @@ def _yara_and_injections(c: _Collector, load: Load, site_host: str) -> None:
         _append(finding.loaded, requested)
 
 
+def _runtime_code(c: _Collector, load: Load, site_host: str) -> None:
+    """Code the page built and ran that carries obfuscator markers and that no rule matched (the
+    ones a rule matched are reported from the YARA hit). The finding is at the page; the caller is
+    only what the building code calls itself, shown as the code that built it. Stages too long to
+    read, and the counts of stages left out, are not findings."""
+    if ended_off_site(load.result, site_host):
+        return  # another site's runtime code is not the owner's page code
+    for stage in load.result.metadata.get("eval_stages") or []:
+        if (not isinstance(stage, dict) or stage.get("oversized") or stage.get("yara_matched")
+                or not stage.get("markers")):
+            continue
+        snippet = _snippet(stage.get("context"))
+        caller = _url(stage.get("caller"))
+        c.add(load, ("runtime", caller, snippet.get("text", "") if snippet else ""), severity="suspicious",
+              kind="runtime_code", message=MESSAGES["runtime_obfuscated"], snippet=snippet, origin="runtime",
+              location=load.page_url, location_kind="page", mechanism="runtime_code", initiator=caller or None)
+
+
+def card_insertions(result: ScanResult) -> List[dict]:
+    """``metadata["card_inputs"]["inserted"]`` entries that are dicts (page-supplied: the rest is
+    checked where it is read)."""
+    cards = result.metadata.get("card_inputs")
+    inserted = cards.get("inserted") if isinstance(cards, dict) else None
+    return [e for e in inserted if isinstance(e, dict)] if isinstance(inserted, list) else []
+
+
+def _card_inputs(c: _Collector, load: Load, site_host: str) -> None:
+    """Card inputs that unknown code put into the page (card_watch.summarize): one finding per
+    page (key ``("card_inputs", page)``), so every visitor that saw it merges into it. Its
+    ``details.frames`` and ``details.first_unknown`` come from the first verified-unknown
+    insertion that names its first unknown frame, else from the first verified-unknown one; a
+    later load can only replace an unnamed one. An insertion is outside code only when it is
+    ``verified``: one that is unknown solely through what the load couldn't check is the
+    scanner's failure and is noted on the page instead (site_report). A missing flag counts as
+    verified. The store's, a payment provider's and known vendors' insertions are not findings
+    either; the page's details list them."""
+    if ended_off_site(load.result, site_host):
+        return  # another site's checkout is not the owner's page
+    outside = [e for e in card_insertions(load.result)
+               if e.get("owner") == "unknown" and e.get("verified") is not False]
+    if not outside:
+        return
+    event = next((e for e in outside if _url(e.get("first_unknown"))), outside[0])
+    frames = event.get("frames")
+    frames = [_url(f) for f in frames if isinstance(f, str)][:MAX_CARD_FRAMES] if isinstance(frames, list) else []
+    first = _url(event.get("first_unknown"))
+    finding = c.add(load, ("card_inputs", load.page_url), severity="suspicious", kind="card_inputs",
+                    message=MESSAGES["card_inputs"], snippet=None, origin="rendered", location=load.page_url,
+                    location_kind="page", mechanism="card_inputs")
+    if finding.frames is None or (not finding.first_unknown and first):
+        finding.frames, finding.first_unknown = frames, first
+
+
 def _behaviour(c: _Collector, load: Load) -> None:
     events = behavior_events(load.result.hops)
     groups = {
@@ -322,7 +394,7 @@ def _behaviour(c: _Collector, load: Load) -> None:
         "browser_lock": [e for e in events if e.get("id") in LOCK_BEHAVIORS],
     }
     for kind, subset in groups.items():
-        decisive = PnakoticScorer._decisive(subset)  # each subset can only meet its own rule
+        decisive = MandacaruScorer._decisive(subset)  # each subset can only meet its own rule
         if decisive:
             finding = c.add(load, (kind, load.page_url), severity="compromised", kind=kind, message=MESSAGES[kind],
                             snippet=None, origin=None, location=load.page_url, location_kind="page",
@@ -466,6 +538,8 @@ def build_blocks_and_overflow(loads: List[Load], site_host: str,
     c = _Collector()
     for load in usable:
         _yara_and_injections(c, load, site_host)
+        _runtime_code(c, load, site_host)
+        _card_inputs(c, load, site_host)
         _behaviour(c, load)
         _cloaking(c, load, site_host, landed[load.page_url], bool(offsite_domain))
     if offsite_domain:

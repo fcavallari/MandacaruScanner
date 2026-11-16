@@ -17,14 +17,14 @@ import { profileLabel } from '../lib/format';
 
 /**
  * The site survey report, layout A (spec §6): grouped by where the code lives.
- * The reader is a worried site owner, so the body is plain language — no ritual words.
+ * The reader is a worried site owner, so the body is plain language, no jargon.
  * Everything in a finding is page-supplied text: it is rendered as text nodes only.
  */
 
 /* ---------- verdict tone (shared with the list and the header) ---------- */
 
 const PILL: Record<'negative' | 'warning' | 'neutral' | 'positive', React.CSSProperties> = {
-  negative: { background: 'var(--pill-negative-bg)', color: 'var(--negative)' },
+  negative: { background: 'var(--negative-fill)', color: 'var(--text)' },
   warning: { background: 'var(--pill-warning-bg)', color: 'var(--warning)' },
   neutral: { background: 'var(--pill-neutral-bg)', color: 'var(--pill-neutral-ink)' },
   positive: { background: 'var(--pill-positive-bg)', color: 'var(--positive)' },
@@ -60,10 +60,13 @@ const ORIGINS: Record<string, string> = {
   rendered: 'Added by a script while the page loaded',
   frame: 'Inside a frame embedded in the page',
   script: 'In this script file',
+  runtime: 'Built and run by code on this page while it loaded',
 };
 
-/** The 404 probe (/pnakotic-<hex>/) is shown by what it is, with its URL under it. */
+/** The 404 probe (/mandacaru-<hex>/; reports from before the rename carry /pnakotic-) is shown by what it is, with its URL under it. */
 const PROBE_LABEL = "Your 'page not found' page";
+/** A WooCommerce store's checkout page, shown the same way. */
+const CHECKOUT_LABEL = 'Your checkout page';
 
 function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? '' : 's'}`;
@@ -130,7 +133,34 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-function FindingDetails({ taskId, finding }: { taskId: string; finding: SiteFinding }) {
+function hostOf(u: string): string | null {
+  try {
+    return new URL(u).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** card_inputs: the first outside code on the inserting call's stack, named on its own line, since
+ *  it can sit past the 10 frames kept for "Added by code". An unknown frame on the page's own host is
+ *  always at the address the page landed on (any other file there is the store's), so it is code the
+ *  server didn't send (a script or handler added while the page ran), not another site's file. */
+function OutsideCode({ url, page }: { url: string; page: string }) {
+  if (!url) {
+    return <span className="text-[12px] text-ink">Code with no file of its own (built or added while the page ran)</span>;
+  }
+  const host = hostOf(url);
+  if (host != null && host === hostOf(page)) {
+    return (
+      <span className="text-[12px] text-ink">
+        Code on this page's own address that your server didn't send (added while the page ran)
+      </span>
+    );
+  }
+  return <span className="font-mono text-[12px] text-ink break-all">{url}</span>;
+}
+
+function FindingDetails({ taskId, finding, block }: { taskId: string; finding: SiteFinding; block: SiteBlock }) {
   const d = finding.details;
   const profiles = d?.profiles ?? [];
   const screenshots = d?.screenshots ?? [];
@@ -159,9 +189,43 @@ function FindingDetails({ taskId, finding }: { taskId: string; finding: SiteFind
             <span className="font-mono text-[12px] text-ink">{profiles.join(', ')}</span>
           </DetailRow>
         ) : null}
-        {d?.initiator ? (
+        {finding.origin === 'runtime' ? (
+          // The builder's URL is what the page's own code calls itself, so it is named as the code that built
+          // this, never as where the finding is: the finding is on the page.
+          <DetailRow label="Built by">
+            {d?.initiator ? (
+              <span className="font-mono text-[12px] text-muted break-all">{d.initiator}</span>
+            ) : (
+              <span className="text-[12px] text-muted break-all">
+                Built at runtime on <span className="font-mono">{block.location}</span>
+              </span>
+            )}
+          </DetailRow>
+        ) : d?.initiator ? (
           <DetailRow label="Added by">
             <span className="font-mono text-[12px] text-muted break-all">{d.initiator}</span>
+          </DetailRow>
+        ) : null}
+        {finding.kind === 'card_inputs' ? (
+          <DetailRow label="Outside code">
+            <OutsideCode url={d?.first_unknown ?? ''} page={block.location} />
+          </DetailRow>
+        ) : null}
+        {(d?.frames ?? []).length > 0 ? (
+          <DetailRow label="Added by code">
+            <ul className="m-0 p-0 list-none space-y-0.5">
+              {(d?.frames ?? []).map((u, i) =>
+                u ? (
+                  <li key={i} className="font-mono text-[12px] text-muted break-all">
+                    {u}
+                  </li>
+                ) : (
+                  <li key={i} className="text-[12px] text-muted">
+                    Code with no file (built at runtime or hidden)
+                  </li>
+                ),
+              )}
+            </ul>
           </DetailRow>
         ) : null}
         {finding.loaded_by.length > 0 || finding.loaded_by_more > 0 ? (
@@ -240,7 +304,7 @@ function FindingView({ taskId, finding, block }: { taskId: string; finding: Site
           <UrlList urls={pages} more={finding.pages_more} noun="page" />
         </div>
       ) : null}
-      <FindingDetails taskId={taskId} finding={finding} />
+      <FindingDetails taskId={taskId} finding={finding} block={block} />
     </li>
   );
 }
@@ -351,7 +415,7 @@ function LoadLine({ taskId, load }: { taskId: string; load: SiteLoad }) {
       <span className={`${tone} min-w-0`}>{words}</span>
       {load.status != null ? <span className="font-mono num text-[12px] text-faint">{load.status}</span> : null}
       {load.screenshot ? (
-        <a href={artifactUrl(taskId, load.screenshot)} target="_blank" rel="noreferrer" className="text-[12px] text-muted hover:text-accent transition-colors ml-auto flex-none">
+        <a href={artifactUrl(taskId, load.screenshot)} target="_blank" rel="noreferrer" className="text-[12px] text-muted hover:text-accent-ink transition-colors ml-auto flex-none">
           Screenshot
         </a>
       ) : null}
@@ -359,10 +423,57 @@ function LoadLine({ taskId, load }: { taskId: string; load: SiteLoad }) {
   );
 }
 
-function PageView({ taskId, page }: { taskId: string; page: SiteCheckedPage }) {
+/** What the survey saw of the page's own card payment fields (never a finding). A page where
+ *  outside code added card fields (a card_inputs finding) doesn't say it has its own. */
+function CardFieldsNote({ page, skimmed }: { page: SiteCheckedPage; skimmed: boolean }) {
+  const vendors = page.card_fields_vendors ?? [];
+  if (!page.card_fields && !page.card_fields_unchecked) return null;
+  return (
+    <div className="mt-1 text-[13px] text-muted space-y-0.5">
+      {page.card_fields && !page.card_fields_unchecked && !skimmed ? <p className="m-0">This page has its own card payment fields</p> : null}
+      {vendors.length > 0 ? <p className="m-0">Some were added by {vendors.join(', ')}</p> : null}
+      {page.card_fields_unchecked ? (
+        <p className="m-0 text-warning">We couldn't check who added this page's card fields</p>
+      ) : null}
+    </div>
+  );
+}
+
+/** The checkout page, worded by where its load landed: a store's checkout sends visitors to the cart
+ *  while the cart is empty, and a store whose checkout isn't at /checkout/ answers with a 404. */
+function CheckoutHeading({ page }: { page: SiteCheckedPage }) {
+  if (page.checkout_state === 'not_found') {
+    return (
+      <p className="text-[13px] text-warning m-0 mb-1 break-words">
+        We couldn't find your checkout page (<span className="font-mono text-[12px] break-all">{page.url}</span> answered{' '}
+        <span className="font-mono num text-[12px]">{page.checkout_status ?? 'an error'}</span>)
+      </p>
+    );
+  }
+  const landing = page.checkout_state === 'redirected' ? page.checkout_landing : null;
+  const landingChecked = landing != null && page.loads.some((l) => l.landing === landing && l.state === 'checked');
+  return (
+    <div className="mb-1">
+      <p className="text-[13px] text-ink m-0 break-words">
+        {CHECKOUT_LABEL}
+        {landing != null ? (
+          <>
+            : with an empty cart it sends visitors to <span className="font-mono text-[12px] break-all">{landing}</span>
+            {landingChecked ? ', which was checked' : null}
+          </>
+        ) : null}
+      </p>
+      <p className="font-mono text-[12px] text-faint m-0 break-all">{page.url}</p>
+    </div>
+  );
+}
+
+function PageView({ taskId, page, skimmed }: { taskId: string; page: SiteCheckedPage; skimmed: boolean }) {
   return (
     <li className="px-4 py-2.5 border-b border-rule last:border-b-0">
-      {page.probe ? (
+      {page.checkout && !page.probe ? (
+        <CheckoutHeading page={page} />
+      ) : page.probe ? (
         <div className="mb-1">
           <p className="text-[13px] text-ink m-0">{PROBE_LABEL}</p>
           <p className="font-mono text-[12px] text-faint m-0 break-all">{page.url}</p>
@@ -378,6 +489,7 @@ function PageView({ taskId, page }: { taskId: string; page: SiteCheckedPage }) {
           <LoadLine key={l.profile} taskId={taskId} load={l} />
         ))}
       </ul>
+      <CardFieldsNote page={page} skimmed={skimmed} />
     </li>
   );
 }
@@ -391,12 +503,31 @@ function pagesWithFindings(blocks: SiteBlock[]): Set<string> {
   return out;
 }
 
+/** Pages with a card_inputs finding: outside code added card fields there. */
+function pagesWithCardFindings(blocks: SiteBlock[]): Set<string> {
+  const out = new Set<string>();
+  for (const b of blocks) {
+    for (const f of b.findings) {
+      if (f.kind !== 'card_inputs') continue;
+      if (b.location_kind === 'page') out.add(b.location);
+      for (const p of f.pages ?? []) out.add(p);
+    }
+  }
+  return out;
+}
+
 function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReportData }) {
   const checked = report.checked;
   const pages = checked?.pages ?? [];
   const flagged = pagesWithFindings(report.blocks ?? []);
+  const skimmed = pagesWithCardFindings(report.blocks ?? []);
   // Clean pages fold into "N other pages clean"; the homepage always stays as the anchor.
-  const isClean = (p: SiteCheckedPage) => !flagged.has(p.url) && p.loads.every((l) => l.state === 'checked');
+  // A page whose card fields couldn't be checked stays in view: unchecked must not read as clean.
+  // So does a checkout that sent visitors elsewhere or wasn't found: the checkout itself wasn't checked.
+  const checkoutElsewhere = (p: SiteCheckedPage) =>
+    !!p.checkout && (p.checkout_state === 'redirected' || p.checkout_state === 'not_found');
+  const isClean = (p: SiteCheckedPage) =>
+    !flagged.has(p.url) && !p.card_fields_unchecked && !checkoutElsewhere(p) && p.loads.every((l) => l.state === 'checked');
   const shown = pages.filter((p) => p.index === 0 || !isClean(p));
   const folded = pages.filter((p) => p.index !== 0 && isClean(p));
   const blocked = report.blocked_hosts ?? [];
@@ -407,7 +538,7 @@ function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReport
       <div className="border border-line rounded-card overflow-hidden">
         <ul className="m-0 p-0 list-none">
           {shown.map((p) => (
-            <PageView key={p.index} taskId={taskId} page={p} />
+            <PageView key={p.index} taskId={taskId} page={p} skimmed={skimmed.has(p.url)} />
           ))}
         </ul>
         {folded.length > 0 ? (
@@ -417,7 +548,7 @@ function WhatWasChecked({ taskId, report }: { taskId: string; report: SiteReport
             </summary>
             <ul className="m-0 p-0 list-none border-t border-rule">
               {folded.map((p) => (
-                <PageView key={p.index} taskId={taskId} page={p} />
+                <PageView key={p.index} taskId={taskId} page={p} skimmed={skimmed.has(p.url)} />
               ))}
             </ul>
           </details>
@@ -537,9 +668,9 @@ export default function SiteReport({ taskId, result }: { taskId: string; result:
             href={result.cleanup_url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1.5 mt-3 text-[14px] font-medium text-accent hover:text-accent/85 border-b border-accent/40 hover:border-accent transition-colors"
+            className="inline-flex items-center gap-1.5 mt-3 text-[14px] font-medium text-accent-ink hover:text-ink border-b border-accent/40 hover:border-accent transition-colors"
           >
-            {v.verdict === 'compromised' ? 'Clean it up with Elderward' : 'If you think this is a hack, Elderward can check and clean it'}
+            {v.verdict === 'compromised' ? 'Clean it up with Facheiro' : 'If you think this is a hack, Facheiro can check and clean it'}
             <span aria-hidden="true">→</span>
           </a>
         ) : null}

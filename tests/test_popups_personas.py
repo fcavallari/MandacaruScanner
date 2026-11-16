@@ -23,7 +23,7 @@ requires_browser = pytest.mark.skipif(
 # ---------- offline: personas and scoring ----------
 
 def test_user_agent_follows_the_real_browser():
-    from pnakotic.src.scanner.profiles import PROFILES, FALLBACK_CHROME_MAJOR
+    from mandacaru.src.scanner.profiles import PROFILES, FALLBACK_CHROME_MAJOR
 
     assert "Chrome/145.0.0.0 " in PROFILES["default"].user_agent_for("145.0.7632.6")
     assert "Chrome/145.0.0.0 " in PROFILES["googlebot"].user_agent_for("145.0.7632.6")
@@ -34,7 +34,7 @@ def test_user_agent_follows_the_real_browser():
 
 
 def test_facebook_persona_looks_like_the_in_app_browser():
-    from pnakotic.src.scanner.profiles import PROFILES
+    from mandacaru.src.scanner.profiles import PROFILES
 
     fb = PROFILES["facebook-android"]
     assert "FB_IAB/FB4A" in fb.user_agent and "; wv)" in fb.user_agent
@@ -43,18 +43,18 @@ def test_facebook_persona_looks_like_the_in_app_browser():
 
 
 def _hop(mechanism, url, to, trigger="load"):
-    from pnakotic.src.scanner.models import RedirectHop
+    from mandacaru.src.scanner.models import RedirectHop
 
     return RedirectHop(url=url, mechanism=mechanism,
                        evidence=json.dumps({"id": mechanism, "to": to, "trigger": trigger}))
 
 
 def _score(hops, final_url="https://blog.example.com/"):
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import ScanResult
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import ScanResult
 
     result = ScanResult(target_url=final_url, final_url=final_url, hops=hops)
-    PnakoticScorer().score(result)
+    MandacaruScorer().score(result)
     return result
 
 
@@ -77,7 +77,7 @@ def test_relative_popup_is_same_site():
 
 
 def test_click_hijack_scores_and_is_not_a_redirect():
-    from pnakotic.src.scanner.models import REDIRECT_MECHANISMS
+    from mandacaru.src.scanner.models import REDIRECT_MECHANISMS
 
     assert "click_hijack" not in REDIRECT_MECHANISMS and "popup_open" not in REDIRECT_MECHANISMS
     base = _score([])
@@ -87,7 +87,7 @@ def test_click_hijack_scores_and_is_not_a_redirect():
 
 
 def test_malformed_popup_evidence_is_ignored():
-    from pnakotic.src.scanner.models import RedirectHop
+    from mandacaru.src.scanner.models import RedirectHop
 
     hops = [
         RedirectHop(url="https://a.example.com/", mechanism="popup_open", evidence="not json"),
@@ -140,13 +140,13 @@ def popup_site():
 
 
 def _engine(tmp_path):
-    from pnakotic.src.scanner.artifacts import ArtifactManager
-    from pnakotic.src.scanner.engine import PnakoticEngine
+    from mandacaru.src.scanner.artifacts import ArtifactManager
+    from mandacaru.src.scanner.engine import MandacaruEngine
 
     async def only_loopback_literal(host):
         return host == "127.0.0.1"
 
-    engine = PnakoticEngine(task_id="popup-job", timeout_ms=10000, host_allowed=only_loopback_literal)
+    engine = MandacaruEngine(task_id="popup-job", timeout_ms=10000, host_allowed=only_loopback_literal)
     engine.artifacts = ArtifactManager(base_dir=str(tmp_path))
     return engine
 
@@ -184,7 +184,7 @@ async def test_click_probe_catches_a_popunder(popup_site, tmp_path, profile):
 @requires_browser
 @pytest.mark.asyncio
 async def test_popup_storm_is_capped(popup_site, tmp_path):
-    from pnakotic.src.scanner.engine import MAX_POPUP_HOPS
+    from mandacaru.src.scanner.engine import MAX_POPUP_HOPS
 
     base, _seen = popup_site
     result = await _engine(tmp_path).scan(f"{base}/pop-storm")

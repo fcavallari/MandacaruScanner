@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import Mark from './Mark';
 import KpiStrip from './KpiStrip';
@@ -38,6 +38,8 @@ export default function Dashboard() {
   const [phase, setPhase] = useState<Phase>('loading');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // useId() yields colons or guillemets depending on the React version; url(#…) needs a plain id.
+  const carveId = `mandacaru-carve-${useId().replace(/[^A-Za-z0-9_-]/g, '')}`;
 
   /* ---------- data ---------- */
 
@@ -82,7 +84,7 @@ export default function Dashboard() {
             const result = await taskResults(task.task_id);
             setTasks((prev) => ({ ...prev, [task.task_id]: { ...prev[task.task_id], status: st.status, result } }));
           } else if (st.status === 'failed') {
-            setTasks((prev) => ({ ...prev, [task.task_id]: { ...prev[task.task_id], status: st.status, error: st.error || 'The probe failed' } }));
+            setTasks((prev) => ({ ...prev, [task.task_id]: { ...prev[task.task_id], status: st.status, error: st.error || 'Analysis interrupted' } }));
           } else {
             setTasks((prev) => ({ ...prev, [task.task_id]: { ...prev[task.task_id], status: st.status } }));
           }
@@ -107,10 +109,10 @@ export default function Dashboard() {
         ? (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
         : null;
       // 400/503 carry the API's sentence; 422 carries pydantic's list of field errors.
-      // The voice frames it, the real reason always follows.
-      if (typeof detail === 'string') return `The gate is sealed. ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
-      if (Array.isArray(detail)) return 'The gate is sealed. Only http(s) URLs can be probed.';
-      return `The observatory is unreachable. No answer from ${API_BASE}.`;
+      // A short phrase frames it, the real reason always follows.
+      if (typeof detail === 'string') return `Can't inspect that. ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
+      if (Array.isArray(detail)) return "Can't inspect that. Only http(s) URLs can be probed.";
+      return `No signal from the field station. No answer from ${API_BASE}.`;
     }
   };
 
@@ -126,14 +128,14 @@ export default function Dashboard() {
         ? (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
         : null;
       // 422 carries the normaliser's sentence (a string) or pydantic's list of field errors.
-      if (typeof detail === 'string') return `The gate is sealed. ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
+      if (typeof detail === 'string') return `Can't inspect that. ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
       if (Array.isArray(detail)) {
         const msgs = detail
           .map((d) => (d && typeof d === 'object' && typeof (d as { msg?: unknown }).msg === 'string' ? (d as { msg: string }).msg : ''))
           .filter(Boolean);
-        return `The gate is sealed. ${msgs.length ? `${msgs.join('; ')}.` : 'Enter a site such as example.com.'}`;
+        return `Can't inspect that. ${msgs.length ? `${msgs.join('; ')}.` : 'Enter a site such as example.com.'}`;
       }
-      return `The observatory is unreachable. No answer from ${API_BASE}.`;
+      return `No signal from the field station. No answer from ${API_BASE}.`;
     }
   };
 
@@ -151,7 +153,7 @@ export default function Dashboard() {
   const finding = useMemo(() => computeFinding(ordered), [ordered]);
   const intel = useMemo(() => computeIntel(ordered), [ordered]);
 
-  // the lead block: prefer a completed probe (the deepest one); else the newest
+  // the lead block: prefer a completed probe; else the newest
   const selected = useMemo(() => {
     if (selectedId && tasks[selectedId]) return tasks[selectedId];
     const completed = ordered.filter((t) => t.status === 'completed' && t.result);
@@ -210,14 +212,26 @@ export default function Dashboard() {
     <div className="max-w-[1408px] mx-auto px-4 sm:px-8 pt-6 sm:pt-7 pb-12">
       {/* title row: the product is named, then a noun, then the finding */}
       <div className="flex items-start justify-between gap-4 mb-7">
-        {/* the lockup: the sigil and the wordmark are the title; the screen's noun sits beside it */}
+        {/* the lockup: the cactus and the wordmark are the title; the screen's noun sits beside it.
+            The wordmark stays real text; the carve filter roughens its outline like a gouge on wood. */}
         <div className="min-w-0 flex items-center gap-3.5 sm:gap-4">
           <Mark size={44} className="text-accent flex-none hidden sm:block" />
           <Mark size={36} className="text-accent flex-none sm:hidden" />
           <div className="min-w-0">
+            <svg width="0" height="0" aria-hidden="true" focusable="false" style={{ position: 'absolute' }}>
+              <filter id={carveId} x="-5%" y="-10%" width="110%" height="120%">
+                <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="n" />
+                <feDisplacementMap in="SourceGraphic" in2="n" scale="2.2" xChannelSelector="R" yChannelSelector="G" />
+              </filter>
+            </svg>
             <h1 className="m-0 flex items-baseline gap-x-3 gap-y-0.5 flex-wrap leading-none">
-              <span className="font-display text-[26px] sm:text-[30px] font-semibold tracking-[0.06em] text-ink">PNAKOTIC</span>
-              <span className="text-[17px] sm:text-[18px] font-medium text-muted">Observatory</span>
+              <span
+                className="font-display text-[26px] sm:text-[30px] tracking-[0.05em] text-ink"
+                style={{ filter: `url(#${carveId})` }}
+              >
+                MANDACARU
+              </span>
+              <span className="text-[17px] sm:text-[18px] font-medium text-muted">Field Station</span>
             </h1>
             {phase === 'ready' ? <FindingLine text={finding} /> : null}
           </div>

@@ -4,8 +4,8 @@ FROM python:3.11-slim
 # or libpq-dev is needed in the image.
 WORKDIR /app
 
-COPY requirements.txt ./pnakotic/
-RUN pip install --no-cache-dir -r pnakotic/requirements.txt
+COPY requirements.txt ./mandacaru/
+RUN pip install --no-cache-dir -r mandacaru/requirements.txt
 
 # Which browser scans run in (see SECURITY_REVIEW.md, V9). "chrome" installs Google
 # Chrome stable, which gets Chrome's security builds the day Google ships them, so this
@@ -32,15 +32,15 @@ RUN set -eux; \
 ENV BROWSER_CHANNEL=${BROWSER_CHANNEL}
 
 # Run as an unprivileged user: the browser renders attacker-chosen pages.
-RUN useradd --uid 1001 --user-group --create-home --shell /usr/sbin/nologin pnakotic
+RUN useradd --uid 1001 --user-group --create-home --shell /usr/sbin/nologin mandacaru
 
-# Copy the repo AS a package so `pnakotic.src...` imports resolve
+# Copy the repo AS a package so `mandacaru.src...` imports resolve
 # (compose, tests and alembic all use that module path).
-COPY . ./pnakotic/
+COPY . ./mandacaru/
 # Named volumes mounted at /app/artifacts inherit this ownership on first creation.
 RUN mkdir -p /app/artifacts \
-    && chown -R pnakotic:pnakotic /app
+    && chown -R mandacaru:mandacaru /app
 
 ENV ARTIFACTS_DIR=/app/artifacts
 
-USER pnakotic
+USER mandacaru

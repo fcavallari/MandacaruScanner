@@ -148,7 +148,7 @@ async def lifespan(_app):
     sweep_task.cancel()
 
 
-app = FastAPI(title="Pnakotic API", lifespan=lifespan)
+app = FastAPI(title="Mandacaru API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -173,7 +173,7 @@ def serialize_result(res: models.ScanResult) -> dict:
     }
     if kind == "site":
         out["site"] = meta.get("site")
-        out["cleanup_url"] = os.getenv("CLEANUP_URL", "https://elderward.space.fast")
+        out["cleanup_url"] = os.getenv("CLEANUP_URL", "https://facheiro.space.fast/")
     return out
 
 
@@ -206,7 +206,7 @@ def _create_and_dispatch(req: ScanRequest) -> dict:
 
 
 @app.post("/scan", status_code=201)
-async def start_ritual(req: ScanRequest):
+async def start_scan(req: ScanRequest):
     await _assert_public_host(req.url)  # async DNS lookup
     return await run_in_threadpool(_create_and_dispatch, req)  # sync DB + broker publish
 
@@ -254,19 +254,19 @@ def get_job_status(task_id: str):
     try:
         job = db.query(models.ScanJob).filter_by(id=task_id).first()
         if not job:
-            raise HTTPException(404, "Ritual trace lost")
+            raise HTTPException(404, "Scan not found")
         return {"task_id": job.id, "status": job.status, "error": job.error}
     finally:
         db.close()
 
 
 @app.get("/tasks/{task_id}/results")
-def get_ritual_results(task_id: str):
+def get_scan_results(task_id: str):
     db = SessionLocal()
     try:
         res = db.query(models.ScanResult).filter_by(job_id=task_id).first()
         if not res:
-            raise HTTPException(404, "No results found for this ritual")
+            raise HTTPException(404, "No results for this scan yet")
         return {
             "job_id": task_id,
             "target": res.target_url,

@@ -3,8 +3,8 @@ import type { Hop } from '../lib/api';
 import { REDIRECT_MECHANISMS, hopLabel, hostnameOf } from '../lib/format';
 
 /**
- * The signature element: the redirect chain as a descent. One row per distinct host
- * in visit order, origin at the top, each step one level deeper, the landing at the bottom; between rows, how the
+ * The signature element: the redirect chain as a trail. One row per distinct host
+ * in visit order, origin at the top, each step one stop further, the landing at the bottom; between rows, how the
  * browser got there in words ("302 · HTTP redirect"). Hosts print whole — the end of a
  * host (apex, TLD) is the telling part, so it is never truncated. A 1px accent spine
  * means the scorer called it a real chain.
@@ -137,7 +137,7 @@ function NodeRow({ node, depth, live, hasNext }: { node: GNode; depth: number; l
     <li className="relative grid grid-cols-[20px_minmax(0,1fr)] gap-x-2.5">
       {/* the spine runs from this marker down to the next */}
       {hasNext ? (
-        <span aria-hidden="true" className={`absolute left-[9.5px] top-[14px] bottom-0 w-px ${live ? 'bg-accent/60' : 'bg-control'}`} />
+        <span aria-hidden="true" className={`absolute left-[9.5px] top-[14px] bottom-0 w-px ${live ? 'bg-accent' : 'bg-control'}`} />
       ) : null}
       <span aria-hidden="true" className="flex justify-center pt-[5px]">
         <span className={`relative w-[9px] h-[9px] rounded-[2px] border ${marker}`} />
@@ -154,7 +154,7 @@ function NodeRow({ node, depth, live, hasNext }: { node: GNode; depth: number; l
             {first ? (node.isLanding ? 'Origin · landed' : 'Origin') : (
               <>
                 {node.isLanding ? 'Landed · ' : null}
-                depth <span className="font-mono num">{depth}</span>
+                stop <span className="font-mono num">{depth}</span>
               </>
             )}
             {node.selfStatus != null ? <span className="font-mono num"> · {node.selfStatus} in place</span> : null}
@@ -174,7 +174,7 @@ function NodeRow({ node, depth, live, hasNext }: { node: GNode; depth: number; l
 function EdgeRow({ edge, live }: { edge: GEdge; live: boolean }) {
   return (
     <li className="relative grid grid-cols-[20px_minmax(0,1fr)] gap-x-2.5">
-      <span aria-hidden="true" className={`absolute left-[9.5px] top-0 bottom-0 w-px ${live ? 'bg-accent/60' : 'bg-control'}`} />
+      <span aria-hidden="true" className={`absolute left-[9.5px] top-0 bottom-0 w-px ${live ? 'bg-accent' : 'bg-control'}`} />
       <span />
       <p className="text-[12px] leading-none text-faint m-0 py-2">
         {edge.status != null ? <span className="font-mono num text-muted">{edge.status}</span> : null}

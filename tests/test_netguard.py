@@ -18,7 +18,7 @@ import pytest
     ("::ffff:8.8.8.8", True),
 ])
 def test_is_public_ip(addr, expected):
-    from pnakotic.src.scanner.netguard import is_public_ip
+    from mandacaru.src.scanner.netguard import is_public_ip
 
     assert is_public_ip(addr) is expected
 
@@ -35,14 +35,14 @@ def test_is_public_ip(addr, expected):
     "no-such-host.invalid",  # unresolvable: fail closed
 ])
 async def test_host_is_public_blocks_internal(host):
-    from pnakotic.src.scanner.netguard import host_is_public
+    from mandacaru.src.scanner.netguard import host_is_public
 
     assert await host_is_public(host) is False
 
 
 @pytest.mark.asyncio
 async def test_host_is_public_allows_public_literal():
-    from pnakotic.src.scanner.netguard import host_is_public
+    from mandacaru.src.scanner.netguard import host_is_public
 
     assert await host_is_public("8.8.8.8") is True
 
@@ -60,14 +60,14 @@ async def test_host_is_public_allows_public_literal():
     ("http://[not-an-ip/", False),  # urlparse ValueError
 ])
 async def test_url_is_allowed(url, expected):
-    from pnakotic.src.scanner.netguard import url_is_allowed
+    from mandacaru.src.scanner.netguard import url_is_allowed
 
     assert await url_is_allowed(url) is expected
 
 
 @pytest.mark.asyncio
 async def test_resolve_public_addrs():
-    from pnakotic.src.scanner.netguard import resolve_public_addrs
+    from mandacaru.src.scanner.netguard import resolve_public_addrs
 
     assert await resolve_public_addrs("8.8.8.8") == ["8.8.8.8"]
     assert await resolve_public_addrs("localhost") is None

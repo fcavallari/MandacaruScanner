@@ -2,7 +2,7 @@
 
 Re-exports the public API so callers can do::
 
-    from pnakotic.src.database import SessionLocal, ScanJob, ScanResult
+    from mandacaru.src.database import SessionLocal, ScanJob, ScanResult
 """
 from .session import Base, engine, init_db, SessionLocal
 from .models import ScanJob, ScanResult

@@ -122,7 +122,7 @@ def brands_in(text: str):
     return found
 
 
-class PnakoticScorer:
+class MandacaruScorer:
     def __init__(self):
         self.SUSPICIOUS_TLDS = {
             "xyz", "top", "icu", "gq", "tk", "ml",
@@ -500,6 +500,9 @@ class PnakoticScorer:
         if obfuscated:
             score += self.WEIGHTS["obfuscated_injection"]
             findings.extend(obfuscated)
+        if any(isinstance(s, dict) and isinstance(s.get("markers"), list) and s["markers"]
+               for s in result.metadata.get("eval_stages") or []):
+            findings.append("Code built at runtime with obfuscator markers (not weighted)")
         return score
 
     @staticmethod

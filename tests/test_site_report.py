@@ -3,7 +3,7 @@
 
 def test_verdict_rows():
     from _support import _load
-    from pnakotic.src.scanner.site_report import site_verdict
+    from mandacaru.src.scanner.site_report import site_verdict
 
     ok = lambda i, p: _load(i, f"https://s.com/{i}", p, state="checked")
     home = [ok(0, p) for p in ("default", "mobile-ios", "googlebot", "search-clicker")]
@@ -25,7 +25,7 @@ def test_verdict_rows():
 
 def test_verdict_labels_summaries_and_flags():
     from _support import _load
-    from pnakotic.src.scanner.site_report import site_verdict
+    from mandacaru.src.scanner.site_report import site_verdict
 
     ok = lambda i, p: _load(i, f"https://s.com/{i}", p, state="checked")
     nc = lambda i, p, r: _load(i, f"https://s.com/{i}", p, state="not_checked", reason=r)
@@ -57,7 +57,7 @@ def test_verdict_labels_summaries_and_flags():
 
 def test_classify_load():
     from _support import _result
-    from pnakotic.src.scanner.site_report import classify_load
+    from mandacaru.src.scanner.site_report import classify_load
 
     assert classify_load(None, "budget") == ("not_checked", "budget")
     assert classify_load(_result(challenge=True), None) == ("not_checked", "challenge")
@@ -68,7 +68,7 @@ def test_classify_load():
 
 def test_classify_load_order_and_failures():
     from _support import _result
-    from pnakotic.src.scanner.site_report import classify_load
+    from mandacaru.src.scanner.site_report import classify_load
 
     assert classify_load(None, None) == ("not_checked", "load_failed")
     assert classify_load(None, "timeout") == ("not_checked", "timeout")
@@ -84,7 +84,7 @@ def test_classify_load_order_and_failures():
 
 def test_external_scripts_grouping_order_and_caps():
     from _support import _load
-    from pnakotic.src.scanner.site_report import external_scripts
+    from mandacaru.src.scanner.site_report import external_scripts
 
     recs = [{"url": "https://www.googletagmanager.com/gtm.js?id=1", "initiator": "parser", "initiator_url": "https://s.com/", "main_frame": True, "frame_url": "https://s.com/"},
             {"url": "https://bad.org/x.js", "initiator": "script", "initiator_url": "https://s.com/", "main_frame": True, "frame_url": "https://s.com/"},
@@ -101,7 +101,7 @@ def test_external_scripts_grouping_order_and_caps():
 
 def test_external_script_entries_merge_loads_and_say_how():
     from _support import _load
-    from pnakotic.src.scanner.site_report import external_scripts
+    from mandacaru.src.scanner.site_report import external_scripts
 
     def rec(url, initiator="parser", initiator_url="https://s.com/", main_frame=True, frame_url="https://s.com/"):
         return {"url": url, "initiator": initiator, "initiator_url": initiator_url, "main_frame": main_frame, "frame_url": frame_url}
@@ -131,7 +131,7 @@ def test_external_script_entries_merge_loads_and_say_how():
 
 def test_external_scripts_order_tiers_and_finding_flag():
     from _support import _load
-    from pnakotic.src.scanner.site_report import external_scripts
+    from mandacaru.src.scanner.site_report import external_scripts
 
     def rec(url, initiator="parser"):
         return {"url": url, "initiator": initiator, "initiator_url": None, "main_frame": True, "frame_url": "https://s.com/"}
@@ -153,7 +153,7 @@ def test_external_scripts_order_tiers_and_finding_flag():
 
 def test_external_scripts_url_cap_and_challenge_pages():
     from _support import _load
-    from pnakotic.src.scanner.site_report import external_scripts
+    from mandacaru.src.scanner.site_report import external_scripts
 
     recs = [{"url": f"https://big.com/{i}.js", "initiator": "parser", "initiator_url": None, "main_frame": True, "frame_url": "https://s.com/"}
             for i in range(200)]
@@ -167,7 +167,7 @@ def test_external_scripts_url_cap_and_challenge_pages():
 
 def test_build_report_assembles_everything():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_report import build_report
+    from mandacaru.src.scanner.site_report import build_report
 
     recs = [{"url": "https://ads.net/a.js", "initiator": "parser", "initiator_url": None, "main_frame": False, "frame_url": "https://f.com/x"},
             {"url": "https://s.com/own.js", "initiator": "parser", "initiator_url": None, "main_frame": True, "frame_url": "https://s.com/"}]
@@ -204,7 +204,7 @@ def test_build_report_assembles_everything():
 
 def test_build_report_counts_blocks_past_the_cap():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_report import build_report
+    from mandacaru.src.scanner.site_report import build_report
 
     loads = [_load(0, "https://s.com/", "default", [_yara_hop("script", f"https://s.com/{i}.js", f"r{i}", 5, True, 0, "X") for i in range(60)])]
     report = build_report("s.com", "s.com", None, loads, 1, [], [])
@@ -213,7 +213,7 @@ def test_build_report_counts_blocks_past_the_cap():
 
 def test_build_report_keeps_200_findings_in_all_compromised_first():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_report import build_report
+    from mandacaru.src.scanner.site_report import build_report
 
     # 20 script blocks of 12 suspicious findings, then one page block with 5 compromised and 5 suspicious.
     hops = [_yara_hop("script", f"https://s.com/a{i:02}.js", f"r{j:02}", 2, False, 0, "S") for i in range(20) for j in range(12)]
@@ -235,7 +235,7 @@ def test_build_report_keeps_200_findings_in_all_compromised_first():
 
 def test_build_report_notes_a_yara_budget_cut():
     from _support import _load
-    from pnakotic.src.scanner.site_report import build_report
+    from mandacaru.src.scanner.site_report import build_report
 
     cut = _load(1, "https://s.com/a/", "default")
     cut.result.metadata["yara"] = {"rules": 1, "buffers": 3, "bytes": 10, "budget_exhausted": True}
@@ -252,7 +252,7 @@ def test_build_report_notes_a_yara_budget_cut():
 
 def test_couldnt_check_summary_gives_the_reason():
     from _support import _load
-    from pnakotic.src.scanner.site_report import site_verdict
+    from mandacaru.src.scanner.site_report import site_verdict
 
     for reason, summary in [("challenge", "This site showed our scanner a bot check"),
                             ("budget", "We ran out of time before the homepage loaded"),
@@ -265,7 +265,7 @@ def test_couldnt_check_summary_gives_the_reason():
 
 def test_report_flags_a_bot_check_with_vendor_and_counts():
     from _support import _load
-    from pnakotic.src.scanner.site_report import build_report, challenge_summary
+    from mandacaru.src.scanner.site_report import build_report, challenge_summary
 
     ok = _load(0, "https://s.com/", "mobile-ios")
     blocked = [_load(0, "https://s.com/", "default", state="not_checked", reason="challenge"),
@@ -293,7 +293,7 @@ def test_report_flags_a_bot_check_with_vendor_and_counts():
 
 def test_verdict_clean_paths_pinned():
     from _support import _load
-    from pnakotic.src.scanner.site_report import site_verdict
+    from mandacaru.src.scanner.site_report import site_verdict
 
     ok = lambda i, p, **kw: _load(i, f"https://s.com/{i}", p, **kw)
     # A homepage default load that only partly finished still counts as checked.
@@ -305,7 +305,7 @@ def test_verdict_clean_paths_pinned():
 
 def test_external_scripts_skip_loads_that_ended_off_site():
     from _support import _load
-    from pnakotic.src.scanner.site_report import build_report
+    from mandacaru.src.scanner.site_report import build_report
 
     rec = {"url": "https://cdn.evil.net/x.js", "initiator": "parser", "initiator_url": None, "main_frame": True}
     own = {**rec, "url": "https://ads.net/a.js"}
@@ -315,12 +315,85 @@ def test_external_scripts_skip_loads_that_ended_off_site():
     assert [(h["host"], h["urls"][0]["profiles"]) for h in hosts] == [("ads.net", ["default"])]
 
 
+def test_the_checkout_page_is_flagged_by_index():
+    from _support import _load
+    from mandacaru.src.scanner.site_report import build_report
+
+    loads = [_load(0, "https://s.com/", "default"), _load(1, "https://s.com/kassa/checkout/", "default"),
+             _load(2, "https://s.com/mandacaru-0123456789ab/", "default")]
+    r = build_report("s.com", "s.com", None, loads, 1, [], [], checkout_index=1)
+    assert [p["checkout"] for p in r["checked"]["pages"]] == [False, True, False]
+    assert [p["checkout"] for p in build_report("s.com", "s.com", None, loads, 1, [], [])["checked"]["pages"]] == [False] * 3
+
+
+def _checkout_page(*loads):
+    from mandacaru.src.scanner.site_report import build_report
+
+    home = _home()
+    pages = build_report("s.com", "s.com", None, [home, *loads], 1, [], [], checkout_index=1)["checked"]["pages"]
+    assert pages[0]["checkout_state"] is None  # not the checkout page
+    return pages[1]
+
+
+def _home():
+    from _support import _load
+    return _load(0, "https://s.com/", "default")
+
+
+def _with_status(load, status):
+    load.result.metadata["main_status"] = status
+    return load
+
+
+def test_the_checkout_page_says_where_its_load_landed():
+    """A store's checkout answers 302 to the cart when the cart is empty, and a store whose checkout
+    isn't at /checkout/ answers the fallback with a 404: the page entry says which, from the first
+    usable load in profile order, so the report never calls a cart or a 404 "your checkout page"."""
+    from _support import _load
+
+    url = "https://s.com/checkout/"
+    stayed = _checkout_page(_with_status(_load(1, url, "default"), 200))
+    assert (stayed["checkout_state"], stayed["checkout_landing"], stayed["checkout_status"]) == ("loaded", None, 200)
+    # the same path, give or take a trailing slash, the scheme, the www twin, a query or a fragment
+    for landing in ("https://s.com/checkout", "http://www.s.com/checkout/?x=1#pay"):
+        same = _checkout_page(_with_status(_load(1, url, "default", final_url=landing), 200))
+        assert same["checkout_state"] == "loaded" and same["checkout_landing"] is None, landing
+    cart = _checkout_page(_with_status(_load(1, url, "default", final_url="https://s.com/cart/"), 200))
+    assert (cart["checkout_state"], cart["checkout_landing"], cart["checkout_status"]) == (
+        "redirected", "https://s.com/cart/", 200)
+    long = "https://s.com/cart/?" + "a" * 400
+    assert len(_checkout_page(_load(1, url, "default", final_url=long))["checkout_landing"]) == 300
+    # a 4xx wins over a differing path
+    missing = _checkout_page(_with_status(_load(1, url, "default"), 404))
+    assert (missing["checkout_state"], missing["checkout_landing"], missing["checkout_status"]) == ("not_found", None, 404)
+    gone = _checkout_page(_with_status(_load(1, url, "default", final_url="https://s.com/shop/"), 410))
+    assert gone["checkout_state"] == "not_found" and gone["checkout_status"] == 410
+    # a 5xx is a page that loaded badly, not a missing checkout
+    assert _checkout_page(_with_status(_load(1, url, "default"), 500))["checkout_state"] == "loaded"
+
+
+def test_the_checkout_state_comes_from_the_first_usable_load_in_profile_order():
+    from _support import _load
+
+    url = "https://s.com/checkout/"
+    dead = _load(1, url, "default", state="not_checked", reason="load_failed")
+    dead.result = None
+    cart = _with_status(_load(1, url, "mobile-ios", final_url="https://s.com/cart/"), 200)
+    page = _checkout_page(cart, dead)
+    assert page["checkout_state"] == "redirected" and page["checkout_landing"] == "https://s.com/cart/"
+    blocked = _with_status(_load(1, url, "default", state="not_checked", reason="challenge"), 403)
+    blocked.result.metadata["challenge"] = True
+    page = _checkout_page(blocked)  # a bot check says nothing about the checkout
+    assert (page["checkout_state"], page["checkout_landing"], page["checkout_status"]) == (None, None, None)
+    assert _checkout_page(dead)["checkout_state"] is None
+
+
 def test_the_404_probe_is_flagged_on_its_page_and_its_blocks():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_report import build_report
+    from mandacaru.src.scanner.site_report import build_report
 
-    probe = "https://s.com/pnakotic-0123456789ab/"
-    own = "https://s.com/pnakotic-news/"  # an owner page with the same prefix: the probe is the last such page
+    probe = "https://s.com/mandacaru-0123456789ab/"
+    own = "https://s.com/mandacaru-news/"  # an owner page with the same prefix: the probe is the last such page
     loads = [_load(0, "https://s.com/", "default"),
              _load(1, own, "default", [_yara_hop("served", own, "r1", 3, False, 0, "A")]),
              _load(2, probe, "default", [_yara_hop("served", probe, "r2", 3, False, 0, "B")])]
@@ -332,7 +405,7 @@ def test_the_404_probe_is_flagged_on_its_page_and_its_blocks():
 
 def test_offsite_homepage_landing_code_is_the_landings():
     from _support import _load, _yara_hop
-    from pnakotic.src.scanner.site_report import build_report
+    from mandacaru.src.scanner.site_report import build_report
 
     # The homepage default load lands on evil.net, whose HTML matches a weak rule.
     hop = _yara_hop("served", "https://evil.net/", "html_scam", 2, False, 10, "SCAMCODE")
@@ -347,7 +420,7 @@ def test_offsite_homepage_landing_code_is_the_landings():
 
 def test_unchecked_loads_do_not_feed_scripts_or_counts():
     from _support import _load
-    from pnakotic.src.scanner.site_report import build_report, external_scripts
+    from mandacaru.src.scanner.site_report import build_report, external_scripts
 
     def rec(url, frame="https://s.com/", main=True):
         return {"url": url, "initiator": "parser", "initiator_url": None, "main_frame": main, "frame_url": frame}
@@ -373,11 +446,11 @@ def test_unchecked_loads_do_not_feed_scripts_or_counts():
 def _redirect_page(index, url, steered_profile, profiles, to="https://cheap-deals-shop.com/promo"):
     """Real scorer: `steered_profile` (or every profile, for "all") gets a 302 to `to`; the page's
     default result is folded with combine() as the site engine does."""
-    from pnakotic.src.intelligence.scorer import PnakoticScorer
-    from pnakotic.src.scanner.models import RedirectHop, ScanResult
-    from pnakotic.src.scanner.site_findings import Load
+    from mandacaru.src.intelligence.scorer import MandacaruScorer
+    from mandacaru.src.scanner.models import RedirectHop, ScanResult
+    from mandacaru.src.scanner.site_findings import Load
 
-    scorer = PnakoticScorer()
+    scorer = MandacaruScorer()
     loads = []
     for profile in profiles:
         steered = steered_profile in (profile, "all")
@@ -392,11 +465,11 @@ def _redirect_page(index, url, steered_profile, profiles, to="https://cheap-deal
 
 
 def test_conditional_redirect_to_another_domain_is_suspicious_not_clean():
-    from pnakotic.src.scanner.site_report import build_report
+    from mandacaru.src.scanner.site_report import build_report
 
     home_profiles = ("default", "mobile-ios", "googlebot", "search-clicker")
     page_profiles = ("default", "mobile-ios", "googlebot")
-    probe = _redirect_page(2, "https://s.com/pnakotic-abc/", None, page_profiles)
+    probe = _redirect_page(2, "https://s.com/mandacaru-abc/", None, page_profiles)
     for steered in ("mobile-ios", "search-clicker"):
         home = _redirect_page(0, "https://s.com/", steered, home_profiles)
         about = _redirect_page(1, "https://s.com/about/", "mobile-ios", page_profiles)
@@ -420,7 +493,7 @@ def test_conditional_redirect_to_another_domain_is_suspicious_not_clean():
 
 def test_offsite_homepage_folds_in_its_non_decisive_cloaking():
     from _support import _load
-    from pnakotic.src.scanner.site_report import build_report
+    from mandacaru.src.scanner.site_report import build_report
 
     # Desktop visitors leave the site; Googlebot stays. One finding: the off-site homepage.
     home = [_load(0, "https://s.com/", p, final_url="https://s.com/" if p == "googlebot" else "https://elsewhere.net/")
@@ -437,8 +510,8 @@ def test_offsite_homepage_folds_in_its_non_decisive_cloaking():
 
 def test_external_scripts_mark_a_script_blocked_as_malware_as_a_finding():
     from _support import _load
-    from pnakotic.src.scanner.site_findings import build_blocks
-    from pnakotic.src.scanner.site_report import external_scripts
+    from mandacaru.src.scanner.site_findings import build_blocks
+    from mandacaru.src.scanner.site_report import external_scripts
 
     url = "https://r1.example/donation"
     rec = {"url": url, "main_frame": True, "frame_url": "https://s.com/p", "initiator": "script",
@@ -450,3 +523,88 @@ def test_external_scripts_mark_a_script_blocked_as_malware_as_a_finding():
     [host] = out["hosts"]
     assert host["host"] == "r1.example"
     assert host["urls"][0]["finding"] is True and host["urls"][0]["injected_by"] == "inline on https://s.com/p"
+
+
+def test_checked_pages_note_their_own_card_fields():
+    """card_fields: a checked, on-site load of the page has card inputs (served, or inserted by
+    the store's or a known vendor's code); card_fields_unchecked: whose code added them couldn't be
+    checked on some load; card_fields_vendors: the known vendors whose code inserted them."""
+    from _support import _card, _cards, _load
+    from mandacaru.src.scanner.site_report import build_report
+
+    page = "https://s.com/checkout/"
+    loads = [
+        _load(0, "https://s.com/", "default"),  # no card_inputs at all (an older result)
+        _load(1, page, "default", card_inputs=_cards(_card("store", ["https://s.com/form.js"]))),
+        _load(1, page, "mobile-ios", card_inputs=_cards(_card("vendor", ["https://static.hotjar.com/c.js"],
+                                                              vendors=["Hotjar", "Not A Vendor"]))),
+        _load(2, "https://s.com/served/", "default", card_inputs=_cards(present=1)),  # served with the page
+        _load(3, "https://s.com/unchecked/", "default",
+              card_inputs=_cards(_card(frames=["https://s.com/unchecked/"], verified=False))),
+        _load(4, "https://s.com/none/", "default", card_inputs=_cards()),
+    ]
+    report = build_report("s.com", "s.com", None, loads, 1, [], [])
+    assert report["blocks"] == []  # none of these is a finding
+    pages = {p["url"]: p for p in report["checked"]["pages"]}
+    flags = lambda p: (p["card_fields"], p["card_fields_unchecked"], p["card_fields_vendors"])
+    assert flags(pages["https://s.com/"]) == (False, False, [])
+    assert flags(pages[page]) == (True, False, ["Hotjar"])  # only names from the known-vendor list
+    assert flags(pages["https://s.com/served/"]) == (True, False, [])
+    assert flags(pages["https://s.com/unchecked/"]) == (True, True, [])
+    assert flags(pages["https://s.com/none/"]) == (False, False, [])
+
+
+def test_card_fields_skip_unusable_and_offsite_loads():
+    from _support import _card, _cards, _load
+    from mandacaru.src.scanner.site_report import build_report
+
+    page = "https://s.com/checkout/"
+    loads = [
+        _load(0, "https://s.com/", "default"),
+        _load(1, page, "default", final_url="https://evil.net/",
+              card_inputs=_cards(_card("store", ["https://evil.net/f.js"]))),
+        _load(1, page, "googlebot", state="not_checked", reason="challenge",
+              card_inputs=_cards(_card(frames=[page], verified=False))),
+    ]
+    loads[2].result.metadata["challenge"] = True
+    pages = {p["url"]: p for p in build_report("s.com", "s.com", None, loads, 1, [], [])["checked"]["pages"]}
+    assert (pages[page]["card_fields"], pages[page]["card_fields_unchecked"]) == (False, False)
+
+
+def test_unchecked_card_fields_keep_a_clean_site_from_reading_clean():
+    """Unchecked must never read as Clean: card fields whose owner couldn't be checked make an
+    otherwise clean site Partly checked; a Suspicious verdict is unaffected."""
+    from _support import _card, _cards, _load
+    from mandacaru.src.scanner.site_report import build_report
+
+    home = [_load(0, "https://s.com/", p) for p in ("default", "mobile-ios")]
+    unchecked = _load(1, "https://s.com/checkout/", "default",
+                      card_inputs=_cards(_card(frames=[], via="unseen", verified=False)))
+    v = build_report("s.com", "s.com", None, home + [unchecked], 1, [], [])["verdict"]
+    assert v["verdict"] == "partly_checked"
+    assert v["summary"] == "No malware found, but we couldn't check who added some card payment fields"
+    checked = _load(1, "https://s.com/checkout/", "default", card_inputs=_cards(present=1))
+    assert build_report("s.com", "s.com", None, home + [checked], 1, [], [])["verdict"]["verdict"] == "clean"
+    skim = _load(2, "https://s.com/pay/", "default", card_inputs=_cards(_card(frames=["https://evil.example/s.js"])))
+    assert build_report("s.com", "s.com", None, home + [unchecked, skim], 1, [], [])["verdict"]["verdict"] == "suspicious"
+
+
+def test_unseen_card_fields_without_the_whole_served_body_are_unchecked_not_outside_code():
+    """summarize's unseen insertion end to end: with no served body, or one cut at the cap, the
+    page's card fields may be in the part we didn't get, so no finding and the page is unchecked;
+    with the whole body and no card inputs in it, outside code it is."""
+    from _support import _load
+    from mandacaru.src.scanner.card_watch import summarize
+    from mandacaru.src.scanner.site_report import build_report
+    from mandacaru.src.scanner.yara_scan import MAX_BUFFER_BYTES
+
+    page = "https://s.com/checkout/"
+    whole = b"<html><body><form></form></body></html>"
+    cut = (whole + b" " * MAX_BUFFER_BYTES)[:MAX_BUFFER_BYTES]
+    for served, finding in ((None, False), (cut, False), (whole, True)):
+        load = _load(0, page, "default", card_inputs=summarize([], 1, "s.com", page, served, parsed={}))
+        report = build_report("s.com", "s.com", None, [load], 1, [], [])
+        kinds = [f["kind"] for b in report["blocks"] for f in b["findings"]]
+        assert kinds == (["card_inputs"] if finding else []), served is None
+        [p] = report["checked"]["pages"]
+        assert (p["card_fields"], p["card_fields_unchecked"]) == (True, not finding)

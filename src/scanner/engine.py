@@ -7,25 +7,29 @@ import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import AsyncIterator, Dict, List, Optional, Set, Tuple
-from urllib.parse import urldefrag, urljoin, urlparse
+from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
+from urllib.parse import urldefrag, urljoin, urlparse, urlsplit
 
 from playwright.async_api import async_playwright, Browser, CDPSession, Response
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from .models import RedirectHop, ScanResult, REDIRECT_MECHANISMS
-from ..intelligence.scorer import PnakoticScorer
+from ..intelligence.scorer import MandacaruScorer
 from .profiles import PROFILES
 from .static_analyzer import StaticAnalyst, SIGNATURE_MECHANISMS, MAX_CONTENT_CHARS
 from .artifacts import ArtifactManager
 from .behavior import BehaviorRecorder
+from .card_watch import CARD_SELECTOR, CardWatcher, summarize as summarize_card_inputs
+from .eval_capture import EvalCapture
+from .snippets import cut_snippet
 from .yara_scan import YARA_MECHANISM, ScriptCollector, load_rules, scan_buffers, MAX_BUFFER_BYTES, MAX_FRAMES
 from .egress_proxy import EgressProxy
 from .netguard import HostCheck, host_is_public, url_is_allowed
 from .script_trace import ScriptTracer, find_injections
 from .page_picker import extract_links
 from .challenge import challenge_vendor, looks_like_challenge
+from .woo import looks_like_woocommerce
 
 # --block-new-web-contents: window.open / popups would load in a new target that the
 # page's CDP session does not intercept, so forbid them outright. Chrome still reports each
@@ -44,6 +48,8 @@ SETTLE_MS = 3000
 SCREENSHOT_TIMEOUT_MS = 10000
 # Site mode: how long to wait for the served main document's body (as ScriptCollector.drain).
 SERVED_BODY_TIMEOUT_S = 5.0
+# Site mode: how long counting the card inputs on the settled page may take.
+CARD_COUNT_TIMEOUT_S = 5.0
 # After the landing is analysed, one click on an empty spot of the page: popunder scripts
 # open their ad on the visitor's first click, which a load-only scan never sees.
 CLICK_SETTLE_MS = 1500
@@ -153,9 +159,15 @@ class EgressGuard:
     """Second egress layer: fails HTTP requests whose host isn't public, including redirect hops.
 
     Playwright's page.route() is not re-invoked for redirects, so this uses CDP
-    Fetch interception at the request stage, which pauses each hop (and iframe and
-    worker requests) individually. WebSockets and SharedWorkers are invisible to it;
-    EgressProxy covers those. See netguard.py for the policy.
+    Fetch interception at the request stage, which pauses each hop individually. It is
+    attached to the page's own CDP session only, so it sees the main frame, same-process
+    iframes and the dedicated workers the main frame starts. It does not see cross-site
+    iframes that run out of process (Chrome and full Chromium; chrome-headless-shell keeps
+    them in process), their workers, SharedWorkers or WebSockets (checkout spike Q5,
+    docs/checkout-spike-findings.md). EgressProxy, at launch level, covers all browser
+    traffic, so the egress policy holds there too; only this layer's per-URL
+    ERR_BLOCKED_BY_CLIENT and blocked-host record are missing for those requests.
+    See netguard.py for the policy.
     """
 
     def __init__(self, cdp: CDPSession, host_allowed: HostCheck):
@@ -199,6 +211,33 @@ class EgressGuard:
             print(f"[egress-guard] could not settle paused request {url[:200]!r}: {exc}")
 
 
+def _eval_stage_entry(stage) -> dict:
+    """The report-sized record of one runtime-built script: snippets and markers, never the body."""
+    return {
+        "caller": stage.caller_url[:300],
+        "caller_line": stage.caller_line,
+        "length": stage.length if stage.oversized else len(stage.source),
+        "markers": list(stage.markers),
+        "context": cut_snippet(stage.source, 0, 0),
+        "oversized": stage.oversized,
+        "yara_matched": False,  # site mode fills it in from the per-buffer YARA matches
+    }
+
+
+async def _document_charset(cdp: Any, frame_id: str) -> Optional[str]:
+    """``document.characterSet`` of the main frame, read in a fresh isolated world, where the
+    page's own scripts can't redefine the getter: how the browser decoded the served HTML.
+    None when it can't be read."""
+    world = await cdp.send("Page.createIsolatedWorld", {"frameId": frame_id, "worldName": "mandacaru-charset"})
+    context = world.get("executionContextId") if isinstance(world, dict) else None
+    if not isinstance(context, int):
+        return None
+    out = await cdp.send("Runtime.evaluate", {"expression": "document.characterSet", "contextId": context,
+                                              "returnByValue": True})
+    value = out.get("result", {}).get("value") if isinstance(out, dict) else None
+    return value[:40] if isinstance(value, str) else None
+
+
 async def _served_body(resp: Response) -> Optional[bytes]:
     """The HTML body of a main-frame navigation response, capped; None when it isn't HTML,
     is too large to pull, or the browser can't give it any more."""
@@ -220,12 +259,12 @@ async def _served_body(resp: Response) -> Optional[bytes]:
         return None
 
 
-class PnakoticEngine:
+class MandacaruEngine:
     def __init__(self, max_hops=10, timeout_ms=30000, task_id="default",
                  host_allowed: Optional[HostCheck] = None):
         self.max_hops = max_hops
         self.timeout_ms = timeout_ms
-        self.scorer = PnakoticScorer()
+        self.scorer = MandacaruScorer()
         self.analyst = StaticAnalyst()
         self.artifacts = ArtifactManager()
         # Root artifact folder injected via task_id in constructor or runner
@@ -240,7 +279,7 @@ class PnakoticEngine:
         With compare=True every other profile loads the URL too, each in its own browser
         context (own cookies and storage) in the same browser, all in parallel so the job
         takes about as long as one scan. The scorer then compares where each profile landed
-        (cloaking, see PnakoticScorer.combine). The requested profile stays the job's chain;
+        (cloaking, see MandacaruScorer.combine). The requested profile stays the job's chain;
         the others are summarized in metadata["variants"]. Contexts share one egress IP, so
         only user-agent, viewport and referrer cloaking can show up, not IP or geo cloaking.
         """
@@ -323,8 +362,9 @@ class PnakoticEngine:
         both. Every load collects script bodies and traces script initiators: metadata gets
         "injections" (find_injections) and, when any, "flagged_scripts" (the script responses
         the CDN refused as malware, yara_scan.ScriptCollector.flagged). With options.site,
-        metadata also gets main_status, served_bytes, links, script_requests and challenge,
-        and YARA keeps one finding per buffer (the served HTML first, as source "served").
+        metadata also gets main_status, served_bytes, links, script_requests, challenge and
+        card_inputs (card_watch.summarize), and YARA keeps one finding per buffer (the served
+        HTML first, as source "served").
         """
         profile = PROFILES[profile_name]
         result = ScanResult(target_url=target_url)
@@ -363,8 +403,15 @@ class PnakoticEngine:
         # scorer reads the injection evidence (body_markers) and the CDN-blocked scripts.
         scripts: Optional[ScriptCollector] = ScriptCollector()
         documents: List[tuple] = []  # (source, url, html) for YARA: the landing page and its frames
+        evals = EvalCapture()  # kept in every mode (bounded, eval_capture.py)
+        cards: Optional[CardWatcher] = CardWatcher() if site else None  # card inputs inserted, and by whom
+        cards_present = 0
+        cards_charset: Optional[str] = None  # how the browser decoded the document (card_watch.summarize)
         try:
             await behavior.attach(ctx)  # before new_page: hooks must precede every page script
+            if cards is not None:
+                # also before the eval-capture seal: its init script is then known by content
+                await cards.attach(ctx)
             page = await ctx.new_page()
             behavior.watch(page)
             guard = EgressGuard(await ctx.new_cdp_session(page), self.host_allowed)
@@ -443,8 +490,24 @@ class PnakoticEngine:
             await cdp.send("Page.enable")
             tree = await cdp.send("Page.getFrameTree")
             main_frame_id = tree["frameTree"]["frame"]["id"]
-            tracer = ScriptTracer()  # who started each script request; the scorer and site report read it
+            # who started each script request; the scorer and site report read it. Frames of the
+            # harness's own scripts (our hooks wrap appendChild and friends) are passed over.
+            tracer = ScriptTracer(evals.harness_script_ids)
             await tracer.attach(cdp, main_frame_id)
+            # Code the page builds at runtime (eval, new Function), before goto. The warm-up makes Playwright
+            # parse its own main-world scripts now, so they are known and not mistaken for the page's.
+            # Every main-world evaluate the engine makes later is run once here, so its payload is known by content.
+            async def warm_up() -> None:
+                for expression in ("'mandacaru' + '-warm-up'", NEUTRAL_POINT_JS):
+                    try:
+                        await page.evaluate(expression)
+                    except BROWSER_ERRORS:
+                        pass
+                try:
+                    await behavior.warm_up(page)  # a binding round trip: Playwright's delivery script
+                except BROWSER_ERRORS:
+                    pass
+            await evals.attach(cdp, warm_up=warm_up)
             current_url = target_url
 
             def on_frame_navigated(event: dict) -> None:
@@ -541,6 +604,18 @@ class PnakoticEngine:
                     result.metadata["settle_timed_out"] = True
                 except PlaywrightError as e:
                     print(f"[engine] settle failed: {str(e)[:200]}")
+            # Card inputs on the settled page, counted in Playwright's utility world (not the page's).
+            if cards is not None and not page.is_closed():
+                try:
+                    cards_present = await asyncio.wait_for(
+                        page.locator("css=" + CARD_SELECTOR).count(), CARD_COUNT_TIMEOUT_S)
+                except BROWSER_ERRORS as e:
+                    print(f"[engine] card input count failed: {str(e)[:200]}")
+                try:
+                    cards_charset = await asyncio.wait_for(
+                        _document_charset(guard.cdp, main_frame_id), CARD_COUNT_TIMEOUT_S)
+                except BROWSER_ERRORS as e:
+                    print(f"[engine] document charset unavailable: {str(e)[:200]}")
 
             # 3. Analysis half. Each step stands alone; a closed page (redirect loop) skips them.
             # Only a real http(s) page counts: a refused/failed/download navigation leaves
@@ -636,6 +711,7 @@ class PnakoticEngine:
                         print(f"[engine] click probe failed: {str(e)[:200]}")
             if scripts:
                 await scripts.drain()  # bodies can only be read while the context is open
+            await evals.drain()
         finally:
             try:
                 await ctx.close()
@@ -660,19 +736,46 @@ class PnakoticEngine:
                 "links": links,
                 "script_requests": list(tracer.records) if tracer else [],
                 "challenge": looks_like_challenge(main_status, signals["title"], served_text),
+                # The served text and the rendered DOM: a store's scripts add some markers (the
+                # ``woocommerce-js`` body class) only after load.
+                "woocommerce": looks_like_woocommerce(served_text) or looks_like_woocommerce(content),
             })
             if result.metadata["challenge"]:
                 result.metadata["challenge_vendor"] = challenge_vendor(signals["title"], served_text)
+            if cards is not None:
+                # The landing document's own host is the site here: a load does not know the site
+                # survey's site host (the homepage loads run before it is resolved).
+                result.metadata["card_inputs"] = summarize_card_inputs(
+                    cards.events, cards_present, urlsplit(served_url).hostname or "", served_url, served,
+                    dropped=cards.dropped, parsed=evals.positions_at(served_url), charset=cards_charset)
+
+        eval_stages = [_eval_stage_entry(stage) for stage in evals.stages]
+        result.metadata["eval_stages"] = eval_stages
+        if evals.dropped:
+            result.metadata["eval_stages_dropped"] = evals.dropped
+        if evals.repeated:
+            result.metadata["eval_stages_repeated"] = evals.repeated
 
         if rules:
             buffers = [("served", served_url, served)] if site and served is not None else []
             buffers += [(src, url, html.encode("utf-8", "replace")) for src, url, html in documents]
+            # Runtime-built code goes before the script bodies: when the scan budget runs out, those are cut first.
+            # (a stage too long to have been read has no source and no buffer)
+            eval_index = {}  # eval_stages position -> buffer index
+            for i, stage in enumerate(evals.stages):
+                if not stage.oversized:
+                    eval_index[i] = len(buffers)
+                    buffers.append(("eval", stage.caller_url or served_url, stage.source))
             buffers += [("script", url, body) for url, body in scripts.scripts]
             matches, stats = await scan_buffers(rules, buffers, per_buffer=site)
             stats["scripts_dropped"] = scripts.dropped
             result.metadata["yara"] = stats
             for match in matches:
                 intercepted.append(RedirectHop(url=match["url"], mechanism=YARA_MECHANISM, evidence=json.dumps(match)))
+            if site:
+                hit = {m.get("buffer_index") for m in matches}
+                for i, entry in enumerate(eval_stages):
+                    entry["yara_matched"] = eval_index.get(i) in hit
 
         # What the page tried to do to the visitor, after the context is gone (no late events).
         result.hops = intercepted + behavior.hops()

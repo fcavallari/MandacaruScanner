@@ -14,7 +14,9 @@ from .models import ScanResult
 from .challenge import VENDORS
 from .profiles import PROFILES
 from .script_trace import MAX_URL_CHARS  # 300, the external-scripts rule
-from .site_findings import Load, build_blocks_and_overflow, cap_findings, ended_off_site, own_score, usable_load
+from .code_origin import KNOWN_VENDORS
+from .site_findings import (Load, build_blocks_and_overflow, cap_findings, card_insertions, ended_off_site, own_score,
+                            usable_load)
 from .site_identity import on_site, same_domain
 
 # External scripts per site (global constraints): hosts, and URLs over all listed hosts.
@@ -201,9 +203,15 @@ def _count(n: int, noun: str) -> str:
     return "{} {}".format(n, noun if n == 1 else noun + "s")
 
 
-def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool, findings_more_total: int = 0) -> dict:
+NOTE_CARDS_UNCHECKED = "No malware found, but we couldn't check who added some card payment fields"
+
+
+def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool, findings_more_total: int = 0,
+                 cards_unchecked: bool = False) -> dict:
     """The site verdict (spec §5.5): the label and a one-line summary for the report header.
-    ``findings_more_total`` (findings dropped by the report-wide cap) counts in the summary."""
+    ``findings_more_total`` (findings dropped by the report-wide cap) counts in the summary.
+    ``cards_unchecked`` (a checked page's ``card_fields_unchecked``) keeps a would-be Clean
+    verdict at Partly checked: unchecked must never read as Clean."""
     severities = [f.get("severity") for b in blocks for f in b.get("findings") or []]
     not_checked = [l for l in loads if l.state == "not_checked"]
     homepage = [l for l in loads if l.page_index == 0]
@@ -223,6 +231,9 @@ def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool, find
           or 2 * sum(1 for l in later if l.state == "not_checked") > len(later)):
         verdict = "partly_checked"
         summary = "No malware found, but {} of {} checks couldn't run".format(len(not_checked), len(loads))
+    elif cards_unchecked:
+        verdict = "partly_checked"
+        summary = NOTE_CARDS_UNCHECKED
     else:
         verdict = "clean"
         summary = "Clean" if rules_loaded else "Clean (no malware rules loaded)"
@@ -230,18 +241,79 @@ def site_verdict(blocks: List[dict], loads: List[Load], rules_loaded: bool, find
 
 
 def _probe_index(loads: List[Load]) -> Optional[int]:
-    """The 404 probe: the page with the highest index whose path starts with /pnakotic-."""
+    """The 404 probe: the page with the highest index whose path starts with /mandacaru-."""
     for load in sorted(loads, key=lambda l: -l.page_index):
         try:
             path = urlsplit(load.page_url).path if isinstance(load.page_url, str) else ""
         except ValueError:
             continue
-        if path.startswith("/pnakotic-"):
+        if path.startswith("/mandacaru-"):
             return load.page_index
     return None
 
 
-def _checked(loads: List[Load], rules_count: int, probe: Optional[int]) -> dict:
+_VENDOR_NAMES = set(KNOWN_VENDORS.values())
+
+
+def _card_fields(loads: List[Load], site_host: str) -> dict:
+    """What the page's checked, on-site loads say about its own card fields (none of it is a
+    finding): ``card_fields`` when a load counted card inputs on the page or saw the store's, a
+    payment provider's or a known vendor's code insert them; ``card_fields_unchecked`` when whose
+    code inserted them couldn't be checked on some load (``verified`` false); the known vendors
+    whose code inserted them (names from the vendor list only)."""
+    fields = unchecked = False
+    vendors = []  # type: List[str]
+    for load in loads:
+        if not usable_load(load) or ended_off_site(load.result, site_host):
+            continue
+        cards = load.result.metadata.get("card_inputs")
+        present = cards.get("present") if isinstance(cards, dict) else None
+        if isinstance(present, int) and not isinstance(present, bool) and present > 0:
+            fields = True
+        for event in card_insertions(load.result):
+            owner = event.get("owner")
+            if owner in ("store", "provider", "vendor"):
+                fields = True
+            if owner == "unknown" and event.get("verified") is False:
+                fields = unchecked = True
+            if owner == "vendor" and isinstance(event.get("vendors"), list):
+                for name in event["vendors"]:
+                    if name in _VENDOR_NAMES and name not in vendors:
+                        vendors.append(name)
+    return {"card_fields": fields, "card_fields_unchecked": unchecked, "card_fields_vendors": vendors}
+
+
+def _path(url: Any) -> Optional[str]:
+    """The URL's path without a trailing slash (``/`` for the root), or None when unreadable."""
+    try:
+        return (urlsplit(url).path.rstrip("/") or "/") if isinstance(url, str) else None
+    except ValueError:
+        return None
+
+
+def _checkout_landing(page_url: str, page_loads: List[Load]) -> dict:
+    """Where the checkout page's load ended, from its first usable load in profile order: a store's
+    checkout answers 302 to the cart while the cart is empty, and a store whose checkout isn't at
+    /checkout/ answers the fallback URL with a 404. ``checkout_state`` is ``not_found`` for a 4xx
+    (``checkout_status``), else ``redirected`` when the landing path differs (a trailing slash,
+    the scheme, the host, the query and the fragment don't count; ``checkout_landing``), else
+    ``loaded``; None when no load is usable (its load line says why)."""
+    load = next((l for l in page_loads if usable_load(l)), None)
+    if load is None:
+        return {"checkout_state": None, "checkout_landing": None, "checkout_status": None}
+    status = load.result.metadata.get("main_status")
+    status = status if isinstance(status, int) and not isinstance(status, bool) else None
+    if status is not None and 400 <= status < 500:
+        state, landing = "not_found", None
+    elif _path(load.result.final_url) != _path(page_url):
+        state, landing = "redirected", _url(load.result.final_url)
+    else:
+        state, landing = "loaded", None
+    return {"checkout_state": state, "checkout_landing": landing, "checkout_status": status}
+
+
+def _checked(loads: List[Load], rules_count: int, probe: Optional[int], site_host: str,
+             checkout: Optional[int] = None) -> dict:
     by_page = {}  # type: Dict[int, List[Load]]
     for load in loads:
         by_page.setdefault(load.page_index, []).append(load)
@@ -252,6 +324,10 @@ def _checked(loads: List[Load], rules_count: int, probe: Optional[int]) -> dict:
             "index": index,
             "url": _url(page_loads[0].page_url),
             "probe": index == probe,
+            "checkout": index == checkout,  # a WooCommerce store's checkout page, wherever it landed
+            **(_checkout_landing(page_loads[0].page_url, page_loads) if index == checkout
+               else {"checkout_state": None, "checkout_landing": None, "checkout_status": None}),
+            **_card_fields(page_loads, site_host),
             "loads": [{
                 "profile": l.profile,
                 "state": l.state,
@@ -301,7 +377,8 @@ def challenge_summary(loads: List[Load]) -> Optional[dict]:
 
 
 def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str], loads: List[Load],
-                 rules_count: int, blocked_hosts: List[str], notes: List[str]) -> dict:
+                 rules_count: int, blocked_hosts: List[str], notes: List[str],
+                 checkout_index: Optional[int] = None) -> dict:
     """The site report stored in the result's metadata_json."""
     blocks, blocks_more = build_blocks_and_overflow(loads, site_host, offsite_domain)
     blocks, emptied, findings_more_total = cap_findings(blocks)
@@ -312,16 +389,18 @@ def build_report(entered_host: str, site_host: str, offsite_domain: Optional[str
     probe_url = next((_url(l.page_url) for l in loads if l.page_index == probe), None) if probe is not None else None
     for block in blocks:
         block["probe"] = block["location_kind"] == "page" and block["location"] == probe_url
+    checked = _checked(loads, rules_count, probe, site_host, checkout_index)
+    cards_unchecked = any(p["card_fields_unchecked"] for p in checked["pages"])
     return {
         "site": site_host,
         "entered": entered_host,
         "redirected_from": entered_host if entered_host != site_host else None,
-        "verdict": site_verdict(blocks, loads, rules_count > 0, findings_more_total),
+        "verdict": site_verdict(blocks, loads, rules_count > 0, findings_more_total, cards_unchecked),
         "blocks": blocks,
         "blocks_more": blocks_more,  # blocks past MAX_BLOCKS, plus blocks the findings cap left empty
         "findings_more_total": findings_more_total,  # findings dropped by the report-wide MAX_FINDINGS cap
         "external_scripts": external_scripts(loads, site_host, blocks),
-        "checked": _checked(loads, rules_count, probe),
+        "checked": checked,
         "blocked_hosts": list(dict.fromkeys(h[:253] for h in blocked_hosts if isinstance(h, str)))[:MAX_BLOCKED_HOSTS],
         "notes": list(notes),
         "challenge": challenge_summary(loads),  # a CDN bot check kept some loads out

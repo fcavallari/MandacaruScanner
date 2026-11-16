@@ -1,0 +1,361 @@
+"""Code a page builds at runtime (``eval``, ``new Function``, an inserted inline ``<script>``),
+captured through CDP ``Debugger.scriptParsed`` so YARA and the obfuscator markers can read it.
+
+Skimmers unpack themselves this way: the file the page loads is a stub, and the code that
+matters exists only after it has run. This module keeps the source of such scripts, bounded.
+
+What Chromium 148 reports (observed with scratch pages against a local server, Debugger
+enabled before navigation; ``hasSourceURL`` is false unless stated). ``embedderName`` is the name
+the browser gave the script, and it is what ``CallSite.getFileName()`` returns for the script's
+frames (the file name ``card_watch``'s hook writes), in every row:
+
+================================== ===================== ===================== ======================
+script                             ``url``               ``embedderName``      ``stackTrace``
+================================== ===================== ===================== ======================
+the document's inline script       the document URL      the document URL      none
+... ending in ``//# sourceURL=n``  ``n`` (hasSourceURL)  the document URL      none
+a network script, ``<script src>``  its URL               its URL               none
+... ending in ``//# sourceURL=n``  ``n`` (hasSourceURL)  its URL               none
+an inline handler's own text       the document URL      the document URL      none (what it ``eval``s is a stage)
+``eval(...)``                      ``""``                ``""``                top frame = the calling page script
+``new Function(...)``              ``""``                ``""``                top frame = the calling page script
+``eval`` ending in a sourceURL     the claimed URL       ``""``                top frame = the calling page script
+                                   (``hasSourceURL`` true)
+inserted inline ``<script>``       ``""``                ``""``                top frame = the inserting script
+``document.write`` of a script     ``""``                ``""``                top frame = the writing script
+``setTimeout("code")``             ``""``                ``""``                none
+``setTimeout(eval, 0, "code")``    ``""``                ``""``                none
+``Promise.resolve(c).then(eval)``  ``""``                ``""``                none
+``setTimeout(Function, 0, "c")``   ``""``                ``""``                none
+``javascript:`` URL                ``""``                ``""``                none
+an ``eval`` inside a timer string  ``""``                ``""``                top frame has an empty URL
+a ``blob:`` script                 its URL (or a name)   the ``blob:`` URL     none
+================================== ===================== ===================== ======================
+
+So ``url == ""``, or ``hasSourceURL`` on a script whose ``embedderName`` is not an http(s) URL,
+selects every runtime-built script, with or without a stack (a stage built from a timer or a
+promise has none, so ``caller`` is ``""`` for it, and requiring a stack would give a loader a
+one-line bypass). A sourceURL comment only renames a script: a served inline block or a network
+file ending in one (WordPress puts one on every inline script it prints, ``wc-checkout-js-extra``)
+keeps its http(s) ``embedderName`` and is not a stage, while runtime code calling itself anything,
+the page URL included, keeps its empty one and is. A browser that sends no ``embedderName`` makes
+every sourceURL script a stage. ``data:`` and ``blob:`` URLs are selected too: such a script has
+a URL, no sourceURL and no stack, and the page made it up.
+
+The same selection also catches everything Playwright injects into the page: its init scripts
+(ours included), its utility script and wrapper, and every ``page.evaluate`` payload, in the
+main world and in an isolated one. Those are told apart by content alone:
+
+* a script in an isolated world (``executionContextAuxData.isDefault`` false) is Playwright's
+  or a browser extension's: a page cannot create one;
+* the harness set is the CDP ``hash`` of everything parsed before the capture is sealed.
+  ``attach`` enables the debugger (which replays the init scripts of the blank page), runs a
+  warm-up that the caller builds from every main-world ``evaluate`` the engine will make (so the
+  utility script, the wrapper and those payloads are parsed once) and records the hashes. A later
+  script is skipped only when its own hash is in that set.
+
+Nothing else excuses a script: not the stack it was built from, not being built by a harness
+script. A page can copy Playwright's utility script and call it, or point ``String`` at ``eval``
+and let a hook call it; what such code builds is still a stage. The only code a page can get
+ignored is code byte-identical to one of the harness's own scripts.
+
+An inserted inline ``<script>`` (``s.text = ...; document.head.appendChild(s)``) is a stage: no
+URL, and the stack of the code that built it. It is runtime-built code, so it is captured.
+``Debugger.getScriptSource`` is called from a background task started as soon as the event
+arrives (a script can be garbage-collected before a later call: "No script for id"), so the page
+is never waited on; at most ``MAX_FETCHES_IN_FLIGHT`` calls run at once and the rest queue, so a
+burst of stages can see more of them come back "No script for id" (counted in ``dropped``).
+``drain`` waits, bounded, for the calls still in flight or queued, and counts the ones it gives up on.
+
+Everything is page-supplied and bounded: ``MAX_STAGES`` stages, ``MAX_STAGE_CHARS`` characters
+each (a longer one is cut, not dropped), ``MAX_STAGE_BYTES_TOTAL`` bytes in all; whatever does
+not fit, or could not be read, is counted in ``dropped``. A stage that repeats one already seen
+(same ``hash``) takes no slot and is counted in ``repeated``. At most ``MAX_STAGE_FETCHES`` sources
+are read per load, and none above ``MAX_STAGE_FETCH_CHARS`` characters (that stage is recorded
+without source, ``oversized``). The characters read per load are budgeted too: a stage is read
+only while the ``length`` its event claims fits in ``MAX_STAGE_FETCH_TOTAL_CHARS`` with the ones
+already read (a site survey runs six loads at once, and six loads each reading 100 sources of
+2 000 000 characters took the worker past 1 GB); a stage over the budget, or one whose ``length``
+is missing or not an integer, is counted in ``dropped`` and not read. Once the slots are full, a
+stage with obfuscator markers replaces a kept one that has none, so junk cannot crowd the payload
+out (though about five junk stages near 2 000 000 characters now use up the read budget first). A
+``debugger;`` loop cannot stall the
+page: breakpoints are deactivated and any pause is resumed at once.
+"""
+import asyncio
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
+from urllib.parse import urldefrag
+
+from .obfuscation import obfuscator_markers
+
+MAX_STAGES = 20
+MAX_STAGE_CHARS = 200_000
+MAX_STAGE_BYTES_TOTAL = 2_000_000
+MAX_CALLER_CHARS = 300
+MAX_STAGE_FETCHES = 100  # sources read per load
+MAX_STAGE_FETCH_CHARS = 2_000_000  # a longer script is not read at all
+MAX_STAGE_FETCH_TOTAL_CHARS = 10_000_000  # characters read per load, by each event's claimed length
+MAX_FETCHES_IN_FLIGHT = 4  # getScriptSource calls running at once per load
+MAX_TRACKED_HASHES = 10_000  # distinct stage hashes remembered for the repeat count
+MAX_POSITIONS = 2_000  # (url, hash, start) entries kept for code_origin; beyond that, none counts
+
+
+@dataclass
+class Stage:
+    source: bytes  # b"" for an oversized stage
+    caller_url: str  # the top frame of the stack that built it, or ""
+    caller_line: Optional[int]  # 1-based
+    markers: List[str] = field(default_factory=list)  # obfuscator markers of the source
+    oversized: bool = False  # longer than MAX_STAGE_FETCH_CHARS: never read
+    length: int = 0  # characters, for an oversized stage
+
+
+_WEB = ("http://", "https://")
+_NO_DOCUMENT = ""  # the record key of runtime scripts that named themselves: they count at every document
+
+
+def _embedded_by_url(event: Dict[str, Any]) -> bool:
+    """The script came from an http(s) document or file: ``embedderName``, the name the browser
+    gave the script, is that URL (a served inline block: the document; a network script: its
+    file). Runtime-built code has an empty one, whatever its sourceURL says."""
+    embedder = event.get("embedderName")
+    return isinstance(embedder, str) and embedder.startswith(_WEB)
+
+
+def _document_of(event: Dict[str, Any]) -> Optional[str]:
+    """The record key of a page-world script's start: the URL its frames carry
+    (``CallSite.getFileName``, which is ``embedderName``: the document for a served inline block
+    or an event handler, sourceURL or not), ``_NO_DOCUMENT`` for runtime code that named itself
+    with a sourceURL (an ``eval`` copy of a served block then makes that hash untrusted at every
+    document), None for a script left out (runtime code without a name: its frames have no URL).
+    A browser without ``embedderName`` keys by ``url``, as before. Fragment dropped, 2 048
+    characters kept."""
+    embedder, url = event.get("embedderName"), event.get("url")
+    if isinstance(embedder, str):
+        if embedder.startswith(_WEB):
+            return urldefrag(embedder)[0][:2048]
+        return _NO_DOCUMENT if event.get("hasSourceURL") is True else None
+    if isinstance(url, str) and url.startswith(_WEB):
+        return urldefrag(url)[0][:2048]
+    return None
+
+
+def _top_frame(event: Dict[str, Any], harness_ids: Set[str]) -> Optional[Dict[str, Any]]:
+    """The top frame of the stack that built the script, passing over frames of the harness's
+    own scripts (the card hooks wrap appendChild, so an inserted inline script compiles inside
+    our wrapper). Chromium 148 gives scriptParsed only the top frame, so such a stage then has
+    no caller rather than our hook's line."""
+    stack = event.get("stackTrace")
+    frames = stack.get("callFrames") if isinstance(stack, dict) else None
+    if isinstance(frames, list):
+        for frame in frames[:50]:
+            if isinstance(frame, dict) and frame.get("scriptId") not in harness_ids:
+                return frame
+    return None
+
+
+class EvalCapture:
+    """Collects the source of scripts the page built at runtime (see the module docstring)."""
+
+    def __init__(self) -> None:
+        self.stages: List[Stage] = []
+        self.dropped = 0
+        self.repeated = 0
+        self._fetches = 0
+        self._fetch_chars = 0  # the claimed length of every source read so far
+        self._fetch_slots = None  # type: Optional[asyncio.Semaphore]  # made in attach(), on the running loop
+        self._bytes = 0
+        self._sealed = False
+        self._harness_hashes: Set[str] = set()  # what was parsed before attach() finished: not the page's
+        # CDP script ids of the harness's scripts in every document (our hook scripts are parsed again
+        # in each one): ScriptTracer passes over their frames, so a loader's appendChild going
+        # through our hooks is still the loader's
+        self.harness_script_ids: Set[str] = set()
+        # where every page-world script whose frames carry a URL started, by (that URL, hash), plus
+        # runtime scripts that named themselves (under _NO_DOCUMENT, counted at every URL): code_origin
+        # trusts a served inline block's hash only when every script with it starts at a served block
+        self._positions: Dict[Tuple[str, str], Set[Tuple[int, int]]] = {}
+        self._position_count = 0
+        self.positions_dropped = 0
+        self.debugger_on = False  # Debugger.enable succeeded: without it there is no parse record
+        self._seen: Set[str] = set()  # hashes of stages already met
+        self._tasks: Set["asyncio.Future[None]"] = set()
+        self._cdp: Any = None
+
+    async def attach(self, cdp: Any, warm_up: Optional[Callable[[], Awaitable[Any]]] = None) -> None:
+        """Start listening. ``warm_up`` (optional) makes the harness parse everything it will inject
+        or evaluate later (Playwright: the utility script and each main-world ``evaluate`` payload),
+        so those are known by content before the page runs."""
+        self._cdp = cdp
+        self._fetch_slots = asyncio.Semaphore(MAX_FETCHES_IN_FLIGHT)
+        cdp.on("Debugger.scriptParsed", self._on_parsed)
+        cdp.on("Debugger.paused", self._on_paused)
+        try:
+            await cdp.send("Debugger.enable")
+            self.debugger_on = True
+            # A page can loop on `debugger;`: never stop for it, the load would wait for a resume.
+            # Observed (Chromium 148): setSkipAllPauses alone does not stop a `debugger;` statement
+            # from pausing the page, deactivating breakpoints does, and the paused handler is the
+            # last line of defence. All three, since each costs nothing.
+            await cdp.send("Debugger.setSkipAllPauses", {"skip": True})
+            await cdp.send("Debugger.setBreakpointsActive", {"active": False})
+        except Exception as exc:  # the scan is worth more than this signal
+            print(f"[eval-capture] could not enable the debugger domain: {str(exc)[:200]}")
+        try:
+            if warm_up is not None:
+                await warm_up()
+            await cdp.send("Debugger.setSkipAllPauses", {"skip": True})  # a round trip: queued events arrive first
+        except Exception as exc:
+            print(f"[eval-capture] warm-up failed: {str(exc)[:200]}")
+        self._sealed = True
+
+    def _note_position(self, event: Dict[str, Any]) -> None:
+        digest, line, column = event.get("hash"), event.get("startLine"), event.get("startColumn")
+        if not isinstance(digest, str):
+            return
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (line, column)):
+            return
+        document = _document_of(event)
+        if document is None:
+            return
+        key = (document, digest[:128])
+        where = self._positions.get(key)
+        if where is not None and (line, column) in where:
+            return
+        if self._position_count >= MAX_POSITIONS:
+            self.positions_dropped += 1
+            return
+        self._position_count += 1
+        self._positions.setdefault(key, set()).add((line, column))
+
+    def positions_at(self, url: str) -> Optional[Dict[str, Set[Tuple[int, int]]]]:
+        """``{hash: {(startLine, startColumn)}}`` of the page-world scripts whose frames name
+        ``url`` (fragment ignored), plus every runtime script that named itself with a sourceURL
+        (it has no document, so it counts at all of them), or None when there is no complete
+        record: the record overflowed, or ``Debugger.enable`` failed (then nothing can be trusted,
+        and ``card_watch.summarize`` says page-URL frames couldn't be checked)."""
+        if self.positions_dropped or not self.debugger_on:
+            return None
+        page = urldefrag(url or "")[0][:2048]
+        out = {}  # type: Dict[str, Set[Tuple[int, int]]]
+        for (at, digest), where in self._positions.items():
+            if at == page or at == _NO_DOCUMENT:
+                out.setdefault(digest, set()).update(where)
+        return out
+
+    def _note_harness(self, script_id: str) -> None:
+        if len(self.harness_script_ids) < MAX_TRACKED_HASHES:
+            self.harness_script_ids.add(script_id)
+
+    def _on_paused(self, _event: Dict[str, Any]) -> None:
+        task = asyncio.ensure_future(self._resume())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _resume(self) -> None:
+        try:
+            await self._cdp.send("Debugger.resume")
+        except Exception:
+            pass  # the page is gone
+
+    def _on_parsed(self, event: Dict[str, Any]) -> None:
+        try:
+            if not isinstance(event, dict):
+                return
+            script_id, digest = event.get("scriptId"), event.get("hash")
+            if not isinstance(script_id, str):
+                return
+            if not self._sealed:  # before the page: the harness's own scripts
+                if isinstance(digest, str):
+                    self._harness_hashes.add(digest)
+                self._note_harness(script_id)
+                return
+            aux = event.get("executionContextAuxData")
+            if isinstance(aux, dict) and aux.get("isDefault") is False:
+                return  # an isolated world: Playwright's, never the page's
+            self._note_position(event)
+            url = event.get("url")
+            # A sourceURL comment renames a script, so it says nothing about where the script came
+            # from; its embedder does: a served block or a network file ending in one has an
+            # http(s) embedderName (WordPress puts one on every inline script it prints).
+            named = event.get("hasSourceURL") is True and not _embedded_by_url(event)
+            if not (url == "" or named or (isinstance(url, str) and url.startswith(("data:", "blob:")))):
+                return  # a network script or the document's own inline script
+            if isinstance(digest, str):
+                if digest in self._harness_hashes:
+                    self._note_harness(script_id)
+                    return  # the same script as one parsed before the page ran
+                if digest in self._seen:
+                    self.repeated += 1  # the same code again: no slot, no fetch
+                    return
+                if len(self._seen) < MAX_TRACKED_HASHES:
+                    self._seen.add(digest)
+            frame = _top_frame(event, self.harness_script_ids)
+            caller, line = "", None  # type: str, Optional[int]
+            if frame is not None and isinstance(frame.get("url"), str):
+                caller = frame["url"][:MAX_CALLER_CHARS]
+                number = frame.get("lineNumber")
+                line = number + 1 if isinstance(number, int) and not isinstance(number, bool) and number >= 0 else None
+            length = event.get("length")
+            if isinstance(length, int) and not isinstance(length, bool) and length > MAX_STAGE_FETCH_CHARS:
+                self._keep(Stage(source=b"", caller_url=caller, caller_line=line, oversized=True, length=length))
+                return
+            if not isinstance(length, int) or isinstance(length, bool) or length < 0:
+                self.dropped += 1  # no size to budget by: not read
+                return
+            if self._fetches >= MAX_STAGE_FETCHES or self._fetch_chars + length > MAX_STAGE_FETCH_TOTAL_CHARS:
+                self.dropped += 1
+                return
+            self._fetches += 1
+            self._fetch_chars += length  # charged now, so stages arriving together can't all fit
+            task = asyncio.ensure_future(self._fetch(script_id, caller, line))
+            self._tasks.add(task)
+            task.add_done_callback(self._tasks.discard)
+        except Exception as exc:  # an event handler must never raise into the CDP session
+            print(f"[eval-capture] ignored an event: {str(exc)[:200]}")
+
+    async def _fetch(self, script_id: str, caller: str, line: Optional[int]) -> None:
+        try:
+            async with self._fetch_slots:  # at most MAX_FETCHES_IN_FLIGHT reads at once
+                reply = await self._cdp.send("Debugger.getScriptSource", {"scriptId": script_id})
+            text = reply.get("scriptSource") if isinstance(reply, dict) else None
+        except asyncio.CancelledError:
+            self.dropped += 1  # drain() gave up on it, read or still queued
+            raise
+        except Exception:
+            text = None  # collected before we asked, or the page is gone
+        if not isinstance(text, str):
+            self.dropped += 1
+            return
+        text = text[:MAX_STAGE_CHARS]
+        self._keep(Stage(source=text.encode("utf-8", "replace"), caller_url=caller, caller_line=line,
+                         markers=obfuscator_markers(text)))
+
+    def _keep(self, stage: Stage) -> None:
+        """Take a slot for ``stage``, or, when the slots are gone, let a stage with obfuscator
+        markers replace one without (the replaced one is counted as dropped)."""
+        size = len(stage.source)
+        if len(self.stages) < MAX_STAGES and self._bytes + size <= MAX_STAGE_BYTES_TOTAL:
+            self.stages.append(stage)
+            self._bytes += size
+            return
+        if stage.markers:
+            for i, kept in enumerate(self.stages):
+                if not kept.markers and self._bytes - len(kept.source) + size <= MAX_STAGE_BYTES_TOTAL:
+                    self._bytes += size - len(kept.source)
+                    self.stages[i] = stage
+                    self.dropped += 1
+                    return
+        self.dropped += 1
+
+    async def drain(self, timeout: float = 5.0) -> None:
+        """Wait (bounded) for source fetches still in flight or queued; call before the context
+        closes. The ones it gives up on are cancelled and counted in ``dropped`` before it returns."""
+        pending = list(self._tasks)
+        if pending:
+            _done, still = await asyncio.wait(pending, timeout=timeout)
+            for task in still:
+                task.cancel()
+            if still:
+                await asyncio.wait(still, timeout=1.0)  # let each cancellation reach its handler

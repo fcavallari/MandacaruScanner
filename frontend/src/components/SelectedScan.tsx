@@ -3,11 +3,11 @@ import type { ArtifactEntry, TaskState } from '../lib/api';
 import { artifactUrl } from '../lib/api';
 import { hostnameOf, redirectCount, relativeTime, verdictOf } from '../lib/format';
 import DepthGauge from './DepthGauge';
-import ProbeRitual from './ProbeRitual';
+import FieldScene, { EmptyGround } from './FieldScene';
 import ProfileSplit from './ProfileSplit';
 import RedirectChain from './RedirectChain';
 import SiteReport, { SiteVerdictPill } from './SiteReport';
-import { Bar, EmptyWell, ErrorNote } from './states';
+import { Bar, ErrorNote } from './states';
 
 /**
  * The lead block: the selected probe. Answers the screen's one question —
@@ -21,14 +21,14 @@ function StatusMark({ task }: { task: TaskState }) {
       return <span className="text-[13px] text-faint whitespace-nowrap">Queued</span>;
     case 'running':
       return (
-        <span className="flex items-center gap-1.5 text-[13px] text-accent whitespace-nowrap">
+        <span className="flex items-center gap-1.5 text-[13px] text-muted whitespace-nowrap">
           <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-accent pulse-dot" />
           Probing
         </span>
       );
     case 'failed':
       return (
-        <span className="px-2.5 py-1 text-[13px] leading-none font-medium rounded-full whitespace-nowrap" style={{ background: 'var(--pill-negative-bg)', color: 'var(--negative)' }}>
+        <span className="px-2.5 py-1 text-[13px] leading-none font-medium rounded-full whitespace-nowrap" style={{ background: 'var(--pill-neutral-bg)', color: 'var(--pill-neutral-ink)' }}>
           Failed
         </span>
       );
@@ -41,7 +41,7 @@ function StatusMark({ task }: { task: TaskState }) {
       const v = verdictOf(task.result?.malicious_score ?? 0);
       const style =
         v === 'Malicious'
-          ? { background: 'var(--pill-negative-bg)', color: 'var(--negative)' }
+          ? { background: 'var(--negative-fill)', color: 'var(--text)' }
           : v === 'Suspicious'
             ? { background: 'var(--pill-warning-bg)', color: 'var(--warning)' }
             : v === 'Watch'
@@ -91,7 +91,7 @@ function LandingShot({ taskId, shot, host }: { taskId: string; shot: ArtifactEnt
       </a>
       <figcaption className="flex items-center justify-between gap-2 mt-1.5 text-[12px] text-faint">
         <span>Landing screenshot</span>
-        <a href={href} target="_blank" rel="noreferrer" className="text-muted hover:text-accent transition-colors">
+        <a href={href} target="_blank" rel="noreferrer" className="text-muted hover:text-accent-ink transition-colors">
           Open full page
         </a>
       </figcaption>
@@ -117,7 +117,7 @@ export default function SelectedScan({ task, phase, onRetry, now = Date.now() }:
           <Bar h={20} w="72px" />
         </div>
       ) : phase === 'error' ? (
-        <ErrorNote message="Couldn't load the probe. The deep is silent." onRetry={onRetry} />
+        <ErrorNote message="Couldn't load the probe. No signal." onRetry={onRetry} />
       ) : !task ? (
         <div className="flex items-center justify-between gap-4">
           <p className="text-[18px] font-semibold text-muted m-0">No probe selected</p>
@@ -147,16 +147,12 @@ export default function SelectedScan({ task, phase, onRetry, now = Date.now() }:
           </div>
         </div>
       ) : phase === 'error' ? null : !task ? (
-        <EmptyWell
-          title="No probes yet. The deep is quiet."
-          sub="Submit a URL above to send the first probe."
-          className="flex-1"
-        />
+        <EmptyGround />
       ) : task.status === 'queued' || task.status === 'running' ? (
-        <ProbeRitual task={task} />
+        <FieldScene key={task.task_id} task={task} />
       ) : task.status === 'failed' ? (
         <div className="flex-1 flex flex-col justify-center gap-2">
-          <p className="text-[14px] text-negative m-0 break-all">{task.error || 'The probe failed'}</p>
+          <p className="text-[14px] text-negative m-0 break-all">{task.error || 'Analysis interrupted'}</p>
           <p className="font-mono text-[12px] text-faint m-0">probe {task.task_id.slice(0, 8)}</p>
         </div>
       ) : task.kind === 'site' ? (
@@ -176,7 +172,7 @@ export default function SelectedScan({ task, phase, onRetry, now = Date.now() }:
             <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,272px)] gap-6 items-start">
               <div className="min-w-0">
                 <p className="text-[15px] font-semibold text-ink m-0 mb-3">
-                  Descent
+                  Trail
                   <span className="font-normal text-muted">
                     {' · '}
                     <span className="font-mono num">{redirectCount(task.result.hops)}</span>

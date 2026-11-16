@@ -17,7 +17,7 @@ All page-supplied input is bounded: capped record and block counts, a bounded op
 regex, and a close-tag search that is a plain ``bytes.find`` moving forward only.
 """
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Container, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit, urldefrag
 
 from .obfuscation import MAX_CHARS, obfuscator_markers
@@ -30,6 +30,7 @@ MAX_INLINE_BLOCKS = 500
 MAX_OPEN_TAGS = 5000  # open tags examined, whatever they turn out to hold
 MAX_URL_CHARS = 300
 MAX_PARENT_DEPTH = 20
+MAX_STACK_FRAMES = 50  # frames looked at per stack segment
 BLOCK_CONTEXT_BYTES = 600
 INTERSTITIAL_HEAD_BYTES = 65536  # how much of a blocked script's response body is examined
 
@@ -49,20 +50,25 @@ def _int_or_none(value: Any) -> Optional[int]:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
-def _top_frame(stack: Any) -> Optional[Dict[str, Any]]:
+def _top_frame(stack: Any, harness_ids: Container[str] = ()) -> Optional[Dict[str, Any]]:
     """The top call frame of a CDP stack trace, looking through ``parent`` when a stack
-    has no frames of its own."""
+    has no frames of its own. Frames of the harness's own scripts (``harness_ids``, CDP script
+    ids: our hooks wrap ``appendChild`` and friends, so a loader's call runs through them) are
+    passed over."""
     for _ in range(MAX_PARENT_DEPTH):
         if not isinstance(stack, dict):
             return None
         frames = stack.get("callFrames")
-        if isinstance(frames, list) and frames and isinstance(frames[0], dict):
-            return frames[0]
+        if isinstance(frames, list):
+            for frame in frames[:MAX_STACK_FRAMES]:
+                if isinstance(frame, dict) and frame.get("scriptId") not in harness_ids:
+                    return frame
         stack = stack.get("parent")
     return None
 
 
-def record_from_event(event: Dict[str, Any], main_frame_id: str) -> Optional[Dict[str, Any]]:
+def record_from_event(event: Dict[str, Any], main_frame_id: str,
+                      harness_ids: Container[str] = ()) -> Optional[Dict[str, Any]]:
     """A record for a ``Network.requestWillBeSent`` event of ``type == "Script"``, else None."""
     if not isinstance(event, dict) or event.get("type") != "Script":
         return None
@@ -78,7 +84,7 @@ def record_from_event(event: Dict[str, Any], main_frame_id: str) -> Optional[Dic
     kind = initiator.get("type")
     initiator_url = line = column = None  # type: Any
     if kind == "script":
-        frame = _top_frame(initiator.get("stack"))
+        frame = _top_frame(initiator.get("stack"), harness_ids)
         if frame is not None:
             initiator_url, line, column = frame.get("url"), frame.get("lineNumber"), frame.get("columnNumber")
         else:
@@ -104,9 +110,10 @@ def record_from_event(event: Dict[str, Any], main_frame_id: str) -> Optional[Dic
 class ScriptTracer:
     """Collects the script requests of one page load (at most 200)."""
 
-    def __init__(self) -> None:
+    def __init__(self, harness_ids: Container[str] = ()) -> None:
         self.records = []  # type: List[Dict[str, Any]]
         self._main_frame_id = ""
+        self._harness_ids = harness_ids  # EvalCapture.harness_script_ids: filled as scripts are parsed
 
     async def attach(self, cdp: Any, main_frame_id: str) -> None:
         self._main_frame_id = main_frame_id
@@ -116,12 +123,12 @@ class ScriptTracer:
     def _on_request(self, event: Dict[str, Any]) -> None:
         if len(self.records) >= MAX_RECORDS:
             return
-        record = record_from_event(event, self._main_frame_id)
+        record = record_from_event(event, self._main_frame_id, self._harness_ids)
         if record is not None:
             self.records.append(record)
 
 
-def _inline_blocks(data: bytes, lowered: bytes) -> List[Tuple[int, int]]:
+def inline_blocks(data: bytes, lowered: bytes) -> List[Tuple[int, int]]:
     """``(start, end)`` byte offsets of the first 500 non-empty inline ``<script>`` bodies.
     ``lowered`` is ``data.lower()`` (ASCII-only on bytes, so the offsets line up)."""
     blocks = []  # type: List[Tuple[int, int]]
@@ -142,7 +149,7 @@ def _inline_blocks(data: bytes, lowered: bytes) -> List[Tuple[int, int]]:
     return blocks
 
 
-def _line_starts(data: bytes, upto: int) -> List[int]:
+def line_starts(data: bytes, upto: int) -> List[int]:
     """Byte offsets where lines 0..``upto`` start (fewer if ``data`` has fewer lines).
     One forward pass, built once per document and shared by every record."""
     starts = [0]
@@ -157,7 +164,7 @@ def _line_starts(data: bytes, upto: int) -> List[int]:
 def _offset_of(data: bytes, starts: List[int], line: Optional[int],
                column: Optional[int]) -> Optional[int]:
     """Byte offset of the 0-based CDP ``(line, column)`` in ``data``; ``starts`` is
-    ``_line_starts(data, ...)`` covering ``line``."""
+    ``line_starts(data, ...)`` covering ``line``."""
     if line is None or line >= len(starts):
         return None
     line_start = starts[line]
@@ -236,8 +243,8 @@ def find_injections(records: List[Dict[str, Any]], page_url: str, served_html: O
             if served_html is not None:
                 if blocks is None:
                     lowered = served_html.lower()
-                    blocks = _inline_blocks(served_html, lowered)
-                    html_starts = _line_starts(served_html, max_line)
+                    blocks = inline_blocks(served_html, lowered)
+                    html_starts = line_starts(served_html, max_line)
                 picked = _pick_block(blocks, lowered, _offset_of(served_html, html_starts, line, column), url)
                 if picked is not None:
                     block = {"start": picked[0], "end": picked[1]}
@@ -248,7 +255,7 @@ def find_injections(records: List[Dict[str, Any]], page_url: str, served_html: O
             body = script_bodies[initiator_url]
             markers = _markers_of(body)
             if initiator_url not in body_starts:
-                body_starts[initiator_url] = _line_starts(body, max_line)
+                body_starts[initiator_url] = line_starts(body, max_line)
             offset = _offset_of(body, body_starts[initiator_url], line, column)
             if offset is not None:
                 context = cut_snippet(body, offset, offset + 1)

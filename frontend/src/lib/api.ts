@@ -48,7 +48,7 @@ export type SiteVerdict = 'compromised' | 'suspicious' | 'partly_checked' | 'cle
 export type FindingSeverity = 'compromised' | 'suspicious';
 /** served: the HTML the server sent; rendered: added while the page loaded; frame: in an embedded frame;
  *  script: in a script file; null: unknown (no served HTML) or not a code finding. */
-export type FindingOrigin = 'served' | 'rendered' | 'frame' | 'script';
+export type FindingOrigin = 'served' | 'rendered' | 'frame' | 'script' | 'runtime';
 export type LoadState = 'checked' | 'partial' | 'not_checked';
 export type LoadReason = 'budget' | 'timeout' | 'load_failed' | 'challenge';
 
@@ -69,12 +69,14 @@ export interface SiteFindingDetails {
   scoring: string[];
   initiator: string | null;
   offsite?: boolean; // code on the page a visitor was sent to on another site; `pages` are the owner's pages that sent them
+  frames?: string[]; // card_inputs: the URLs of the code that inserted the card fields ("" = code with no file), at most 10
+  first_unknown?: string; // card_inputs: the first of those frames that is outside code ("" when none is named)
 }
 
 export interface SiteFinding {
   id: string;
   severity: FindingSeverity;
-  kind: string; // yara | injection | flagged_script | clipboard | download | browser_lock | cloaking | offsite_homepage | page_score
+  kind: string; // yara | injection | flagged_script | runtime_code | card_inputs | clipboard | download | browser_lock | cloaking | offsite_homepage | page_score
   message: string;
   snippet: Snippet | null;
   origin: FindingOrigin | null;
@@ -127,7 +129,16 @@ export interface SiteLoad {
 export interface SiteCheckedPage {
   index: number; // 0 = the homepage
   url: string;
-  probe?: boolean; // the 404 probe (/pnakotic-<hex>/): the site's "page not found" page
+  probe?: boolean; // the 404 probe (/mandacaru-<hex>/; reports from before the rename carry /pnakotic-): the site's "page not found" page
+  checkout?: boolean; // a WooCommerce store's checkout page (picked, or added), wherever it landed
+  // src/scanner/site_report.py _checkout_landing: where the checkout page's first usable load ended (null when not the checkout page, or no usable load)
+  checkout_state?: 'loaded' | 'redirected' | 'not_found' | null; // not_found: a 4xx; redirected: another path (an empty cart sends visitors to the cart)
+  checkout_landing?: string | null; // redirected: where it landed
+  checkout_status?: number | null; // that load's HTTP status
+  // src/scanner/site_report.py _card_fields; none of these is a finding
+  card_fields?: boolean; // the page has card inputs of its own (served, or added by the store's or a known vendor's code)
+  card_fields_unchecked?: boolean; // whose code added its card inputs couldn't be checked on some load
+  card_fields_vendors?: string[]; // known vendors (Hotjar, ...) whose code added card inputs
   loads: SiteLoad[];
 }
 
